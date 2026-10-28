@@ -90,7 +90,7 @@ export default function StudentDetail({ student, settings, pdfs, onSave, onBack,
             const next = structuredClone(current);
             // Incorporate the revision immediately; the next queued save must use it.
             // A field edited during the request keeps the operator's newer value.
-            for (const field of ['code', 'name', 'grade', 'section', 'academic', 'attendance', 'discipline', 'institutional', 'family', 'validated', 'reportApproval', 'commitmentEnabled', 'circleStatus'] as const) {
+            for (const field of ['code', 'name', 'grade', 'section', 'academic', 'attendance', 'discipline', 'institutional', 'family', 'validated', 'reportApproval', 'commitmentEnabled', 'circleStatus', 'noContestParticipation'] as const) {
               if (JSON.stringify(current[field]) === JSON.stringify(snapshot[field])) {
                 Object.assign(next, { [field]: structuredClone(saved[field]) });
               }
@@ -275,12 +275,13 @@ export default function StudentDetail({ student, settings, pdfs, onSave, onBack,
     <div className="section-heading">
       <div><span className="eyebrow">PI · ESTUDIANTE</span><h3>CONCURSOS ACADÉMICOS</h3><p className="muted">Completa el tipo de evento, la fecha y la ubicación o puesto. Los demás detalles son opcionales.</p></div>
       <button type="button" className="button secondary" disabled={readOnly} onClick={() => change(next => {
+        next.noContestParticipation = false;
         next.institutional.push({ ...emptyRecord(), name: ACADEMIC_CONTEST_LABEL, eventType: ACADEMIC_CONTEST_TYPE, placement: '', required: true, status: 'fulfilled' });
         next.validated.commitment = false;
       })}><Plus size={16} /> Agregar concurso</button>
     </div>
     <p className="muted">Puntaje por alcance: local 40, regional 70 y nacional 100. PI toma el mayor puntaje de los concursos registrados con datos completos. El resultado es provisional hasta confirmar los registros.</p>
-    {draft.institutional.length === 0 && <div className="empty-state detail-empty"><Users size={24} /><p>No hay concursos académicos registrados.</p><small>Agrega un concurso cuando cuentes con los tres datos requeridos.</small></div>}
+    {draft.institutional.length === 0 && (draft.noContestParticipation ? <div className="no-contest-confirmation"><div role="status"><CheckCircle2 size={22} /><div><strong>No participó en concursos · PI: 0 puntos</strong><p>Participación revisada y confirmada. No se requiere registrar un evento.</p></div></div><button type="button" className="button secondary" disabled={readOnly || rescanning} onClick={() => void confirmChange(next => { next.noContestParticipation = false; next.validated.commitment = false; })}>Deshacer confirmación</button></div> : <div className="empty-state detail-empty no-contest-empty"><Users size={24} /><p>No hay concursos académicos registrados.</p><small>Agrega un concurso o confirma que el estudiante no participó.</small><button type="button" className="button secondary" disabled={readOnly || rescanning} onClick={() => void confirmChange(next => { if (next.institutional.length) return; next.noContestParticipation = true; next.validated.commitment = false; })}>No participó en concursos</button></div>)}
     {draft.institutional.map((record, index) => {
       const selectedScope = record.eventType === ACADEMIC_CONTEST_TYPE ? CONTEST_SCOPE_OPTIONS.find(scope => scope.value === record.scope) : undefined;
       const complete = contestRequiredFields(record).length === 0;

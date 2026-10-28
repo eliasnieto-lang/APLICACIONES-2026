@@ -1,5 +1,5 @@
 import type { AppState, Grade, Settings, Student } from './types';
-import { ACTIVE_BIMESTERS, ALLOWED_COHORTS, normalizeCohort } from './policy';
+import { ACTIVE_BIMESTERS, normalizeCohort } from './policy';
 import { ACADEMIC_CONTEST_LABEL } from './contests';
 import { DEFAULT_DIMENSION_WEIGHTS } from './evaluation-policy';
 
@@ -48,6 +48,7 @@ export function createStudent(input: Partial<Student>, settings: Settings): Stud
     validated: input.validated ?? { academic: false, performance: false, commitment: false },
     commitmentEnabled: input.commitmentEnabled ?? true,
     circleStatus: input.circleStatus ?? 'pending',
+    noContestParticipation: input.noContestParticipation ?? false,
     history: input.history ?? [], pdfIds: input.pdfIds ?? [], createdAt: input.createdAt ?? now, updatedAt: input.updatedAt ?? now,
     ...(input.reportApproval ? { reportApproval: input.reportApproval } : {}),
   };
@@ -59,7 +60,7 @@ export function createDemoState(): AppState {
   settings.disciplineTypes[0].discount = 5;
   settings.disciplineTypes[1].discount = 15;
   settings.disciplineTypes[2].discount = 30;
-  const demoCohorts = ALLOWED_COHORTS.filter(cohort => cohort.section === 'F' && ['2.º de secundaria', '3.º de secundaria', '4.º de secundaria', '5.º de secundaria'].includes(cohort.grade));
+  const demoCohorts = [['2', 'A'], ['3', 'B'], ['4', 'C'], ['5', 'D']].map(([grade, section]) => normalizeCohort(grade, section)!);
   const names = ['Valentina Mendoza Torres', 'Mateo Salazar Ríos', 'Luciana Flores Vega', 'Sebastián Quispe León', 'Camila Paredes Soto', 'Nicolás Herrera Díaz', 'Alessia Romero Cruz', 'Gabriel Castro Silva'];
   const students = names.map((name, i) => {
     const cohort = demoCohorts[i % demoCohorts.length];

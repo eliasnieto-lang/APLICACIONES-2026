@@ -42,6 +42,7 @@ export function migrateState(state: AppState): AppState {
   }
   for (const student of result.students) {
     student.commitmentEnabled ??= true;
+    student.noContestParticipation ??= false;
     student.circleStatus ??= 'pending';
     const cohort = normalizeCohort(student.grade, student.section);
     if (cohort) { student.grade = cohort.grade; student.section = cohort.section; }

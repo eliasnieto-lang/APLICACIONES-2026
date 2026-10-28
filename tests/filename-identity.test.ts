@@ -1,7 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyFilenameIdentity, parseReportFilename, resolveReportIdentity } from '../shared/filename-identity.js';
-import { normalizeCohort } from '../shared/policy.js';
+import { ALLOWED_COHORTS, isOfferedCohort, normalizeCohort } from '../shared/policy.js';
+
+test('current classroom choices offer exactly five sections for each secondary grade and retain legacy identities', () => {
+  assert.equal(ALLOWED_COHORTS.length, 25);
+  for (const grade of [1, 2, 3, 4, 5]) {
+    assert.deepEqual(ALLOWED_COHORTS.filter(cohort => cohort.grade === `${grade}.º de secundaria`).map(cohort => cohort.section), ['A', 'B', 'C', 'D', 'E']);
+    assert.equal(isOfferedCohort(String(grade), ' e '), true);
+    for (const section of ['F', 'G', 'Z']) {
+      assert.equal(isOfferedCohort(String(grade), section), false);
+      assert.equal(normalizeCohort(String(grade), section)?.label, `${grade}.º ${section}`, 'Previously saved identities remain valid without being offered as new choices.');
+    }
+  }
+});
 
 test('reads the complete ordered name and canonical classroom from the report filename', () => {
   assert.deepEqual(parseReportFilename('BOLETA_2do año F_Secundaria_SEGURA_CAMONES_ANDRES ADRIAN.pdf'), {

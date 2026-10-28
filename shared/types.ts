@@ -20,6 +20,7 @@ export interface Student {
   history: HistoryEntry[]; pdfIds: string[]; createdAt: string; updatedAt: string;
   reportApproval?: { pdfId: string; approvedAt: string };
   commitmentEnabled?: boolean;
+  noContestParticipation?: boolean;
   circleStatus?: CircleStatus;
 }
 export interface DisciplineType { id: string; name: string; discount: number | null; punctuality: boolean }

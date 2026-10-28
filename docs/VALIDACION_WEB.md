@@ -1,5 +1,15 @@
 # Validación de la edición web
 
+## Secciones A–E y confirmación sin concursos
+
+Los desplegables actuales ofrecen **25 aulas: 1.º–5.º, secciones A, B, C, D y E**. Los registros históricos de otras secciones conservan identidad, aprobación, originales y acceso en Todas las aulas; no se borran ni se reasignan. El apartado de concursos incorpora una confirmación explícita **No participó en concursos**, que produce **PI=0** sin crear eventos ni exigir tipo, fecha o puesto. Permite deshacer y se retira al agregar un concurso.
+
+Validación: **188/188 pruebas** en `npm test`, incluidas **31 API**; TypeScript, `npm run build:web` y la aceptación completa `npm run test:web` aprobados. HTML probado: **10 341 182 bytes**, SHA-256 `46f5c824b32a5568861b2b6f3a78bb10c45e15d11ecb49bb45cadbb7fa4ce09c`.
+
+La aceptación verificó las 25 opciones de Importación sin F–Z, el filtro sin opciones históricas F y la conservación de esas fichas y PDF en Todas. La confirmación sin participación dejó la lista institucional vacía, mostró PI0 y persistió al recargar y en el respaldo. Deshacer devolvió PI a pendiente y agregar un concurso limpió la confirmación. Las pruebas comprobaron PI0/CF100=>C30, conservación del requisito familiar y de revisión final de C, invalidación de esa revisión cuando cambia la confirmación, rechazo de eventos contradictorios y conservación del campo ante guardados antiguos. Se revisó visualmente la confirmación y su control para deshacer.
+
+El navegador completó **11 descargas**, sin errores de página/consola ni solicitudes HTTP durante las operaciones. Se conservaron los escenarios anteriores de ponderación, permanencia, rankings por aula, OCR, respaldo/restauración, eliminación y reinicio. Toda eliminación y modificación de prueba utilizó almacenamiento temporal y datos ficticios.
+
 ## Evaluación ponderada, otras aulas y permanencia
 
 La versión vigente usa **50 % Académico, 25 % Desempeño y 25 % Compromiso**, siguiendo la última indicación del usuario. Permite excluir C por estudiante y redistribuir A/B a 66,67 %/33,33 %, conservar sus registros y registrar manualmente la permanencia. Admite secundaria 1.º–5.º, secciones A–Z, con filtros y posiciones por aula completa. Los promedios de las áreas se presentan sobre 100; Indaga completamente vacía se excluye en cualquier aula admitida.

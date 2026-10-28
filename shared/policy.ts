@@ -3,12 +3,12 @@ import type { Student } from './types';
 export const ACTIVE_BIMESTERS = ['I', 'II', 'III'] as const;
 export interface AllowedCohort { grade: string; section: string; label: string }
 export const ALLOWED_COHORTS: readonly AllowedCohort[] = [1, 2, 3, 4, 5].flatMap(grade =>
-  Array.from({ length: 26 }, (_, index) => {
+  Array.from({ length: 5 }, (_, index) => {
     const section = String.fromCharCode(65 + index);
     return { grade: `${grade}.º de secundaria`, section, label: `${grade}.º ${section}` };
   }));
 
-/** Whole grade expressions only: a 2 inside 12 or 25 is never a match. */
+/** Normalize retained classrooms without invalidating records from earlier editions. */
 export function normalizeCohort(grade: string, section: string): AllowedCohort | null {
   if (typeof grade !== 'string' || typeof section !== 'string' || !/^[A-Z]$/.test(section.trim().toUpperCase())) return null;
   const normalizedSection = section.trim().toUpperCase();
@@ -22,7 +22,13 @@ export function normalizeCohort(grade: string, section: string): AllowedCohort |
     new RegExp(`^(?:5(?:\\s*\\.?(?:º|°|o|to))?|quinto)${suffix}$`),
   ];
   const index = forms.findIndex(form => form.test(value));
-  return index < 0 ? null : ALLOWED_COHORTS.find(cohort => cohort.grade === `${index + 1}.º de secundaria` && cohort.section === normalizedSection) ?? null;
+  return index < 0 ? null : { grade: `${index + 1}.º de secundaria`, section: normalizedSection, label: `${index + 1}.º ${normalizedSection}` };
+}
+
+/** Only A–E are offered in current classroom selectors. */
+export function isOfferedCohort(grade: string, section: string): boolean {
+  const cohort = normalizeCohort(grade, section);
+  return Boolean(cohort && ALLOWED_COHORTS.some(item => item.label === cohort.label));
 }
 
 export const cohortKey = (grade: string, section: string): string => normalizeCohort(grade, section)?.label ?? '';

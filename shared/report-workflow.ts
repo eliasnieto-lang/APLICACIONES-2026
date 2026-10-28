@@ -99,7 +99,7 @@ export function registerImportedReport(state: AppState, pdf: PdfRecord): Student
   const identity = normalizeIdentity(identityOf(pdf));
   if (!identity) {
     pdf.status = 'review';
-    warn(pdf, 'Revise los apellidos y nombres y el aula: grado de 1.º a 5.º de secundaria y sección de A a Z.');
+    warn(pdf, 'Revise los apellidos y nombres y el aula: grado de 1.º a 5.º de secundaria y sección de A a E.');
     return null;
   }
   const linked = state.students.find(candidate => candidate.id === pdf.studentId);
@@ -140,7 +140,7 @@ export function identifyReport(state: AppState, pdfId: string, options: { name: 
   const linked = state.students.find(student => student.id === pdf.studentId);
   const current = identityOf(pdf);
   const cohort = normalizeCohort(options.grade ?? current.grade, options.section ?? current.section);
-  if ((options.grade !== undefined || options.section !== undefined) && !cohort) throw new ReportWorkflowError(400, 'Seleccione un grado de 1.º a 5.º de secundaria y una sección de A a Z.');
+  if ((options.grade !== undefined || options.section !== undefined) && !cohort) throw new ReportWorkflowError(400, 'Seleccione un grado de 1.º a 5.º de secundaria y una sección de A a E.');
   const draftMatches = !linked && name && cohort ? matchingStudents(state, { ...current, name, grade: cohort.grade, section: cohort.section }) : [];
   if (draftMatches.length > 1) throw new ReportWorkflowError(409, 'Hay varios expedientes con los mismos apellidos, nombres y aula. Seleccione el expediente correcto antes de confirmar.');
   pdf.manualName = name;

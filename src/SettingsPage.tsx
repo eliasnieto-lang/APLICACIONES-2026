@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react';
 import { Save, Plus, Trash2, LockKeyhole, UnlockKeyhole, ShieldCheck, SlidersHorizontal, CircleAlert } from 'lucide-react';
 import type { AreaGroup, CohortRecord, Settings } from '../shared/types';
 import { validateSettings, getDimensionWeights, getEffectiveDimensionWeights } from '../shared/calculations';
-import { ACTIVE_BIMESTERS, ALLOWED_COHORTS, normalizeCohort } from '../shared/policy';
+import { ACTIVE_BIMESTERS, ALLOWED_COHORTS, isOfferedCohort, normalizeCohort } from '../shared/policy';
 import { CONTEST_SCOPE_OPTIONS } from '../shared/contests';
 
-const classroomDescription = '1.º a 5.º de secundaria, secciones A–Z';
+const classroomDescription = '1.º a 5.º de secundaria, secciones A, B, C, D y E';
 
 interface Props { settings: Settings; studentCount: number; onSave: (settings: Settings, confirmReopen?: boolean) => Promise<void>; notify: (message: string) => void }
 const groupNames: Record<AreaGroup, string> = { math: 'Matemática', science: 'Ciencia y Tecnología', communication: 'Comunicación', social: 'Ciencias Sociales', dpcc: 'DPCC', other: 'Otra área' };
@@ -65,7 +65,7 @@ export default function SettingsPage({ settings, studentCount, onSave, notify }:
         <label className="field">Ámbito<select aria-label={`Ámbito convocatoria ${index + 1}`} value={record.kind} disabled={settings.closed || busy} onChange={event => updateCohortRecord(record.id, { kind: event.target.value as CohortRecord['kind'] })}><option value="institutional">Participación institucional</option><option value="family">Compromiso familiar</option></select></label>
         <label className="field">Actividad o compromiso<input aria-label={`Nombre convocatoria ${index + 1}`} value={record.name} list={record.kind === 'family' ? 'cohort-family-names' : 'cohort-activity-names'} placeholder="Nombre de la convocatoria" disabled={settings.closed || busy} onChange={event => updateCohortRecord(record.id, { name: event.target.value })}/></label>
         <label className="field">Fecha<input aria-label={`Fecha convocatoria ${index + 1}`} type="date" value={record.date} disabled={settings.closed || busy} onChange={event => updateCohortRecord(record.id, { date: event.target.value })}/></label>
-        <label className="field">Aula aplicable<select aria-label={`Aula convocatoria ${index + 1}`} value={record.grade ? normalizeCohort(record.grade, record.section)?.label ?? '' : ''} disabled={settings.closed || busy} onChange={event => { const cohort = ALLOWED_COHORTS.find(item => item.label === event.target.value); updateCohortRecord(record.id, { grade: cohort?.grade ?? '', section: cohort?.section ?? '' }); }}><option value="">Todas las aulas habilitadas</option>{ALLOWED_COHORTS.map(cohort => <option key={cohort.label} value={cohort.label}>{cohort.label}</option>)}</select></label>
+        <label className="field">Aula aplicable<select aria-label={`Aula convocatoria ${index + 1}`} value={record.grade && !isOfferedCohort(record.grade, record.section) ? 'retained' : record.grade ? normalizeCohort(record.grade, record.section)?.label ?? '' : ''} disabled={settings.closed || busy} onChange={event => { const cohort = ALLOWED_COHORTS.find(item => item.label === event.target.value); updateCohortRecord(record.id, { grade: cohort?.grade ?? '', section: cohort?.section ?? '' }); }}>{record.grade && !isOfferedCohort(record.grade, record.section) && <option value="retained" disabled>Aula anterior conservada</option>}<option value="">Todas las aulas habilitadas</option>{ALLOWED_COHORTS.map(cohort => <option key={cohort.label} value={cohort.label}>{cohort.label}</option>)}</select></label>
         <label className="checkbox-row"><input aria-label={`Exigible convocatoria ${index + 1}`} type="checkbox" checked={record.required} disabled={settings.closed || busy} onChange={event => updateCohortRecord(record.id, { required: event.target.checked })}/><span>Exigible para los estudiantes de esta cohorte</span></label>
       </div><div className="button-row"><button className="button secondary small" disabled={settings.closed || busy} onClick={() => change({ cohortRecords: (draft.cohortRecords || []).filter(item => item.id !== record.id) })}><Trash2 size={15}/>Eliminar convocatoria de la pauta</button></div></details>)}</div>
     </section>

@@ -310,6 +310,45 @@ test('La revisión permite confirmar un aula manual cuando el PDF y su nombre no
   }finally{await h.close();}
 });
 
+test('No participar en concursos se confirma sin inventar eventos, aporta PI cero y conserva su revisión en respaldos',async()=>{
+  const h=await harness();try{
+    let state=await readState(h);
+    assert.equal((await h.request('/api/settings','PUT',{...state.settings,criteriaApproved:true})).status,200);
+    const bytes=reportPdf('SIN-CONCURSOS-1A','RIVERA SOTO Alba','','1','A');
+    const pdf=await upload(h,bytes,'BOLETA_1ro A_RIVERA_SOTO_Alba.pdf');await confirm(h,pdf.id);
+    let student=(await readState(h)).students[0];const originalGrades=structuredClone(student.academic);
+    const save=async()=>{const response=await h.request(`/api/students/${student.id}`,'PUT',student);assert.equal(response.status,200,await response.clone().text());student=await response.json() as Student;};
+    student.noContestParticipation=true;await save();
+    state=await readState(h);
+    let result=calculateStudent(student,state.settings);
+    assert.equal(result.participation,0);assert.equal(result.participationNA,false);
+    assert.equal(result.c,null,'La familia sigue pendiente aunque la ausencia de concursos esté confirmada.');
+    assert.deepEqual(student.institutional,[],'No se inventa un concurso, fecha o puesto para registrar la ausencia.');
+    assert(student.history.some(entry=>entry.field==='noContestParticipation'));
+    student.attendance={required:200,exempted:0,attended:190,punctual:171,validated:false};student.discipline={confirmed:true,incidents:[]};
+    student.family=[{id:'familia-sin-concurso',name:'Reunión de familias',date:'2026-10-20',required:true,status:'fulfilled',justification:'',evidence:'',validated:true}];await save();
+    student.attendance.validated=true;student.validated.performance=true;student.validated.commitment=true;await save();
+    result=calculateStudent(student,state.settings);assert.equal(result.c,30);assert.equal(result.progress,100);assert.equal(result.eligible,true);
+    assert.deepEqual(student.academic,originalGrades);assert.deepEqual(student.institutional,[]);
+    const legacy=structuredClone(student);delete legacy.noContestParticipation;
+    const legacyResponse=await h.request(`/api/students/${student.id}`,'PUT',legacy);assert.equal(legacyResponse.status,200);student=await legacyResponse.json() as Student;
+    assert.equal(student.noContestParticipation,true,'Un guardado antiguo no borra la confirmación explícita.');
+    const backup=await(await h.request('/api/backup')).json(),before=await readState(h);
+    assert.equal(backup.state.students[0].noContestParticipation,true);
+    assert.equal((await h.request('/api/restore','POST',backup)).status,200);assert.deepEqual(await readState(h),before);
+    student=(await readState(h)).students[0];student.noContestParticipation=false;await save();
+    result=calculateStudent(student,state.settings);assert.equal(result.participation,null);assert.equal(result.eligible,false);assert.equal(student.validated.commitment,false);
+    student.noContestParticipation=true;await save();
+    const contest={id:'incompatible',eventType:'academic_contest' as const,scope:'local' as const,name:'Concurso nuevo',date:'2026-10-21',required:false,status:'fulfilled' as const,justification:'',evidence:'',validated:true,placement:'Primer puesto'};
+    assert.equal((await h.request(`/api/students/${student.id}`,'PUT',{...student,institutional:[contest]})).status,400,'No se confirma simultáneamente ausencia y concursos registrados.');
+    student.noContestParticipation=false;student.institutional=[contest];await save();assert.equal(calculateStudent(student,state.settings).participation,40);
+    assert.equal(student.validated.commitment,false,'Agregar un concurso restablece la revisión final.');
+    assert.equal((await h.request('/api/restore','POST',backup)).status,200);student=(await readState(h)).students[0];
+    assert.equal(student.noContestParticipation,true);assert.equal(calculateStudent(student,state.settings).participation,0);assert.deepEqual(student.institutional,[]);
+    assert.deepEqual(Buffer.from(await(await h.request(`/api/pdfs/${pdf.id}/file`)).arrayBuffer()),bytes);
+  }finally{await h.close();}
+});
+
 test('Una incidencia se verifica con categoría, fecha y descripción; medida y evidencia son opcionales',async()=>{
   const h=await harness();try{
     const pdf=await upload(h,reportPdf('INC-MIN','Estudiante Incidencias'));await confirm(h,pdf.id);

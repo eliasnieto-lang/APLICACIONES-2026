@@ -69,6 +69,85 @@ test('Cartilla: participación80 y familia90 produce C=83', () => {
   assert.equal(result.family, 90);
   assert.equal(result.c, 83);
 });
+test('Confirmar que no participó da PI0 sin inventar eventos y conserva la revisión final de Compromiso', () => {
+  const settings = approved(), student = complete(settings);
+  student.institutional = [];
+  student.noContestParticipation = true;
+  student.family = records('Familia', 3, 3);
+  student.validated.commitment = false;
+  const before = structuredClone(student);
+  const provisional = calculateStudent(student, settings);
+  assert.equal(provisional.participation, 0);
+  assert.equal(provisional.participationNA, false);
+  assert.equal(provisional.family, 100);
+  assert.equal(provisional.c, 30);
+  assert.equal(provisional.total, 67.375);
+  assert.equal(provisional.pc, 100);
+  assert.equal(provisional.progress, 100);
+  assert.equal(provisional.commitmentComplete, true);
+  assert.equal(provisional.eligible, false);
+  assert.deepEqual(provisional.pending, ['Confirmar validación final de Compromiso.']);
+  assert.deepEqual(student, before);
+  assert.deepEqual(semanticStudentErrors(student, settings), []);
+  student.validated.commitment = true;
+  assert.equal(calculateStudent(student, settings).eligible, true);
+  assert.equal(rankStudents([student], settings).length, 1);
+  assert.deepEqual(student.institutional, []);
+});
+test('No participar exige confirmación expresa y deshacerla devuelve el apartado a pendiente', () => {
+  const settings = approved(), student = complete(settings);
+  student.institutional = [];
+  assert.equal(calculateStudent(student, settings).participation, null);
+  assert.equal(calculateStudent(student, settings).total, null);
+  student.noContestParticipation = true;
+  assert.equal(calculateStudent(student, settings).participation, 0);
+  student.noContestParticipation = false;
+  const pending = calculateStudent(student, settings);
+  assert.equal(pending.participation, null);
+  assert.equal(pending.total, null);
+  assert.equal(pending.eligible, false);
+  assert.ok(pending.pending.some(message => message.includes('participación institucional')));
+});
+test('La no participación no permite omitir familia y se conserva al excluir Compromiso', () => {
+  const settings = approved(), student = complete(settings);
+  student.institutional = []; student.family = []; student.noContestParticipation = true;
+  assert.equal(calculateStudent(student, settings).participation, 0);
+  assert.equal(calculateStudent(student, settings).family, null);
+  assert.equal(calculateStudent(student, settings).total, null);
+  student.commitmentEnabled = false; student.validated.commitment = false;
+  const before = structuredClone(student), result = calculateStudent(student, settings);
+  assert.equal(result.c, null);
+  assert.equal(result.eligible, true);
+  assert.equal(result.progress, 100);
+  assert.deepEqual(student, before);
+  student.commitmentEnabled = true;
+  assert.equal(calculateStudent(student, settings).total, null);
+});
+test('Confirmar no participación y mantener concursos es una contradicción incluso con C excluida', () => {
+  for (const commitmentEnabled of [true, false]) {
+    const settings = approved(), student = complete(settings);
+    student.noContestParticipation = true; student.commitmentEnabled = commitmentEnabled;
+    const before = structuredClone(student), result = calculateStudent(student, settings);
+    assert.equal(result.eligible, false);
+    assert.ok(result.pending.some(message => message.includes('existen registros')));
+    assert.ok(semanticStudentErrors(student, settings).some(message => message.includes('no participación')));
+    assert.deepEqual(rankStudents([student], settings), []);
+    assert.deepEqual(student, before);
+  }
+});
+test('Los expedientes nuevos y antiguos distinguen sin participación de un apartado aún sin revisar', () => {
+  const settings = approved(), student = complete(settings);
+  assert.equal(student.noContestParticipation, false);
+  delete student.noContestParticipation;
+  const original = structuredClone(student);
+  const migrated = migrateState({ settings, students: [student], pdfs: [] }).students[0];
+  assert.equal(migrated.noContestParticipation, false);
+  assert.deepEqual(migrated.institutional, original.institutional);
+  assert.deepEqual(migrated.family, original.family);
+  assert.deepEqual(migrated.history, original.history);
+  student.institutional = []; student.noContestParticipation = true;
+  assert.equal(migrateState({ settings, students: [student], pdfs: [] }).students[0].noContestParticipation, true);
+});
 test('El promedio general pondera Académico 50 %, Desempeño 25 % y Compromiso 25 %', () => {
   const total = calculateTotal(78.76, 89.5, 83)!;
   assert.ok(Math.abs(total - 82.505) < 1e-12);
@@ -491,7 +570,7 @@ test('Un estudiante nuevo no contiene datos ni valores sustitutos y demo es inde
   assert.ok(demo.students.every(s => !calculateStudent(s, demo.settings).eligible));
   assert.ok(demo.students.every(s => !isReportApproved(s) && !s.pdfIds.length));
   assert.ok(demo.students.every(s => !s.institutional.length && !s.family.length));
-  assert.ok(demo.students.every(student => ALLOWED_COHORTS.some(cohort => cohort.label === cohortKey(student.grade, student.section))));
+  assert.ok(demo.students.every(student => normalizeCohort(student.grade, student.section)));
   assert.ok(new Set(demo.students.map(student => cohortKey(student.grade, student.section))).size > 1);
   assert.ok(demo.students.every(s => s.code.startsWith('DEMO-')));
   assert.equal(defaultSettings.criteriaApproved, false);
@@ -673,7 +752,8 @@ test('Se normalizan los cinco grados y las secciones A–Z de secundaria con exp
   for (const grade of ['12', '25', '23', '2do primaria', '2.º F', 'pre 3', '3.º de secundaria extra', '2to', '4ro', '3do', '0', '6']) assert.equal(normalizeCohort(grade, 'F'), null, grade);
   for (const section of ['FF', '2F', '', 'Ñ', '1']) assert.equal(normalizeCohort('3', section), null, section);
   for (const section of ['A', 'B', 'F', 'Z']) assert.equal(normalizeCohort('3', section.toLowerCase())?.label, `3.º ${section}`);
-  assert.equal(ALLOWED_COHORTS.length, 130);
+  assert.equal(ALLOWED_COHORTS.length, 25);
+  assert.ok(ALLOWED_COHORTS.every(cohort => /^[A-E]$/.test(cohort.section)));
 });
 
 test('El promedio I–II se compara con III y los datos heredados IV no afectan ningún cálculo', () => {

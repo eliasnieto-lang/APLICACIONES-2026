@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AppState, Dataset, Settings, Student } from '../shared/types';
 import { calculateStudent, fmt, rankStudents, getDimensionWeights } from '../shared/calculations';
-import { normalizeCohort } from '../shared/policy';
+import { isOfferedCohort, normalizeCohort } from '../shared/policy';
 import StudentDetail from './StudentDetail';
 import schoolLogo from './assets/colegio-albert-einstein.png?inline';
 import { isBrowserEdition } from './runtime';
@@ -9,7 +9,7 @@ import ImportPage from './ImportPage';
 import SettingsPage from './SettingsPage';
 import { ArrowDownToLine, ArrowRight, ArrowUpRight, BookOpen, Check, CheckCheck, ChevronDown, ChevronRight, CircleHelp, ClipboardCheck, CloudUpload, DatabaseBackup, FileCheck2, FileText, GraduationCap, LayoutDashboard, ListFilter, Loader2, Menu, MoreHorizontal, Plus, RotateCcw, Search, Settings2, ShieldCheck, Sparkles, Trophy, Trash2, Users, X, AlertCircle } from 'lucide-react';
 
-const classroomDescription = '1.º a 5.º de secundaria, en sus distintas secciones';
+const classroomDescription = '1.º a 5.º de secundaria, secciones A, B, C, D y E';
 const circleLabel = (student: Student) => student.circleStatus === 'remains' ? 'Permanece' : student.circleStatus === 'does_not_remain' ? 'No permanece' : 'Pendiente';
 
 type Page = 'dashboard' | 'students' | 'import' | 'ranking' | 'settings';
@@ -168,7 +168,7 @@ export default function App() {
   const enabledStudents = state?.students.filter(student => normalizeCohort(student.grade, student.section)) || [];
   const overallWeights = getDimensionWeights(state?.settings);
   const overallFormula = `${fmt(overallWeights.academic * 100)} % A + ${fmt(overallWeights.performance * 100)} % B + ${fmt(overallWeights.commitment * 100)} % C`;
-  const classrooms = [...new Map(enabledStudents.map(student => { const cohort = normalizeCohort(student.grade, student.section)!; return [cohort.label, cohort] as const; })).values()].sort((a, b) => a.label.localeCompare(b.label, 'es', { numeric: true }));
+  const classrooms = [...new Map(enabledStudents.filter(student => isOfferedCohort(student.grade, student.section)).map(student => { const cohort = normalizeCohort(student.grade, student.section)!; return [cohort.label, cohort] as const; })).values()].sort((a, b) => a.label.localeCompare(b.label, 'es', { numeric: true }));
   const evaluated = enabledStudents.map(student => ({ student, result: calculateStudent(student, state!.settings) }));
   const filtered = evaluated.filter(({ student, result }) => student.name.toLowerCase().includes(query.toLowerCase()) && (!grade || student.grade === grade) && (!section || student.section === section) && (!statusFilter || (statusFilter === 'valid' ? result.eligible : !result.eligible)));
   const validated = evaluated.filter(x => x.result.eligible).length;

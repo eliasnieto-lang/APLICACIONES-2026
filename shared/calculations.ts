@@ -103,7 +103,14 @@ function commitmentResult(records: Commitment[], label: string, pending: string[
   return { value: complete && !na ? percent(required.filter(r => r.status === 'fulfilled').length, required.length) : null, na, complete, validated: valid, expected: records.length + missing };
 }
 
-function institutionalResult(records: Commitment[], pending: string[], templates: CohortRecord[]) {
+function institutionalResult(records: Commitment[], pending: string[], templates: CohortRecord[], noContestParticipation = false) {
+  if (noContestParticipation) {
+    if (records.length) {
+      pending.push('Participación institucional: revise la confirmación de no participación; existen registros de participación institucional.');
+      return { value: null, na: false, complete: false, validated: 0, expected: 1 };
+    }
+    return { value: 0, na: false, complete: true, validated: 1, expected: 1 };
+  }
   const contests = records.filter(isAcademicContest);
   if (!contests.length) return commitmentResult(records, 'Participación institucional', pending, templates);
 
@@ -249,8 +256,10 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
   const b = ap !== null && discipline !== null ? settings.performanceWeights.attendance * ap + settings.performanceWeights.discipline * discipline : null;
 
   const cohortRecords = (settings.cohortRecords ?? []).filter(record => cohortRecordApplies(record, student));
+  const participationConflict = student.noContestParticipation === true && student.institutional.length > 0;
+  if (commitmentExcluded && participationConflict) pending.push('Participación institucional: revise la confirmación de no participación; existen registros de participación institucional.');
   const excludedCommitment = { value: null, na: false, complete: false, validated: 0, expected: 0 };
-  const pi = commitmentExcluded ? excludedCommitment : institutionalResult(student.institutional, pending, cohortRecords.filter(record => record.kind === 'institutional' && student.institutional.some(input => input.catalogId === record.id)));
+  const pi = commitmentExcluded ? excludedCommitment : institutionalResult(student.institutional, pending, cohortRecords.filter(record => record.kind === 'institutional' && student.institutional.some(input => input.catalogId === record.id)), student.noContestParticipation === true);
   const cf = commitmentExcluded ? excludedCommitment : commitmentResult(student.family, 'Compromiso familiar', pending, cohortRecords.filter(record => record.kind === 'family' && student.family.some(input => input.catalogId === record.id)));
   let c: number | null = pi.value !== null && cf.value !== null ? settings.commitmentWeights.participation * pi.value + settings.commitmentWeights.family * cf.value : null;
   if ((pi.na || cf.na) && pi.complete && cf.complete) {
@@ -273,7 +282,7 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
   if (!settings.criteriaApproved) pending.push('Confirmar aprobación institucional de los criterios y ponderaciones.');
   const total = calculateTotal(a, b, c, getDimensionWeights(settings), !commitmentExcluded);
   const validationsComplete = student.validated.academic && student.validated.performance && (commitmentExcluded || student.validated.commitment);
-  const eligible = total !== null && academicComplete && performanceComplete && (commitmentExcluded || commitmentComplete) && progress === 100 && validationsComplete && settings.criteriaApproved && configErrors.length === 0 && identityValid && cohortValid;
+  const eligible = total !== null && academicComplete && performanceComplete && (commitmentExcluded || commitmentComplete) && !participationConflict && progress === 100 && validationsComplete && settings.criteriaApproved && configErrors.length === 0 && identityValid && cohortValid;
   const untouchedCommitments = commitmentExcluded || [...student.institutional, ...student.family].every(record => record.status === 'pending' && !record.validated && !record.justification && !record.evidence);
   const noData = enteredGrades === 0 && attendanceFields.every(v => v === null) && !student.discipline.confirmed && !student.discipline.incidents.length && untouchedCommitments;
   const status = eligible ? 'VALIDADO' : noData ? 'SIN INICIAR' : configErrors.length || attendanceInvalid ? 'CON OBSERVACIONES' : total !== null && progress === 100 ? 'COMPLETO SIN VALIDAR' : 'EN PROCESO';

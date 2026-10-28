@@ -65,7 +65,7 @@ export function createApp(options: {dataDir?: string} = {}) {
     const ds=dataset(req),state=store.read(ds);unlocked(state);
     const input=newStudentSchema.parse(req.body);
     const cohort=normalizeCohort(input.grade,input.section);
-    if(!cohort)throw new HttpError(400,'Seleccione un grado de 1.º a 5.º de secundaria y una sección de A a Z.');
+    if(!cohort)throw new HttpError(400,'Seleccione un grado de 1.º a 5.º de secundaria y una sección de A a E.');
     if(state.students.some(s=>s.code.toLocaleLowerCase()===input.code.toLocaleLowerCase()))throw new HttpError(409,'Ya existe un estudiante con ese código.');
     const student=createStudent({...input,grade:cohort.grade,section:cohort.section},state.settings);student.history=[audit('Creación de expediente','',input)];
     state.students.push(student);store.save(ds,state);res.status(201).json(student);
@@ -73,16 +73,16 @@ export function createApp(options: {dataDir?: string} = {}) {
   app.put('/api/students/:id',(req,res)=>{
     const ds=dataset(req),state=store.read(ds);unlocked(state);
     const current=findStudent(state,String(req.params.id));
-    const student=studentSchema.parse({...req.body,reportApproval:current.reportApproval,commitmentEnabled:req.body.commitmentEnabled===undefined?current.commitmentEnabled??true:req.body.commitmentEnabled,circleStatus:req.body.circleStatus===undefined?current.circleStatus??'pending':req.body.circleStatus}) as Student;
+    const student=studentSchema.parse({...req.body,reportApproval:current.reportApproval,commitmentEnabled:req.body.commitmentEnabled===undefined?current.commitmentEnabled??true:req.body.commitmentEnabled,circleStatus:req.body.circleStatus===undefined?current.circleStatus??'pending':req.body.circleStatus,noContestParticipation:req.body.noContestParticipation===undefined?current.noContestParticipation??false:req.body.noContestParticipation}) as Student;
     if(student.id!==current.id)throw new HttpError(400,'El identificador del estudiante no se puede modificar.');
     if(student.updatedAt!==current.updatedAt)throw new HttpError(409,'El expediente cambió en otra pestaña. Recargue antes de guardar.');
     const cohort=normalizeCohort(student.grade,student.section);
-    if(!cohort)throw new HttpError(400,'Seleccione un grado de 1.º a 5.º de secundaria y una sección de A a Z.');
+    if(!cohort)throw new HttpError(400,'Seleccione un grado de 1.º a 5.º de secundaria y una sección de A a E.');
     student.grade=cohort.grade;student.section=cohort.section;
     if(['code','name','grade','section'].some(field=>student[field as keyof Student]!==current[field as keyof Student]))throw new HttpError(409,'Los datos del estudiante se obtienen automáticamente del PDF y no se editan en la ficha.');
     student.reportApproval=current.reportApproval;
     student.pdfIds=[...current.pdfIds];
-    const evaluationFields=['academic','attendance','discipline','institutional','family','validated','commitmentEnabled'] as const;
+    const evaluationFields=['academic','attendance','discipline','institutional','family','validated','commitmentEnabled','noContestParticipation'] as const;
     if(!isReportApproved(current)&&evaluationFields.some(field=>!same(current[field],student[field])))throw new HttpError(409,'Revise y confirme la libreta PDF antes de editar los tres ámbitos de evaluación.');
     for(const area of student.academic)if(!hasActiveGrades(area))area.validated=false;
     student.history=[...current.history];
@@ -97,13 +97,13 @@ export function createApp(options: {dataDir?: string} = {}) {
     if(attendanceChanged){student.attendance.validated=false;student.validated.performance=false;}
     if(disciplineChanged)student.validated.performance=false;
     const commitmentsChanged=!same(current.institutional,student.institutional)||!same(current.family,student.family);
-    if(commitmentsChanged)student.validated.commitment=false;
+    if(commitmentsChanged||Boolean(current.noContestParticipation)!==Boolean(student.noContestParticipation))student.validated.commitment=false;
     checkErrors(semanticStudentErrors(student,state.settings));
     const result=calculateStudent(student,state.settings);
     if(student.validated.academic&&result.a===null)throw new HttpError(400,'Complete y valide las calificaciones I–III de los cursos estudiados antes de validar el ámbito académico.');
     if(student.validated.performance&&result.b===null)throw new HttpError(400,'Complete asistencia y disciplina antes de validar desempeño.');
     if(student.commitmentEnabled!==false&&student.validated.commitment&&result.c===null)throw new HttpError(400,'Complete y revise los compromisos antes de validar el ámbito C.');
-    for(const field of ['code','name','grade','section','academic','attendance','discipline','institutional','family','validated','commitmentEnabled','circleStatus'] as const){if(!same(current[field],student[field]))student.history.push(audit(field,current[field],student[field]));}
+    for(const field of ['code','name','grade','section','academic','attendance','discipline','institutional','family','validated','commitmentEnabled','circleStatus','noContestParticipation'] as const){if(!same(current[field],student[field]))student.history.push(audit(field,current[field],student[field]));}
     student.pdfIds=current.pdfIds;student.createdAt=current.createdAt;student.updatedAt=stamp();
     state.students[state.students.findIndex(s=>s.id===student.id)]=student;
     store.save(ds,state);res.json(student);
@@ -264,7 +264,7 @@ export function createApp(options: {dataDir?: string} = {}) {
       store.save(ds,state);res.json(result.pdf);return;
     }
     const student=findStudent(state,req.body.studentId||pdf.studentId);
-    if(!normalizeCohort(student.grade,student.section))throw new HttpError(400,'El estudiante debe tener un grado de 1.º a 5.º de secundaria y una sección de A a Z.');
+    if(!normalizeCohort(student.grade,student.section))throw new HttpError(400,'El estudiante debe tener un grado de 1.º a 5.º de secundaria y una sección de A a E.');
     if(pdf.extractedCode&&pdf.extractedCode.toLocaleLowerCase()!==student.code.toLocaleLowerCase()&&req.body.confirmMismatch!==true)throw new HttpError(409,'El código extraído no coincide. Confirme la reasignación antes de unir los registros.');
     {
       const old=pdf.studentId?state.students.find(s=>s.id===pdf.studentId):null;

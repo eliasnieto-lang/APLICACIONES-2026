@@ -16,13 +16,13 @@ export async function buildWorkbook(state: AppState, filters: {grade?:string;sec
   const students=state.students.filter(s=>{const cohort=normalizeCohort(s.grade,s.section);return cohort&&(!filters.grade||cohort.grade===requestedCohort?.grade)&&(!filters.section||cohort.section===filters.section.trim().toUpperCase());});
   const ranked=rankStudents(students,state.settings);
   const ranking=workbook.addWorksheet('RANKING');
-  ranking.addRow(['Puesto','Código','Estudiante','Grado','Sección','Académico A','Desempeño B','Compromiso C','Promedio TOTAL','Avance (%)','Estado','Cohorte','Ámbitos evaluados','Peso académico total','Peso desempeño total','Peso compromiso total','Permanencia en el círculo']);
+  ranking.addRow(['Puesto','Código','Estudiante','Grado','Sección','Académico A','Desempeño B','Compromiso C','Promedio TOTAL','Avance (%)','Estado','Cohorte','Ámbitos evaluados','Peso académico total','Peso desempeño total','Peso compromiso total','Permanencia en el círculo','No participó en concursos']);
   for (const {student:s,result:r,position,cohort} of ranked) {
     const weights=getEffectiveDimensionWeights(state.settings,s);
-    ranking.addRow([position,s.code,s.name,s.grade,s.section,r.a,r.b,r.commitmentExcluded?'No se evalúa':r.c,r.total,r.progress,r.status,cohort,r.commitmentExcluded?'Académico y Desempeño':'Académico, Desempeño y Compromiso',weights.academic,weights.performance,weights.commitment,circleLabel(s.circleStatus)]);
+    ranking.addRow([position,s.code,s.name,s.grade,s.section,r.a,r.b,r.commitmentExcluded?'No se evalúa':r.c,r.total,r.progress,r.status,cohort,r.commitmentExcluded?'Académico y Desempeño':'Académico, Desempeño y Compromiso',weights.academic,weights.performance,weights.commitment,circleLabel(s.circleStatus),s.noContestParticipation===true?'Sí':'No']);
   }
   const detail=workbook.addWorksheet('DETALLE');
-  detail.addRow(['Código','Estudiante','G','R','P','Ciencias (1–4)','Letras (1–4)','Promedio I–II','Promedio III','Asistencia (%)','Puntualidad (%)','AP','Disciplina','Participación PI','Familia CF','Peso G','Peso R','Peso P','Peso AP','Peso D','Peso PI','Peso CF','Origen académico','Asistencia registrada','Incidencias verificadas','Participación registrada','Familia registrada','Historial de ajustes',...ACTIVE_BIMESTERS.map(period=>`Calificaciones ${period}`),'Puesto en concursos','Representación del colegio','Notas adicionales de la libreta','Compromiso incluido en promedio','Peso académico total','Peso desempeño total','Peso compromiso total','Permanencia en el círculo']);
+  detail.addRow(['Código','Estudiante','G','R','P','Ciencias (1–4)','Letras (1–4)','Promedio I–II','Promedio III','Asistencia (%)','Puntualidad (%)','AP','Disciplina','Participación PI','Familia CF','Peso G','Peso R','Peso P','Peso AP','Peso D','Peso PI','Peso CF','Origen académico','Asistencia registrada','Incidencias verificadas','Participación registrada','Familia registrada','Historial de ajustes',...ACTIVE_BIMESTERS.map(period=>`Calificaciones ${period}`),'Puesto en concursos','Representación del colegio','Notas adicionales de la libreta','Compromiso incluido en promedio','Peso académico total','Peso desempeño total','Peso compromiso total','Permanencia en el círculo','No participó en concursos']);
   for (const s of students) {
     const r=calculateStudent(s,state.settings);
     const pdfs=state.pdfs.filter(p=>s.pdfIds.includes(p.id));
@@ -33,13 +33,13 @@ export async function buildWorkbook(state: AppState, filters: {grade?:string;sec
       JSON.stringify(s.attendance),JSON.stringify(s.discipline),JSON.stringify(s.institutional),JSON.stringify(s.family),JSON.stringify(s.history),
       ...ACTIVE_BIMESTERS.map((_,period)=>JSON.stringify(s.academic.filter(hasActiveGrades).map(area=>({areaId:area.areaId,grades:area.grades.map(row=>row[period]??'')})))),
       JSON.stringify(s.institutional.map(record=>({id:record.id,name:record.name,placement:record.placement??''}))),
-      JSON.stringify(s.institutional.map(record=>({id:record.id,name:record.name,representingSchool:record.representingSchool??null}))),JSON.stringify(pdfs.flatMap(pdf=>pdf.supplementalAreas??[]).filter(hasActiveGrades)),s.commitmentEnabled===false?'No':'Sí',getEffectiveDimensionWeights(state.settings,s).academic,getEffectiveDimensionWeights(state.settings,s).performance,getEffectiveDimensionWeights(state.settings,s).commitment,circleLabel(s.circleStatus)]);
+      JSON.stringify(s.institutional.map(record=>({id:record.id,name:record.name,representingSchool:record.representingSchool??null}))),JSON.stringify(pdfs.flatMap(pdf=>pdf.supplementalAreas??[]).filter(hasActiveGrades)),s.commitmentEnabled===false?'No':'Sí',getEffectiveDimensionWeights(state.settings,s).academic,getEffectiveDimensionWeights(state.settings,s).performance,getEffectiveDimensionWeights(state.settings,s).commitment,circleLabel(s.circleStatus),s.noContestParticipation===true?'Sí':'No']);
   }
   const pending=workbook.addWorksheet('PENDIENTES');
-  pending.addRow(['Código','Estudiante','Grado','Sección','Avance (%)','PA (%)','PB (%)','PC (%)','Estado','Dimensiones y validaciones pendientes','Ámbitos evaluados','Permanencia en el círculo']);
+  pending.addRow(['Código','Estudiante','Grado','Sección','Avance (%)','PA (%)','PB (%)','PC (%)','Estado','Dimensiones y validaciones pendientes','Ámbitos evaluados','Permanencia en el círculo','No participó en concursos']);
   for (const s of students) {
     const r=calculateStudent(s,state.settings);
-    if (!r.eligible) pending.addRow([s.code,s.name,s.grade,s.section,r.progress,r.pa,r.pb,r.commitmentExcluded?'No se evalúa':r.pc,r.status,r.pending.join('; '),r.commitmentExcluded?'Académico y Desempeño':'Académico, Desempeño y Compromiso',circleLabel(s.circleStatus)]);
+    if (!r.eligible) pending.addRow([s.code,s.name,s.grade,s.section,r.progress,r.pa,r.pb,r.commitmentExcluded?'No se evalúa':r.pc,r.status,r.pending.join('; '),r.commitmentExcluded?'Académico y Desempeño':'Académico, Desempeño y Compromiso',circleLabel(s.circleStatus),s.noContestParticipation===true?'Sí':'No']);
   }
   const config=workbook.addWorksheet('CONFIGURACIÓN');
   config.addRow(['Parámetro','Valor']);
@@ -51,7 +51,7 @@ export async function buildWorkbook(state: AppState, filters: {grade?:string;sec
     ['Compromiso excluido','Por estudiante: TOTAL = (peso A × A + peso B × B) / (peso A + peso B); C no agrega puntaje, pendientes ni validación obligatoria. Sus registros se conservan.'],
     ['Regla de empate','Posición compartida al coincidir el total presentado con dos decimales'],
     ['Cohorte comparable','Grado y sección; posiciones independientes por cohorte'],
-    ['Salones admitidos','1.º a 5.º de secundaria; secciones A a Z'],['Bimestres evaluados','I, II y III'],['Escala de logro','AD=4, A=3, B=2 y C=1. Los promedios de las competencias y de I–III se convierten a puntos sobre 100 multiplicando por 25.'],['Áreas aplicables','Solo áreas con al menos una nota válida de I–III; las totalmente vacías o con solo IV se excluyen.'],['Validación manual académica','Confirma las notas reconocidas sin agregar calificaciones. Indaga completamente vacía no se evalúa ni afecta el promedio; las demás competencias deben estar completas.'],['Mínimo de incidencia','Categoría, fecha y descripción. Medida y evidencia opcionales.'],['Mínimo de compromiso familiar','Actividad, fecha y estado. Observación y evidencia opcionales.'],['Progresión','Promedio I–II comparado con III'],
+    ['Salones admitidos','1.º a 5.º de secundaria; secciones A a E'],['Bimestres evaluados','I, II y III'],['Escala de logro','AD=4, A=3, B=2 y C=1. Los promedios de las competencias y de I–III se convierten a puntos sobre 100 multiplicando por 25.'],['Áreas aplicables','Solo áreas con al menos una nota válida de I–III; las totalmente vacías o con solo IV se excluyen.'],['Validación manual académica','Confirma las notas reconocidas sin agregar calificaciones. Indaga completamente vacía no se evalúa ni afecta el promedio; las demás competencias deben estar completas.'],['Mínimo de incidencia','Categoría, fecha y descripción. Medida y evidencia opcionales.'],['Mínimo de compromiso familiar','Actividad, fecha y estado. Observación y evidencia opcionales.'],['Progresión','Promedio I–II comparado con III'],
     ['Filtro grado',filters.grade||'Todos'],['Filtro sección',filters.section||'Todas'],
     ['Criterios institucionales aprobados',state.settings.criteriaApproved?'Sí':'No'],
     ['Evaluación cerrada',state.settings.closed?'Sí':'No'],
@@ -66,6 +66,7 @@ export async function buildWorkbook(state: AppState, filters: {grade?:string;sec
     ['Estudiantes incluidos',ranked.length],['Expedientes pendientes',students.length-ranked.length],
     ['Decisión institucional','Permanencia registrada manualmente: Pendiente, Permanece o No permanece. Los puntajes no asignan esta decisión automáticamente.'],
   ];
+  configRows.push(['Sin participación en concursos','Confirmación expresa sin eventos registrados: PI=0 puntos, sin fecha ni puesto ficticios. Compromiso familiar y validación final de C mantienen sus requisitos.']);
   for (const row of configRows) config.addRow(row);
   for (const sheet of workbook.worksheets) {
     sheet.views=[{state:'frozen',ySplit:1}];

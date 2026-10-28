@@ -26,6 +26,7 @@ export const studentSchema = z.object({
   history: z.array(history).max(100000), pdfIds: z.array(id).max(1000), createdAt: text, updatedAt: text,
   reportApproval: z.object({ pdfId: id, approvedAt: z.string().datetime() }).optional(),
   commitmentEnabled: z.boolean().optional(),
+  noContestParticipation: z.boolean().optional(),
   circleStatus: z.enum(['pending','remains','does_not_remain']).optional(),
 });
 export const newStudentSchema = studentSchema.pick({ code: true, name: true, grade: true, section: true });
@@ -59,6 +60,7 @@ export const backupSchema = z.object({
 
 export function semanticStudentErrors(student: Student, settings: Settings): string[] {
   const errors: string[] = [];
+  if (student.noContestParticipation === true && student.institutional.length > 0) errors.push('La confirmación de no participación en concursos no puede combinarse con registros de participación institucional.');
   const a = student.attendance;
   const days = a.required === null || a.exempted === null ? null : a.required - a.exempted;
   if (days !== null && days < 0) errors.push('Los días eximidos no pueden superar los días lectivos.');
