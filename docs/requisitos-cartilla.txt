@@ -1,0 +1,277 @@
+ESPECIFICACIÓN FUNCIONAL · VERSIÓN PARA DESARROLLO
+CARTILLA PARA CREAR UNA SOLA APLICACIÓN DE EVALUACIÓN
+Permanencia en los Círculos de Estudios 2027
+OBJETIVO
+Construir una aplicación web única, de uso directo y sin pantalla de acceso, que importe simultáneamente múltiples libretas PDF, permita completar manualmente todos los demás registros, calcule 3 puntajes separados por estudiante, muestre su promedio general y genere un ranking consolidado en Excel.
+
+1. Estructura de resultados
+Dimensión / ámbito
+Resultado individual
+Incidencia en el total
+A. Rendimiento académico
+Puntaje de 0 a 100
+1/3
+B. Desempeño estudiantil
+Puntaje de 0 a 100
+1/3
+C. Compromiso institucional y familiar
+Puntaje de 0 a 100
+1/3
+PROMEDIO GENERAL
+(A + B + C) ÷ 3
+100 %
+
+Los tres puntajes deben aparecer siempre por separado. El promedio total será ARITMÉTICO SIMPLE: no usar la ponderación anterior 70/20/10 ni reemplazar una dimensión faltante por el promedio de las otras.
+2. Flujo principal esperado
+Paso
+Acción del operador
+Respuesta del sistema
+1
+Arrastrar o elegir muchos archivos PDF.
+Procesar todos en lote y agruparlos por estudiante.
+2
+Revisar calificaciones reconocidas.
+Mostrar errores, duplicados y datos por validar.
+3
+Ingresar o importar asistencia y registros.
+Actualizar inmediatamente desempeño y compromiso.
+4
+Completar fichas individuales.
+Actualizar barras de avance y puntajes parciales.
+5
+Pulsar “Generar ranking consolidado”.
+Exportar un Excel ordenado por promedio general.
+
+3. Principios indispensables
+Una sola base de estudiantes; tres dimensiones de evaluación en la misma ficha.
+Información persistente entre sesiones y posibilidad de guardar respaldo y restaurarlo.
+Resultados definitivos únicamente cuando los tres ámbitos estén completos y validados.
+Fórmulas auditables, ponderaciones visibles y configurables antes de cerrar la evaluación.
+
+4. Módulo A · Rendimiento académico
+Fuente principal: libretas escolares de 2026. La aplicación debe leer competencias, áreas y bimestres I-IV. El estudiante que ya pertenece al Círculo no rendirá una nueva prueba.
+Calificación
+AD
+A
+B
+C
+Valor para índice interno
+4
+3
+2
+1
+
+A1. Rendimiento general: 40 %
+Para cada bimestre, promediar las competencias de cada área. Luego promediar los cuatro resultados bimestrales del área. Finalmente promediar todas las áreas elegibles, asignando el mismo peso a cada área.
+FÓRMULA
+G = 25 × PROMEDIO(promedios anuales de todas las áreas elegibles). Una competencia en blanco no equivale a C ni a cero.
+
+A2. Rendimiento en Ciencias y Letras: 40 %
+Grupo
+Áreas consideradas
+Peso del grupo
+CIENCIAS
+Matemática (50 % del grupo) + Ciencia y Tecnología (50 %)
+60 %
+LETRAS
+Comunicación + Ciencias Sociales + DPCC (1/3 cada una)
+40 %
+
+CIENCIAS = (Matemática + Ciencia y Tecnología) ÷ 2
+LETRAS = (Comunicación + Ciencias Sociales + DPCC) ÷ 3
+FÓRMULA
+R = 25 × [0,60 × CIENCIAS + 0,40 × LETRAS]. El aplicativo mostrará los valores de cada área, de ambos grupos y el resultado R.
+
+A3. Progresión académica: 20 %
+S1 = promedio del índice general (escala 1–4) de los bimestres I y II. S2 = promedio equivalente de los bimestres III y IV.
+Δ = S2 − S1     |     P = 25 × MIN(4; MAX(1; S2 + 0,50 × Δ))
+La fórmula premia una mejora, reconoce el nivel reciente y no penaliza por sí sola la estabilidad de un desempeño alto. Debe utilizarse igual para toda la cohorte.
+Índice académico A
+PUNTAJE ACADÉMICO
+A = (G × 0,40) + (R × 0,40) + (P × 0,20). Mantener toda la precisión en el cálculo; mostrar dos decimales al final.
+
+Vista obligatoria: tabla editable de Área × Competencia × Bimestre; promedios por área; Ciencias, Letras, G, R, P, A; etiqueta “provisional” cuando falte cualquier dato requerido.
+
+5. Módulo B · Desempeño estudiantil
+Ingreso simplificado por alumno o mediante archivo tabular (Excel/CSV). Mostrar los datos que sustentan cada resultado.
+Indicador
+Peso interno
+Datos y cálculo
+Asistencia y puntualidad (AP)
+60 %
+A_s = 100 × asistencias / días exigibles. P_s = 100 × ingresos puntuales / días asistidos. AP = (A_s + P_s) ÷ 2.
+Disciplina (D)
+40 %
+D = MAX(0; 100 − suma de descuentos por incidencias verificadas). Registrar tipo, fecha, medida y evidencia.
+
+Los días formalmente eximidos de asistencia no forman parte de los días exigibles, según la regla institucional aprobada. Una tardanza no puede descontarse dos veces, como impuntualidad y como incidencia disciplinaria.
+PUNTAJE DESEMPEÑO
+B = 0,60 × AP + 0,40 × D. Los descuentos disciplinarios serán configurables y deberán corresponder al Reglamento Interno; 5/15/30 por gravedad son SOLO valores de ejemplo, no sanciones aprobadas.
+
+6. Módulo C · Compromiso institucional y familiar
+Para producir un tercer puntaje único, el módulo incorporará participación institucional del estudiante y cumplimiento familiar documentado, con pesos propuestos configurables.
+Subcomponente
+Peso sugerido
+Cálculo objetivo
+Participación institucional (PI)
+70 %
+PI = 100 × convocatorias cumplidas / convocatorias exigibles. Considerar concursos y actividades efectivamente obligatorios y aplicables.
+Compromiso familiar (CF)
+30 %
+CF = 100 × obligaciones cumplidas / obligaciones exigibles: reuniones, citaciones y acuerdos formalizados.
+
+PUNTAJE COMPROMISO
+C = 0,70 × PI + 0,30 × CF. La distribución 70/30 se propone para la app; requiere validación institucional previa a su aplicación definitiva.
+
+Tratamientos obligatorios
+Registrar cada convocatoria/compromiso con fecha, condición “exigible”, estado, justificación y evidencia.
+No incluir como incumplidas las actividades justificadas o no exigibles conforme a la regla aprobada.
+Si no existen obligaciones exigibles, mostrar “No aplica”; no asignar cero ni cien automáticamente. Resolver la excepción según una regla definida para la cohorte antes de generar ranking definitivo.
+Mostrar los resultados de PI y CF por separado dentro de C; evitar que una situación familiar sea motivo automático de exclusión del estudiante.
+
+7. Importación masiva de libretas PDF
+Agregar un área visible de arrastrar y soltar que acepte SELECCIÓN MÚLTIPLE de archivos PDF (o carpetas si el navegador lo permite). Nunca exigir la carga de archivos uno por uno.
+Función
+Comportamiento requerido
+Carga simultánea
+Elegir muchos PDF, ponerlos en cola y mostrar archivos procesados, pendientes y fallidos.
+Extracción
+Capturar código, nombres, grado, sección, periodo, áreas, competencias, bimestres y niveles AD/A/B/C.
+Reconocimiento
+Extraer texto y activar OCR en PDF escaneados; señalar casillas ilegibles para revisión.
+Vinculación
+Usar código de estudiante como identificador principal; si no coincide, pedir confirmación sin unir alumnos automáticamente.
+Versiones
+Detectar PDF duplicados y permitir reemplazar una libreta, conservando trazabilidad.
+Correcciones
+Mostrar tabla comparada con el documento original y permitir corregir cada valor.
+Validación
+Guardar extractos como “pendiente” hasta que se confirme la lectura; actualizar cálculos automáticamente.
+
+8. Registro manual sencillo de información variable
+Dentro de la ficha de cada estudiante, usar pestañas y campos directos; evitar formularios largos y repetitivos.
+Sección de ficha
+Controles para completar
+Académico
+Tabla por competencia y bimestre; edición en celda, pegar filas y confirmar cada área.
+Asistencia
+Días exigibles, asistidos, eximidos/justificados, tardanzas; cálculo en vivo.
+Disciplina
+Botón “Sin incidencias” o “Agregar incidencia”; fecha, categoría, descripción y respaldo.
+Participación
+Botones “Cumplió”, “No cumplió”, “Justificada” y “No aplica” por convocatoria.
+Familia
+Iguales estados para reuniones, citaciones y acuerdos; agregar observación/evidencia.
+Configuración
+Agregar tipos de actividades, campos y categorías desde un catálogo, sin modificar el código.
+
+ERGONOMÍA DE CARGA
+Permitir búsqueda de estudiante, cambio rápido al siguiente, guardado automático, copia/pegado masivo, edición individual y cargas Excel/CSV para registros repetitivos.
+
+
+9. Barra de avance por estudiante
+La ficha y el listado deben mostrar visualmente cuánto se ha completado de la evaluación del alumno, con un porcentaje de 0 a 100 y detalles de lo que falta.
+Avance parcial
+Definición
+Académico (PA)
+100 × casillas de calificaciones obligatorias validadas / total de casillas obligatorias esperadas (competencias × 4 bimestres).
+Desempeño (PB)
+100 × campos obligatorios de asistencia y disciplina validados / total de campos exigibles; “sin incidencias” confirmado cuenta como completado.
+Compromiso (PC)
+100 × registros requeridos de convocatorias y compromisos validados / registros esperados; estado “No aplica” debe quedar confirmado.
+AVANCE TOTAL
+(PA + PB + PC) ÷ 3. Mide COMPLETITUD del expediente, NO rendimiento ni nivel de logro.
+
+Mostrar barras PA, PB, PC y avance total por alumno. Debajo, una lista concreta de pendientes: por ejemplo, “Faltan 4 notas del IV bimestre”, “Disciplina sin validar” o “Pendiente citación familiar”.
+Estados recomendados: SIN INICIAR (0 %), EN PROCESO (1–99 %), COMPLETO SIN VALIDAR, VALIDADO (100 %) y CON OBSERVACIONES. El avance de 100 % no sustituye la confirmación final de los registros.
+10. Promedio general y clasificación
+PROMEDIO GENERAL
+TOTAL = (A + B + C) ÷ 3. Los tres ámbitos tienen el mismo peso. Mostrar A, B, C y TOTAL con dos decimales. Si falta cualquier ámbito, TOTAL = “Pendiente”, no recalcular con solo dos.
+
+El ranking solo incluirá expedientes con A, B y C completos, revisados y válidos. Ordenar de mayor a menor por TOTAL; si hay empate exacto a la precisión oficial de presentación, permitir posición compartida. No aplicar desempates no aprobados.
+11. Botón “Generar ranking consolidado”
+Botón único, visible en el panel. Debe generar y descargar un archivo XLSX con las hojas siguientes:
+Hoja
+Contenido
+1. RANKING
+Puesto, código, estudiante, grado, sección, Académico A, Desempeño B, Compromiso C, Promedio TOTAL, avance y estado.
+2. DETALLE
+G, R, P, Ciencias, Letras, asistencia, puntualidad, disciplina, participación, familia; valores, pesos y origen.
+3. PENDIENTES
+Estudiantes incompletos, % de avance, dimensiones pendientes y validaciones requeridas.
+4. CONFIGURACIÓN
+Ponderaciones y criterios aplicados, año, fecha de generación y versión del cálculo.
+
+Permitir filtrar por grado, sección o todos; el ranking se agrupa por cohorte comparable. El archivo debe generarse incluso si hay expedientes pendientes, pero estos deben aparecer únicamente en PENDIENTES.
+
+12. Pantallas y navegación de la aplicación
+Pantalla
+Contenido imprescindible
+Panel principal
+Estudiantes, PDF cargados, validados, pendientes, promedio por dimensión, promedio general y botón de exportar ranking.
+Importación masiva
+Zona de PDF múltiples; cola de carga; vista previa de errores; reasignación a estudiante.
+Listado de alumnos
+Código, nombres, grado, sección, A, B, C, promedio total, barras PA/PB/PC, avance total, estado.
+Ficha individual
+Tres pestañas, edición rápida, PDF original, historial de ajustes y panel de cálculos en tiempo real.
+Ranking y exportación
+Tabla ordenable/filtrable y botón “Generar ranking consolidado”.
+Parámetros
+Catálogo de áreas/competencias, puntajes disciplinarios, convocatorias y pesos, bloqueados tras cierre.
+
+13. Reglas para que los resultados sean fiables
+Conservar cada PDF y el valor original extraído; toda edición manual debe dejar registrado el antes y después.
+Prohibido sustituir datos faltantes por cero, C o 100. Distinguir “sin datos” de “ningún incidente”.
+Los promedios se recalculan inmediatamente al guardar cualquier dato y nunca se redondea en pasos intermedios.
+Definir anticipadamente catálogo de áreas, competencias y fechas para que estudiantes comparables sigan la misma pauta.
+La aplicación no debe emitir un veredicto automático de exclusión; produce resultados para revisión institucional.
+Sin pantalla de usuarios ni inicio de sesión: abrir directamente el panel. Mantener el registro en almacenamiento persistente y ofrecer botón “Copia de seguridad / Restaurar”.
+14. Pruebas de aceptación antes de su uso
+Prueba
+Resultado correcto
+PDF múltiple
+Cargar 10 PDF de una sola vez y crear 10 fichas o detectar las coincidencias existentes.
+Todos los niveles A
+Académico A = 75,00 si todas las competencias de los cuatro bimestres son A.
+Progresión
+S1 = 3,00; S2 = 3,20 ⇒ P = 82,50.
+Asistencia y disciplina
+Asistencia 95; puntualidad 90; disciplina 85 ⇒ desempeño B = 89,50.
+Compromiso
+Participación 80 y cumplimiento familiar 90 ⇒ compromiso C = 83,00.
+Promedio de tres
+A = 78,76; B = 89,50; C = 83,00 ⇒ TOTAL = 83,75.
+Incompleto
+Sin IV bimestre: avance inferior a 100 % y exclusión del ranking definitivo.
+Consolidado
+Excel descargable con cuatro hojas y ordenamiento descendente del promedio total.
+
+
+15. Instrucción maestra para un generador de aplicaciones
+PEDIDO DE IMPLEMENTACIÓN
+Construye una única aplicación web funcional, en español, con interfaz institucional del Colegio Albert Einstein. No quiero tres apps ni un panel de acceso. Implementa importación masiva de PDF con lectura de libretas, formularios editables para desempeño y compromiso, tres puntajes independientes sobre 100, promedio aritmético simple de los tres, barras de avance por alumno y botón para generar ranking XLSX consolidado.
+
+La aplicación debe usar las definiciones y las fórmulas de las secciones 4 a 11 de esta cartilla como especificación matemática obligatoria. Todos los puntajes, estados, campos faltantes y cálculos deberán observarse y poder verificarse desde la ficha de cada estudiante.
+Entregables mínimos de la implementación
+Aplicación completa con una sola base de estudiantes y persistencia de datos; no entregar únicamente una maqueta.
+Extractor PDF masivo con vista previa, corrección y validación manual de calificaciones.
+Fichas individuales completamente editables; facilidad para crear registros de convocatorias, reuniones e incidencias.
+Cálculo en vivo de A, B, C y TOTAL; barras de avance PA, PB, PC y avance general.
+Consolidado Excel descargable con ranking, detalle, pendientes y configuración aplicada.
+Datos ficticios de prueba independientes de los datos reales y comprobación de los casos de la sección 14.
+Decisiones institucionales que deben confirmarse antes del cálculo definitivo
+Parámetro
+Propuesta inicial
+Peso de las 3 dimensiones
+A = B = C = 1/3 (promedio simple solicitado).
+Peso de compromiso C
+Participación 70 % + familia 30 %; pendiente de aprobación.
+Descuentos disciplinarios
+Configurables, conforme a categorías del Reglamento Interno.
+Tratamiento de “No aplica”
+Resolución según regla común de la cohorte; nunca puntaje arbitrario.
+Criterio de ranking
+Solo expedientes completos, validados y comparables por grupo.
+
+Documento de requisitos funcionales para desarrollo del aplicativo; no sustituye la aprobación final de los criterios de selección, la revisión del Reglamento Interno ni la valoración institucional de cada caso.

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+data/
+test-results/
+.env
+*.log
+.tools/
+entregables/
+web/

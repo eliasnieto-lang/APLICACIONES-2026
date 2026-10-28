@@ -1,0 +1,53 @@
+# Validación de la edición web
+
+La edición web usa el almacenamiento IndexedDB del navegador y procesa los documentos en el dispositivo. Esta validación es independiente de las pruebas de la edición con servidor y SQLite descritas en `VALIDACION.md`.
+
+## Cómo repetir la prueba
+
+Primero debe existir el archivo real `web/index.html`, generado por el proceso de compilación web. La prueba falla si el archivo falta: no crea una página ficticia ni utiliza el servidor de aplicación.
+
+Para comprobar el archivo desde un origen web local, se sirve **únicamente** la carpeta de salida estática:
+
+```sh
+python3 -m http.server 4120 --bind 127.0.0.1 --directory web
+```
+
+En otra terminal:
+
+```sh
+APP_WEB_URL=http://127.0.0.1:4120/index.html node tests/browser-web.cjs
+```
+
+La prueba crea un perfil temporal nuevo de Chromium. No abre el perfil del operador ni usa sus registros institucionales. `CHROMIUM_PATH` permite indicar otro ejecutable. `KEEP_BROWSER_WEB_PROFILE=1` conserva el perfil temporal para diagnóstico.
+
+El servidor anterior solo entrega archivos; no es una API ni un servidor de procesamiento de la aplicación. Después de cargar el documento, la prueba pone Chromium sin conexión durante la edición, la lectura PDF/OCR y las descargas. La conexión se permite otra vez únicamente para recargar el HTML estático y volver a abrir el navegador.
+
+## Alcance de la prueba automatizada
+
+`tests/browser-web.cjs` comprueba:
+
+- Creación de la base IndexedDB en un perfil vacío.
+- Registro manual y validación de las tres dimensiones, con 60 calificaciones A y puntaje académico de 75,00.
+- Guardado automático, historial, recarga y conservación íntegra del estado después de cerrar y volver a abrir Chromium con el mismo perfil.
+- Diez PDF de texto en una sola selección, identificación de sus estudiantes y conservación de los valores reconocidos como provisionales.
+- Detección de duplicados y reemplazo explícito de una libreta con trazabilidad.
+- Vista previa del original mediante una URL Blob local.
+- Reconocimiento OCR español de un PDF mixto que combina cabecera digital y notas escaneadas.
+- Descarga de plantilla CSV y de Excel; lectura del archivo Excel con ExcelJS para verificar sus cuatro hojas, puntajes y separación de pendientes.
+- Copia de seguridad con integridad SHA-256 de cada PDF, alteración posterior de la base y restauración exacta del estado y de los documentos.
+- Separación entre los registros del espacio real y los datos ficticios de demostración.
+- Ausencia de solicitudes HTTP a `/api` y ausencia de solicitudes HTTP a otros orígenes.
+
+El resultado de una ejecución correcta se guarda en `/tmp/circulos-web-result.json` y su captura en `/tmp/circulos-web.png`. Un fallo produce diagnóstico de solicitudes, errores JavaScript y una captura `/tmp/circulos-web-error.png`.
+
+## Archivo local y límites de la comprobación
+
+`CHECK_FILE_OPEN=1` añade un intento de abrir `web/index.html` mediante `file://`. Si una política del Chromium gestionado lo impide con `ERR_BLOCKED_BY_ADMINISTRATOR`, la prueba lo registra por separado; no modifica ni elude la política. Un resultado correcto bajo un origen HTTP estático no demuestra por sí solo que `file://` esté permitido en otros equipos.
+
+No se ha recibido una libreta institucional real de muestra. Los PDF utilizados por esta prueba son ficticios y verifican el mecanismo de importación, revisión y OCR; todavía debe comprobarse el diseño concreto de las libretas del colegio. Los valores reconocidos requieren revisión visual.
+
+Una prueba local tampoco demuestra publicación de un sitio público ni disponibilidad de un enlace de producción.
+
+## Resultado de esta entrega
+
+Pendiente de ejecutar sobre el archivo web definitivo; este apartado se actualizará con la evidencia obtenida.

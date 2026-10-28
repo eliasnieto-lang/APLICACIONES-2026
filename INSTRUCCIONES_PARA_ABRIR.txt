@@ -1,0 +1,45 @@
+CÍRCULOS DE ESTUDIOS 2027 · COLEGIO ALBERT EINSTEIN
+
+La vista previa «Index» del chat no ejecuta esta aplicación. El programa necesita
+su servidor, su base de datos y las herramientas de lectura de PDF incluidas.
+
+ABRIR EN TU COMPUTADORA WINDOWS
+
+1. Descarga el paquete ZIP y descomprímelo en una carpeta permanente.
+   No abras los archivos directamente dentro del ZIP.
+2. Instala Docker Desktop desde el sitio oficial, si todavía no lo tienes:
+   https://docs.docker.com/desktop/setup/install/windows-install/
+3. Abre Docker Desktop y espera a que esté listo.
+4. Haz doble clic en ABRIR_APP_WINDOWS.bat.
+5. Espera la primera descarga e instalación. Se abrirá el navegador cuando
+   la aplicación esté lista. No se necesita instalar Node.js por separado.
+
+Para volver a entrar, abre Docker Desktop y ejecuta el mismo archivo.
+Para detener el programa, usa DETENER_APP_WINDOWS.bat.
+
+EN LINUX O MAC
+
+Con Docker y Compose V2 disponibles, ejecuta: bash abrir-app.sh
+Para detenerlo sin borrar datos, ejecuta: docker compose stop
+
+TUS DATOS
+
+Los estudiantes reales empiezan vacíos. La demostración tiene datos ficticios
+separados. Los registros y los PDF quedan en un volumen persistente de Docker.
+Usa «Descargar copia de seguridad» dentro de la aplicación y conserva el JSON
+en un lugar seguro. No borres los volúmenes ni ejecutes «docker compose down -v».
+
+Este ZIP contiene la aplicación y su configuración, SIN datos personales,
+credenciales, archivos PDF reales ni la base de datos del entorno de desarrollo.
+La instalación necesita Internet para descargar los componentes verificados.
+
+PARA ABRIR MEDIANTE UN ENLACE DEL COLEGIO
+
+El paquete también incluye Dockerfile para instalarlo en un alojamiento web
+con almacenamiento persistente. Esto requiere elegir y configurar ese alojamiento.
+Publicar el entorno de desarrollo de Codex no publica por sí solo la aplicación.
+No se ha creado un enlace público ni se han enviado datos a un alojamiento externo.
+
+Antes de usar resultados institucionales, confirma los criterios en Parámetros
+y contrasta el formato de una libreta real. El reconocimiento queda provisional
+hasta la revisión del operador. Consulta README.md para detalles y pruebas.
