@@ -5,3 +5,19 @@
 @media(max-width:760px){.import-dropzone,.drop-zone{padding:25px 17px;min-height:220px}.import-dropzone h2,.drop-zone h2{font-size:18px}.import-dropzone p,.drop-zone p{font-size:11px}.settings-section{padding:18px}.settings-sticky-actions{padding:12px;flex-wrap:wrap}.settings-sticky-actions p{font-size:9px}.import-summary{gap:9px}.import-summary>div{padding:13px}.import-summary strong{font-size:21px}.import-summary span{font-size:9px}.settings-row{flex-wrap:wrap}.settings-row>.field{min-width:40%}.settings-row input[type=number]{max-width:90px}}
 
 .detail-area .academic-table .grade-select{display:inline-grid;place-items:center;min-width:46px;min-height:32px;padding:5px 9px;border:1px solid #eadfe7;border-radius:6px;font-weight:600}
+.cleanup-card,.danger-zone{display:flex;align-items:center;justify-content:space-between;gap:20px;border-color:#eed0d6;background:#fffafb}
+.cleanup-card{margin-top:24px;padding:23px}
+.cleanup-card>div,.danger-zone>div{min-width:0}
+.cleanup-card p,.danger-zone p{font-size:12px;color:var(--muted);margin-top:8px}
+.cleanup-summary{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-top:12px;font-size:12px}
+.delete-space{display:inline-flex;align-items:center;padding:5px 9px;border:1px solid #e8c7ce;border-radius:6px;background:#fbecef;color:#98263a;font-size:11px;font-weight:650}
+.danger-zone{margin-top:24px;padding:21px}
+.modal-danger{max-width:560px}
+.modal-danger .modal-illustration{background:#fbecef;color:#a32940}
+.delete-summary{display:flex;flex-direction:column;gap:6px;padding:14px 16px;margin:17px 0;border:1px solid #efdee2;border-radius:8px;background:#fffbfc;font-size:12px}
+.delete-summary strong{overflow-wrap:anywhere;color:#6e3441}
+.delete-summary span{color:var(--muted);line-height:1.6}
+.delete-confirmation-input{margin:16px 0}
+.delete-error{color:#ac253b;font-size:12px;line-height:1.6;margin:12px 0}
+.delete-actions{flex-wrap:wrap}
+@media(max-width:700px){.cleanup-card,.danger-zone{align-items:stretch;flex-direction:column}.cleanup-card>.button,.danger-zone>.button{white-space:normal}.delete-actions>.button{flex:1 1 100%;white-space:normal}}

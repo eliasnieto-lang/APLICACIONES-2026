@@ -7,7 +7,7 @@ import { calculateStudent, cohortRecordApplies, validateSettings } from '../../s
 import { isReportApproved, normalizeCohort } from '../../shared/policy';
 import { migrateState } from '../../shared/migrations';
 import { resolveReportIdentity } from '../../shared/filename-identity';
-import { confirmReport, identifyReport, applyReprocessedReport, applyRescannedGrades, deleteReportAndStudent, linkAcademic, registerImportedReport, ReportWorkflowError } from '../../shared/report-workflow';
+import { confirmReport, identifyReport, applyReprocessedReport, applyRescannedGrades, deleteReportAndStudent, deleteStudentAndReports, linkAcademic, registerImportedReport, ReportWorkflowError } from '../../shared/report-workflow';
 import { ACADEMIC_CONTEST_LABEL, isAcademicContest } from '../../shared/contests';
 import { hasActiveGrades } from '../../shared/academic-policy';
 import { buildWorkbook } from '../../server/export';
@@ -149,21 +149,30 @@ async function install(): Promise<void> {
   await initialize(db);
   const documentUrls = new Map<string, string>();
   const templateUrl = URL.createObjectURL(new Blob([TEMPLATE], { type: 'text/csv;charset=utf-8' }));
+  const removeDocumentUrl = (key: string) => {
+    const url = documentUrls.get(key);
+    if (url) URL.revokeObjectURL(url);
+    documentUrls.delete(key);
+  };
   const registerFiles = (dataset: Dataset, files: Map<string, Blob>, replace = false) => {
-    // Keep URLs already displayed in other components alive until this page closes.
-    if (replace) for (const key of documentUrls.keys()) if (key.startsWith(`${dataset}:`)) documentUrls.delete(key);
-    for (const [id, blob] of files) documentUrls.set(fileKey(dataset, id), URL.createObjectURL(blob.type === 'application/pdf' ? blob : blob.slice(0, blob.size, 'application/pdf')));
+    if (replace) for (const key of documentUrls.keys()) if (key.startsWith(`${dataset}:`)) removeDocumentUrl(key);
+    for (const [id, blob] of files) {
+      const key = fileKey(dataset, id);
+      removeDocumentUrl(key);
+      documentUrls.set(key, URL.createObjectURL(blob.type === 'application/pdf' ? blob : blob.slice(0, blob.size, 'application/pdf')));
+    }
   };
   const initialFiles = await Promise.all((['real', 'demo'] as const).map(async dataset => ({ dataset, files: await readFiles(db, dataset) })));
   for (const { dataset, files } of initialFiles) registerFiles(dataset, files);
   setBrowserRuntime({ documentUrl: (id, dataset) => documentUrls.get(fileKey(dataset, id)) ?? '', templateUrl: () => templateUrl });
   const channel = typeof BroadcastChannel === 'undefined' ? undefined : new BroadcastChannel(DB_NAME);
   channel?.addEventListener('message', event => {
-    const message = event.data as { dataset?: Dataset; changed?: string[]; removed?: string[] };
+    const message = event.data as { dataset?: Dataset; changed?: string[]; removed?: string[]; replace?: boolean };
     if (!message || !['real', 'demo'].includes(message.dataset ?? '') || !Array.isArray(message.changed) || !Array.isArray(message.removed)) return;
     const dataset = message.dataset!;
     void readFiles(db, dataset).then(files => {
-      for (const id of message.removed!) documentUrls.delete(fileKey(dataset, id));
+      if (message.replace) { registerFiles(dataset, files, true); return; }
+      for (const id of message.removed!) if (!files.has(id)) removeDocumentUrl(fileKey(dataset, id));
       registerFiles(dataset, new Map(message.changed!.flatMap(id => { const blob = files.get(id); return blob ? [[id, blob] as [string, Blob]] : []; })));
     }).catch(() => {});
   });
@@ -178,21 +187,26 @@ async function install(): Promise<void> {
     const bytes = new TextEncoder().encode(payload).length + new TextEncoder().encode(envelope).length - 4 + Array.from(resultingFiles, ([id, blob]) => new TextEncoder().encode(JSON.stringify({ id, content: '' })).length + 4 * Math.ceil(blob.size / 3)).reduce((sum, size) => sum + size, 0) + Math.max(0, resultingFiles.size - 1);
     if (bytes > MAX_BACKUP_BYTES) throw new HttpError(413, 'La operación supera el límite de respaldo de 512 MB por base de datos. Reduzca el tamaño de los PDF antes de volver a cargarlos. El registro actual no se guardó.');
     const transaction = db.transaction(['state', 'files'], 'readwrite');
-    let conflict = false;
+    let conflict = false, replacedIds = [...previousFiles.keys()];
     const done = transactionDone(transaction), states = transaction.objectStore('state'), files = transaction.objectStore('files');
     const current = states.get(dataset);
     current.onsuccess = () => {
       if (JSON.stringify(current.result) !== expected) { conflict = true; transaction.abort(); return; }
-      if (replace) for (const id of previousFiles.keys()) files.delete(fileKey(dataset, id));
+      if (replace) {
+        const keys = files.getAllKeys(fileRange(dataset));
+        keys.onsuccess = () => { replacedIds = keys.result.map(key => String(key).slice(dataset.length + 1)); };
+        files.delete(fileRange(dataset));
+      }
       for (const id of removals) files.delete(fileKey(dataset, id));
       for (const [id, blob] of additions) files.put(blob, fileKey(dataset, id));
       states.put(state, dataset);
     };
     try { await done; } catch (error) { if (conflict) throw new HttpError(409, 'Los datos cambiaron en otra pestaña. Recargue antes de guardar.'); throw error; }
     if (replace || additions.size) registerFiles(dataset, additions, replace);
-    const removed = [...new Set([...(replace ? previousFiles.keys() : []), ...removals])].filter(id => !additions.has(id));
-    for (const id of removed) documentUrls.delete(fileKey(dataset, id));
-    if (replace || additions.size || removed.length) channel?.postMessage({ dataset, changed: [...additions.keys()], removed });
+    const removed = [...new Set([...(replace ? replacedIds : []), ...removals])].filter(id => !additions.has(id));
+    for (const id of removed) removeDocumentUrl(fileKey(dataset, id));
+    if (replace || additions.size || removed.length) channel?.postMessage({ dataset, changed: [...additions.keys()], removed, replace });
+    return { removedFiles: removed.length };
   }
 
   async function bodyJson(input: RequestInfo | URL, init?: RequestInit): Promise<unknown> {
@@ -264,11 +278,27 @@ async function install(): Promise<void> {
       await save(dataset, state, expected); return json(student);
     }
     if (studentMatch && method === 'DELETE') {
-      unlocked(state);
-      const student = findStudent(state, decodeURIComponent(studentMatch[1]));
-      state.students = state.students.filter(value => value.id !== student.id);
-      for (const pdf of state.pdfs) if (pdf.studentId === student.id) { pdf.studentId = null; if (pdf.status === 'validated') pdf.status = 'review'; }
-      await save(dataset, state, expected); return json({ deleted: true });
+      const student = findStudent(state, decodeURIComponent(studentMatch[1])), body = await bodyJson(input, init) as { confirmation?: unknown; allowClosed?: unknown; expectedUpdatedAt?: unknown } | null;
+      if (!body || body.confirmation !== student.name) throw new HttpError(400, 'Escriba los apellidos y nombres exactos del estudiante para confirmar su eliminación.');
+      if (state.settings.closed && body.allowClosed !== true) throw new HttpError(423, 'Confirme la eliminación del expediente de la evaluación cerrada.');
+      if (body.expectedUpdatedAt !== undefined && body.expectedUpdatedAt !== student.updatedAt) throw new HttpError(409, 'El expediente cambió desde la confirmación. Recargue y revise antes de eliminarlo.');
+      const result = deleteStudentAndReports(state, student.id);
+      await save(dataset, state, expected, new Map(), false, new Set(result.deletedPdfIds));
+      return json({ deleted: true, ...result, students: 1, pdfs: result.deletedPdfIds.length });
+    }
+    if (method === 'DELETE' && path === '/api/evaluation') {
+      if (!url.searchParams.has('dataset')) throw new HttpError(400, 'Seleccione explícitamente la base de datos que desea vaciar.');
+      const body = await bodyJson(input, init) as { confirmation?: unknown; allowClosed?: unknown; expectedCounts?: { students?: unknown; pdfs?: unknown } } | null;
+      if (!body || body.confirmation !== 'ELIMINAR TODO') throw new HttpError(400, 'Escriba ELIMINAR TODO para confirmar la eliminación de la evaluación.');
+      if (state.settings.closed && body.allowClosed !== true) throw new HttpError(423, 'Confirme la eliminación de los datos de la evaluación cerrada.');
+      const counts = body.expectedCounts;
+      if (counts !== undefined) {
+        if (!counts || typeof counts.students !== 'number' || !Number.isSafeInteger(counts.students) || counts.students < 0 || typeof counts.pdfs !== 'number' || !Number.isSafeInteger(counts.pdfs) || counts.pdfs < 0) throw new HttpError(400, 'Los conteos de la confirmación no son válidos.');
+        if (counts.students !== state.students.length || counts.pdfs !== state.pdfs.length) throw new HttpError(409, 'Los datos cambiaron desde la confirmación. Recargue y revise antes de eliminar todo.');
+      }
+      const removed = { students: state.students.length, pdfs: state.pdfs.length };
+      const saved = await save(dataset, { students: [], pdfs: [], settings: { ...state.settings, closed: false } }, expected, new Map(), true);
+      return json({ deleted: true, ...removed, files: saved.removedFiles });
     }
     if (method === 'PUT' && path === '/api/settings') {
       const body = await bodyJson(input, init), settings = settingsSchema.parse(body);

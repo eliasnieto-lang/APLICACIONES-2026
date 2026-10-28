@@ -15,7 +15,7 @@ import { calculateStudent, validateSettings, cohortRecordApplies } from '../shar
 import { normalizeCohort, isReportApproved } from '../shared/policy.js';
 import { migrateState } from '../shared/migrations.js';
 import { resolveReportIdentity } from '../shared/filename-identity.js';
-import { registerImportedReport, identifyReport, applyReprocessedReport, applyRescannedGrades, confirmReport, deleteReportAndStudent, linkAcademic, ReportWorkflowError } from '../shared/report-workflow.js';
+import { registerImportedReport, identifyReport, applyReprocessedReport, applyRescannedGrades, confirmReport, deleteReportAndStudent, deleteStudentAndReports, linkAcademic, ReportWorkflowError } from '../shared/report-workflow.js';
 import { ACADEMIC_CONTEST_LABEL, isAcademicContest } from '../shared/contests.js';
 import { hasActiveGrades } from '../shared/academic-policy.js';
 import { Store, CapacityError } from './store.js';
@@ -108,11 +108,27 @@ export function createApp(options: {dataDir?: string} = {}) {
     store.save(ds,state);res.json(student);
   });
   app.delete('/api/students/:id',(req,res)=>{
-    const ds=dataset(req),state=store.read(ds);unlocked(state);
-    const student=findStudent(state,String(req.params.id));
-    state.students=state.students.filter(s=>s.id!==student.id);
-    for(const pdf of state.pdfs)if(pdf.studentId===student.id){pdf.studentId=null;if(pdf.status==='validated')pdf.status='review';}
-    store.save(ds,state);res.json({deleted:true});
+    const ds=dataset(req),state=store.read(ds),student=findStudent(state,String(req.params.id));
+    if(!req.body||req.body.confirmation!==student.name)throw new HttpError(400,'Escriba los apellidos y nombres exactos del estudiante para confirmar su eliminación.');
+    if(state.settings.closed&&req.body.allowClosed!==true)throw new HttpError(423,'Confirme la eliminación del expediente de la evaluación cerrada.');
+    if(req.body.expectedUpdatedAt!==undefined&&req.body.expectedUpdatedAt!==student.updatedAt)throw new HttpError(409,'El expediente cambió desde la confirmación. Recargue y revise antes de eliminarlo.');
+    const result=deleteStudentAndReports(state,student.id);
+    store.transaction(()=>{store.deleteFiles(ds,result.deletedPdfIds);store.save(ds,state);});
+    res.json({deleted:true,...result,students:1,pdfs:result.deletedPdfIds.length});
+  });
+  app.delete('/api/evaluation',(req,res)=>{
+    if(req.query.dataset===undefined)throw new HttpError(400,'Seleccione explícitamente la base de datos que desea vaciar.');
+    const ds=dataset(req),state=store.read(ds);
+    if(!req.body||req.body.confirmation!=='ELIMINAR TODO')throw new HttpError(400,'Escriba ELIMINAR TODO para confirmar la eliminación de la evaluación.');
+    if(state.settings.closed&&req.body.allowClosed!==true)throw new HttpError(423,'Confirme la eliminación de los datos de la evaluación cerrada.');
+    const expected=req.body.expectedCounts;
+    if(expected!==undefined){
+      if(!expected||!Number.isSafeInteger(expected.students)||expected.students<0||!Number.isSafeInteger(expected.pdfs)||expected.pdfs<0)throw new HttpError(400,'Los conteos de la confirmación no son válidos.');
+      if(expected.students!==state.students.length||expected.pdfs!==state.pdfs.length)throw new HttpError(409,'Los datos cambiaron desde la confirmación. Recargue y revise antes de eliminar todo.');
+    }
+    const counts={students:state.students.length,pdfs:state.pdfs.length,files:(store.db.prepare('SELECT count(*) AS count FROM documents WHERE dataset=?').get(ds) as {count:number}).count};
+    store.replace(ds,{students:[],pdfs:[],settings:{...state.settings,closed:false}},[]);
+    res.json({deleted:true,...counts});
   });
   app.put('/api/settings',(req,res)=>{
     const ds=dataset(req),state=store.read(ds),settings=settingsSchema.parse(req.body);

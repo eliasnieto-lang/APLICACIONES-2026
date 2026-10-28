@@ -304,21 +304,37 @@ export function confirmReport(state: AppState, pdfId: string, options: { identit
   return { pdf, student };
 }
 
+/** Delete an explicitly selected student, including every owned version and unowned duplicate. */
+export function deleteStudentAndReports(state: AppState, studentId: string): { studentId: string; deletedPdfIds: string[] } {
+  const student = state.students.find(candidate => candidate.id === studentId);
+  if (!student) throw new ReportWorkflowError(404, 'Estudiante no encontrado.');
+  const ids = state.pdfs.filter(record => record.studentId === student.id || (!record.studentId && student.pdfIds.includes(record.id))).map(record => record.id);
+  return { ...removeReportsAndStudent(state, student, ids), studentId: student.id };
+}
+
 /** Uses explicit links only; a code found in PDF text never selects a student for deletion. */
 export function deleteReportAndStudent(state: AppState, pdfId: string): { studentId: string | null; deletedPdfIds: string[] } {
   const pdf = state.pdfs.find(record => record.id === pdfId);
   if (!pdf) throw new ReportWorkflowError(404, 'PDF no encontrado.');
   const student = state.students.find(candidate => candidate.id === pdf.studentId);
-  const ids = new Set<string>([pdf.id, ...(student?.pdfIds ?? [])]);
-  if (student) for (const record of state.pdfs) if (record.studentId === student.id) ids.add(record.id);
+  if (student) return deleteStudentAndReports(state, student.id);
+  return removeReportsAndStudent(state, undefined, [pdf.id]);
+}
+
+function removeReportsAndStudent(state: AppState, student: Student | undefined, initialIds: string[]): { studentId: string | null; deletedPdfIds: string[] } {
+  const ids = new Set(initialIds);
   let changed = true;
   while (changed) {
     changed = false;
-    const hashes = new Set(state.pdfs.filter(record => ids.has(record.id)).map(record => record.hash));
+    const selected = state.pdfs.filter(record => ids.has(record.id));
+    const hashes = new Set(selected.map(record => record.hash).filter(Boolean));
+    const predecessors = new Set(selected.map(record => record.replacesId).filter(Boolean));
     for (const record of state.pdfs) {
       if (ids.has(record.id)) continue;
       const sameOwner = !record.studentId || record.studentId === student?.id;
-      if (sameOwner && (hashes.has(record.hash) || (record.replacesId && ids.has(record.replacesId)))) { ids.add(record.id); changed = true; }
+      const duplicate = record.status === 'duplicate' && hashes.has(record.hash);
+      const version = predecessors.has(record.id) || Boolean(record.replacesId && ids.has(record.replacesId));
+      if (sameOwner && (duplicate || version)) { ids.add(record.id); changed = true; }
     }
   }
   state.pdfs = state.pdfs.filter(record => !ids.has(record.id));

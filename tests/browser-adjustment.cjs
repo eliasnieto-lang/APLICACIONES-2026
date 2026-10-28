@@ -105,7 +105,7 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     await context.setOffline(true);
     operationsStarted = true;
   };
-  const snapshot = () => page.evaluate(() => new Promise((resolve, reject) => {
+  const snapshot = (dataset = 'real') => page.evaluate(dataset => new Promise((resolve, reject) => {
     const open = indexedDB.open('circulos-2027-web', 1);
     open.onerror = () => reject(open.error);
     open.onsuccess = () => {
@@ -113,19 +113,19 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
       const transaction = db.transaction(['state', 'files'], 'readonly');
       let state;
       const files = [];
-      const request = transaction.objectStore('state').get('real');
+      const request = transaction.objectStore('state').get(dataset);
       request.onsuccess = () => { state = request.result; };
       const cursor = transaction.objectStore('files').openCursor();
       cursor.onsuccess = () => {
         const item = cursor.result;
         if (!item) return;
-        if (String(item.key).startsWith('real:')) files.push({ id: String(item.key).slice(5), size: item.value.size, type: item.value.type });
+        if (String(item.key).startsWith(`${dataset}:`)) files.push({ id: String(item.key).slice(dataset.length + 1), size: item.value.size, type: item.value.type });
         item.continue();
       };
       transaction.oncomplete = () => { db.close(); resolve({ state, files }); };
       transaction.onerror = () => { db.close(); reject(transaction.error); };
     };
-  }));
+  }), dataset);
   const student = async code => (await snapshot()).state.students.find(value => value.code === code);
   const navigate = name => page.locator('.sidebar .nav-item').filter({ hasText: name }).click();
   const openStudent = async (code, name) => {
@@ -214,6 +214,54 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     assert.deepEqual(value.family, []);
     assert.equal(value.validated.performance, false);
     assert.equal(value.validated.commitment, false);
+  };
+  const setClosed = async closed => {
+    await navigate('Parámetros');
+    await check(page.getByLabel(closed
+      ? 'He revisado los resultados y deseo bloquear los parámetros y los registros. El cierre conservará los datos para consulta y exportación.'
+      : 'Confirmo la reapertura para realizar correcciones. Revisaré de nuevo los criterios y los resultados antes de cerrar.'));
+    await page.getByRole('button', { name: closed ? 'Cerrar evaluación' : 'Reabrir evaluación', exact: true }).click();
+    await poll(async () => (await snapshot()).state.settings.closed === closed, closed ? 'evaluación cerrada' : 'evaluación reabierta');
+  };
+  // Hold a real browser-backend request to verify that destructive actions wait
+  // for an active scanner or autosave. No response or persistence is mocked.
+  const holdStudentRequest = (kind, studentId) => page.evaluate(({ kind, studentId }) => {
+    const original = window.fetch;
+    window.__deleteRequestGate = { held: false, complete: false };
+    window.__restoreDeleteRequestGate = () => { window.fetch = original; };
+    window.fetch = async function(input, init) {
+      let body;
+      try { body = JSON.parse(init?.body); } catch { /* Only match JSON student actions. */ }
+      const pathname = typeof input === 'string' ? new URL(input, location.href).pathname : '';
+      const matches = init?.method === 'PUT' && (kind === 'save'
+        ? pathname === `/api/students/${studentId}`
+        : /^\/api\/pdfs\//.test(pathname) && body?.action === 'rescan-grades');
+      const held = matches && !window.__deleteRequestGate.held;
+      if (held) {
+        window.__deleteRequestGate.held = true;
+        await new Promise(resolve => { window.__releaseDeleteRequestGate = resolve; });
+      }
+      try { return await original.apply(this, arguments); }
+      finally { if (held) window.__deleteRequestGate.complete = true; }
+    };
+  }, { kind, studentId });
+  const releaseStudentRequest = async () => {
+    await page.evaluate(() => window.__releaseDeleteRequestGate());
+    await poll(() => page.evaluate(() => window.__deleteRequestGate.complete), 'operación pendiente terminada', 180000);
+    await page.evaluate(() => window.__restoreDeleteRequestGate());
+  };
+  const assertEmptyDashboard = async () => {
+    await navigate('Panel principal');
+    await poll(async () => (await page.locator('.stat-value').allTextContents()).every(value => value === '00'), 'indicadores de evaluación vacía');
+    assert.equal(await page.locator('.stat-value').count(), 4);
+    assert.equal(await page.locator('.student-table tbody tr').count(), 0);
+    await page.getByRole('heading', { name: 'Un nuevo ciclo empieza aquí', exact: true }).waitFor();
+  };
+  const deletionScreenshot = async (locator, name) => {
+    await locator.screenshot({ path: `/tmp/circulos-${name}.png` });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await locator.screenshot({ path: `/tmp/circulos-${name}-narrow.png` });
+    await page.setViewportSize({ width: 1440, height: 1100 });
   };
 
   try {
@@ -860,6 +908,163 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     }
     await openStudent(pupils[0].code, pupils[0].name);
     await page.screenshot({ path: '/tmp/circulos-adjustment.png', fullPage: true });
+    await tab('Académico').click();
+    assert.deepEqual((await page.locator('.grade-select').allTextContents()).slice(0, 3), ['C', 'B', 'A']);
+    await tab('Compromiso').click();
+    assert.equal(await page.locator('.commitment-card').count(), 0, 'No reaparecen evaluaciones eliminadas.');
+    await review(path.basename(fixtures[0]));
+    assert((await page.locator('.import-original iframe').getAttribute('src')).startsWith('blob:'), 'El original reimportado se conserva.');
+
+    // The destructive workflows use only this temporary profile. Initialize the
+    // separate demo space so every real-space deletion can prove its isolation.
+    await page.getByRole('button', { name: 'Explorar demostración', exact: true }).click();
+    await poll(async () => Boolean((await snapshot('demo')).state?.students.length), 'demostración ficticia disponible');
+    const demoBeforeDeletion = await snapshot('demo');
+    await page.getByRole('button', { name: 'Ir a datos reales', exact: true }).click();
+    await page.locator('.demo-banner').waitFor({ state: 'hidden' });
+    assert.deepEqual(await snapshot(), finalSnapshot, 'Explorar la demostración conserva el espacio real.');
+
+    // Rebuild a replaced original and a duplicate for the new explicit student
+    // deletion, independently of the existing import-review deletion coverage.
+    await navigate('Importar libretas');
+    await upload([fixtures[0]]);
+    await upload([replacementPath]);
+    await confirm(path.basename(replacementPath));
+    await saved();
+    const deleteStudentId = (await student(pupils[0].code)).id;
+    await holdStudentRequest('rescan', deleteStudentId);
+    await page.getByRole('button', { name: 'Volver a escanear notas', exact: true }).click();
+    await poll(() => page.evaluate(() => window.__deleteRequestGate.held), 'escaneo pendiente antes de eliminar');
+    assert(await page.getByRole('button', { name: 'Eliminar estudiante', exact: true }).isDisabled(), 'La eliminación espera al escaneo activo para que no restaure registros después.');
+    await releaseStudentRequest();
+    await poll(() => page.getByRole('button', { name: 'Eliminar estudiante', exact: true }).isEnabled(), 'escaneo finalizado antes de eliminar');
+
+    await tab('Desempeño').click();
+    await holdStudentRequest('save', deleteStudentId);
+    await page.getByLabel('Días lectivos del periodo').fill('201');
+    await page.getByRole('button', { name: 'Eliminar estudiante', exact: true }).click();
+    await poll(() => page.evaluate(() => window.__deleteRequestGate.held), 'autoguardado pendiente antes de eliminar estudiante');
+    assert.equal(await page.getByRole('dialog').count(), 0, 'El diálogo espera a que terminen los cambios de la ficha.');
+    await releaseStudentRequest();
+    const studentDeleteDialog = page.getByRole('dialog', { name: 'Eliminar estudiante', exact: true });
+    await studentDeleteDialog.waitFor();
+    assert.match(await studentDeleteDialog.innerText(), new RegExp(pupils[0].name));
+    assert.match(await studentDeleteDialog.innerText(), /2\.º de secundaria · Sección F/);
+    assert.match(await studentDeleteDialog.innerText(), /evaluaciones.*historial.*PDF.*versiones anteriores.*duplicados/s);
+    assert.match(await studentDeleteDialog.innerText(), /Datos reales/);
+    const beforeStudentCancel = await snapshot();
+    const optionalBackup = JSON.parse((await download(() => studentDeleteDialog.getByRole('button', { name: 'Descargar respaldo', exact: true }).click())).content.toString());
+    assert.deepEqual(optionalBackup.state, beforeStudentCancel.state, 'El respaldo opcional conserva la ficha antes de eliminar.');
+    await studentDeleteDialog.getByRole('button', { name: 'Cancelar', exact: true }).last().click();
+    await studentDeleteDialog.waitFor({ state: 'hidden' });
+    assert.deepEqual(await snapshot(), beforeStudentCancel, 'Cancelar la eliminación individual conserva todos los registros y originales.');
+
+    await setClosed(true);
+    const beforeStudentDeletion = await snapshot();
+    const target = beforeStudentDeletion.state.students.find(value => value.id === deleteStudentId);
+    const targetHashes = new Set(beforeStudentDeletion.state.pdfs.filter(pdf => pdf.studentId === target.id || target.pdfIds.includes(pdf.id)).map(pdf => pdf.hash));
+    const targetPdfIds = beforeStudentDeletion.state.pdfs.filter(pdf => pdf.studentId === target.id || targetHashes.has(pdf.hash)).map(pdf => pdf.id);
+    assert(targetPdfIds.length >= 3, 'La eliminación individual incluye un original, una versión y un duplicado.');
+    assert(beforeStudentDeletion.state.pdfs.some(pdf => targetPdfIds.includes(pdf.id) && pdf.status === 'replaced'));
+    assert(beforeStudentDeletion.state.pdfs.some(pdf => targetPdfIds.includes(pdf.id) && pdf.status === 'duplicate'));
+    await openStudent(pupils[0].code, pupils[0].name);
+    assert(await page.getByRole('button', { name: 'Eliminar estudiante', exact: true }).isEnabled(), 'La ficha permite eliminar incluso con la evaluación cerrada.');
+    await deletionScreenshot(page.locator('.danger-zone'), 'delete-student-footer');
+    await page.getByRole('button', { name: 'Eliminar estudiante', exact: true }).click();
+    await studentDeleteDialog.waitFor();
+    await deletionScreenshot(studentDeleteDialog, 'delete-student-confirmation');
+    await studentDeleteDialog.getByRole('button', { name: 'Eliminar estudiante', exact: true }).click();
+    await studentDeleteDialog.waitFor({ state: 'hidden' });
+    await poll(async () => !(await student(pupils[0].code)), 'eliminación individual de ficha y evaluaciones');
+    const afterStudentDeletion = await snapshot();
+    assert.deepEqual(afterStudentDeletion.state.settings, beforeStudentDeletion.state.settings, 'Eliminar una ficha conserva los parámetros y el cierre.');
+    assert.deepEqual(afterStudentDeletion.state.students, beforeStudentDeletion.state.students.filter(value => value.id !== target.id), 'La eliminación individual conserva las otras fichas completas.');
+    assert.deepEqual(afterStudentDeletion.state.pdfs, beforeStudentDeletion.state.pdfs.filter(pdf => !targetPdfIds.includes(pdf.id)), 'La eliminación individual conserva solo los documentos ajenos.');
+    assert.deepEqual(afterStudentDeletion.files, beforeStudentDeletion.files.filter(file => !targetPdfIds.includes(file.id)), 'Se borran todos los originales vinculados de IndexedDB.');
+    assert.deepEqual(await snapshot('demo'), demoBeforeDeletion, 'Eliminar un estudiante real conserva la demostración.');
+    await navigate('Panel principal');
+    const studentsMetric = page.locator('.stat-card').filter({ hasText: 'Estudiantes registrados' }).locator('.stat-value');
+    await poll(async () => await studentsMetric.innerText() === '02', 'panel actualizado tras eliminar una ficha');
+
+    await setClosed(false);
+    await navigate('Importar libretas');
+    await upload([fixtures[0]]);
+    const afterExplicitReimport = await snapshot();
+    const reimportedAfterExplicitDelete = afterExplicitReimport.state.pdfs.find(pdf => pdf.hash === original.hash);
+    assert.equal(reimportedAfterExplicitDelete.status, 'review', 'El archivo eliminado se puede volver a importar sin una huella duplicada residual.');
+    assert.notEqual((await student(pupils[0].code)).id, target.id);
+    assertBlankManual(await student(pupils[0].code));
+    await confirm(path.basename(fixtures[0]));
+    await saved();
+
+    // Leaving a dirty detail triggers a real autosave. Cleanup waits for that
+    // operation before displaying counts or accepting destructive confirmation.
+    await holdStudentRequest('save', (await student(pupils[0].code)).id);
+    await tab('Desempeño').click();
+    await page.getByLabel('Días lectivos del periodo').fill('202');
+    await navigate('Panel principal');
+    await page.getByRole('button', { name: 'Eliminar todos los datos de evaluación', exact: true }).click();
+    await poll(() => page.evaluate(() => window.__deleteRequestGate.held), 'autoguardado pendiente antes de limpiar la evaluación');
+    assert.equal(await page.getByRole('dialog').count(), 0, 'La limpieza espera el autoguardado de la ficha que acaba de cerrarse.');
+    await releaseStudentRequest();
+    const evaluationDeleteDialog = page.getByRole('dialog', { name: 'Eliminar todos los datos de evaluación', exact: true });
+    await evaluationDeleteDialog.waitFor();
+    const beforeEvaluationCancel = await snapshot();
+    assert.equal((await student(pupils[0].code)).attendance.required, 202, 'El autoguardado pendiente termina antes de preparar la limpieza.');
+    assert.match(await evaluationDeleteDialog.innerText(), new RegExp(`${beforeEvaluationCancel.state.students.length} estudiantes · ${beforeEvaluationCancel.state.pdfs.length} PDF`));
+    assert.match(await evaluationDeleteDialog.innerText(), /Datos reales/);
+    const confirmClear = evaluationDeleteDialog.getByRole('button', { name: 'Eliminar todos los datos de evaluación', exact: true });
+    assert(await confirmClear.isDisabled(), 'La limpieza exige escribir la frase de confirmación.');
+    await evaluationDeleteDialog.getByLabel('Escribe ELIMINAR TODO para confirmar', { exact: true }).fill('ELIMINAR');
+    assert(await confirmClear.isDisabled(), 'Una frase incompleta no permite eliminar.');
+    assert.deepEqual(await snapshot(), beforeEvaluationCancel, 'Una confirmación incorrecta no cambia registros ni originales.');
+    await evaluationDeleteDialog.getByLabel('Escribe ELIMINAR TODO para confirmar', { exact: true }).fill('ELIMINAR TODO');
+    assert(await confirmClear.isEnabled());
+    await evaluationDeleteDialog.getByRole('button', { name: 'Cancelar', exact: true }).last().click();
+    await evaluationDeleteDialog.waitFor({ state: 'hidden' });
+    assert.deepEqual(await snapshot(), beforeEvaluationCancel, 'Cancelar la limpieza conserva todos los registros y originales.');
+
+    await setClosed(true);
+    // A deliberately unreferenced original in the temporary profile verifies
+    // that cleanup clears the whole selected file-key range, not just PDF IDs.
+    const orphanBlobId = 'acceptance-unreferenced-original';
+    await page.evaluate(id => new Promise((resolve, reject) => {
+      const open = indexedDB.open('circulos-2027-web', 1);
+      open.onerror = () => reject(open.error);
+      open.onsuccess = () => {
+        const db = open.result;
+        const transaction = db.transaction('files', 'readwrite');
+        transaction.objectStore('files').put(new Blob(['%PDF-1.4\nOrphan acceptance original\n%%EOF'], { type: 'application/pdf' }), `real:${id}`);
+        transaction.oncomplete = () => { db.close(); resolve(); };
+        transaction.onerror = () => { db.close(); reject(transaction.error); };
+      };
+    }), orphanBlobId);
+    const beforeEvaluationDeletion = await snapshot();
+    assert(beforeEvaluationDeletion.state.pdfs.some(pdf => !pdf.studentId), 'La limpieza incluye un PDF sin estudiante vinculado.');
+    assert(beforeEvaluationDeletion.files.some(file => beforeEvaluationDeletion.state.pdfs.some(pdf => pdf.id === file.id && !pdf.studentId)), 'El documento sin vínculo conserva su original antes de limpiar.');
+    assert(beforeEvaluationDeletion.files.some(file => file.id === orphanBlobId) && !beforeEvaluationDeletion.state.pdfs.some(pdf => pdf.id === orphanBlobId), 'El perfil temporal incluye un blob huérfano sin metadatos PDF.');
+    await navigate('Panel principal');
+    assert(await page.getByRole('button', { name: 'Eliminar todos los datos de evaluación', exact: true }).isEnabled(), 'El panel permite limpiar una evaluación cerrada.');
+    await deletionScreenshot(page.locator('.cleanup-card'), 'delete-evaluation-card');
+    await page.getByRole('button', { name: 'Eliminar todos los datos de evaluación', exact: true }).click();
+    await evaluationDeleteDialog.waitFor();
+    assert.equal(await evaluationDeleteDialog.getByLabel('Escribe ELIMINAR TODO para confirmar', { exact: true }).inputValue(), '', 'Cada apertura requiere una confirmación nueva.');
+    await deletionScreenshot(evaluationDeleteDialog, 'delete-evaluation-confirmation');
+    await evaluationDeleteDialog.getByLabel('Escribe ELIMINAR TODO para confirmar', { exact: true }).fill('ELIMINAR TODO');
+    await confirmClear.click();
+    await evaluationDeleteDialog.waitFor({ state: 'hidden' });
+    await poll(async () => !(await snapshot()).state.students.length && !(await snapshot()).state.pdfs.length, 'limpieza completa de los datos reales');
+    const emptySnapshot = await snapshot();
+    assert.deepEqual(emptySnapshot.files, [], 'La limpieza elimina también los blobs de PDF sin vincular.');
+    assert.deepEqual(emptySnapshot.state.settings, { ...beforeEvaluationDeletion.state.settings, closed: false }, 'La limpieza conserva todos los parámetros y abre el proceso nuevo.');
+    assert.deepEqual(await snapshot('demo'), demoBeforeDeletion, 'La limpieza total de datos reales conserva íntegro el espacio de demostración.');
+    const emptyBackup = await backup();
+    assert.deepEqual(emptyBackup.state, emptySnapshot.state);
+    assert.deepEqual(emptyBackup.files, [], 'El respaldo posterior a la limpieza no contiene originales ni huellas eliminadas.');
+    await assertEmptyDashboard();
+    await pause(700);
+    assert.deepEqual(await snapshot(), emptySnapshot, 'No reaparecen datos por autoguardados o escaneos pendientes.');
+    await page.screenshot({ path: '/tmp/circulos-cleanup-empty.png', fullPage: true });
 
     // Keep every download in the first launch: managed Chromium can SIGTRAP on
     // a download after reopening its persistent profile. Restart is read-only.
@@ -868,20 +1073,15 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     await context.close();
     await launch();
     await load();
-    assert.deepEqual((await snapshot()).state, finalBackup.state, 'El estado persiste tras reiniciar Chromium.');
-    await openStudent(pupils[0].code, pupils[0].name);
-    await tab('Académico').click();
-    assert.deepEqual((await page.locator('.grade-select').allTextContents()).slice(0, 3), ['C', 'B', 'A']);
-    await tab('Compromiso').click();
-    assert.equal(await page.locator('.commitment-card').count(), 0, 'No reaparecen evaluaciones eliminadas tras reiniciar.');
-    await review(path.basename(fixtures[0]));
-    assert((await page.locator('.import-original iframe').getAttribute('src')).startsWith('blob:'), 'El original reimportado persiste.');
+    assert.deepEqual(await snapshot(), emptySnapshot, 'La limpieza y los parámetros conservados persisten tras reiniciar Chromium.');
+    assert.deepEqual(await snapshot('demo'), demoBeforeDeletion, 'El espacio de demostración permanece intacto después del reinicio.');
+    await assertEmptyDashboard();
     assert.deepEqual(operationHttpRequests, [], 'Ninguna operación después de cargar el HTML requiere HTTP.');
     assert.deepEqual(requests.filter(request => /^https?:/.test(request.url) && /\/api(?:\/|\?)/.test(new URL(request.url).pathname)), [], 'No se usa una API HTTP.');
     assert.deepEqual(requests.filter(request => /^https?:/.test(request.url) && new URL(request.url).origin !== new URL(appUrl).origin), [], 'No se descargan recursos externos.');
     assert.deepEqual(errors, [], 'Sin excepciones JavaScript.');
     const report = { passed: true, classrooms: ['2.º F', '3.º F', '4.º F'], rejectedClassroom: '5.º F', bimesters: ['I', 'II', 'III'], provisionalImport: true, automaticIdentityWithoutColons: true, editableFullNameConfirmDeleteReview: true, filenameIdentityBeforeConfirmation: true, filenameWithoutCodeOrYear: true, manualNameFallback: true, missingGradesRemainPending: true, existingPdfFilenameRecoveryWithoutOcr: true, recoveryPreservesManualRecords: true, mixedRasterHeaderNativeGrades: true, reportGate: true, automaticAcademicOnly: true, progression: { firstTwo: 1.5, third: 3, score: 93.75, academic: 58.75 }, compactFourBimesterPdf: true, automatic45NotesPreview: true, all10Courses78Notes: true, supplementalCoursesSurviveRescan: true, incompleteReportAutomaticRescanOnce: true, readOnlyAcademicNotes: true, activeOriginalRescanPreservesManualRecords: true, contestOnlyEventTypes: true, threeRequiredContestFields: true, contestScores: { local: 40, regional: 70, national: 100 }, bestCompletedContest: true, scores: { a: 58.75, b: 95.5, c: 100, total: (58.75 + 95.5 + 100) / 3 }, replacementAndDuplicateCascade: true, exactFileReimport: true, indexedDBPersistenceAfterRestart: true, standaloneInlineHtml: true, offlineOperations: true, httpRequestsAfterLoad: operationHttpRequests, downloads, pageErrors: errors, consoleErrors };
-    Object.assign(report, { blankCoursesExcludedFromPreviewAndScores: true, ivOnlyCoursesRemainInactive: true, blankRawGradesPreserved: true, blankCoursesDoNotTriggerRescan: true, manualAcademicValidationWithoutGradeEntry: true, partiallyReadCourseRemainsPending: true, threeRequiredIncidentFields: true, unapprovedDiscountRemainsPending: true, threeRequiredFamilyFields: true, optionalFamilyEvidence: true, familyScore: 100 });
+    Object.assign(report, { blankCoursesExcludedFromPreviewAndScores: true, ivOnlyCoursesRemainInactive: true, blankRawGradesPreserved: true, blankCoursesDoNotTriggerRescan: true, manualAcademicValidationWithoutGradeEntry: true, partiallyReadCourseRemainsPending: true, threeRequiredIncidentFields: true, unapprovedDiscountRemainsPending: true, threeRequiredFamilyFields: true, optionalFamilyEvidence: true, familyScore: 100, explicitStudentDeletion: true, studentDeletionWhileClosed: true, deletionCancellationPreservesData: true, deletionWaitsForRescanAndAutosave: true, explicitDeletionCascadesVersionsDuplicatesAndBlobs: true, reimportAfterExplicitStudentDeletion: true, totalCleanupRequiresTypedConfirmation: true, totalCleanupWhileClosed: true, totalCleanupRemovesOrphanPdfBlobs: true, totalCleanupPreservesParameters: true, realCleanupPreservesDemo: true, emptyCleanupBackup: true, emptyCleanupDashboardAndRestart: true });
     await fs.writeFile('/tmp/circulos-adjustment-result.json', JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
   } catch (error) {

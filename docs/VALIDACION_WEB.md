@@ -1,5 +1,15 @@
 # Validación de la edición web
 
+## Eliminación individual y total
+
+La entrega incorpora **Eliminar estudiante** al final de la ficha y **Eliminar todos los datos de evaluación** en el panel principal. Funcionan con la evaluación abierta o cerrada, con confirmación explícita y respaldo opcional. La limpieza total exige `ELIMINAR TODO`, conserva los parámetros y abre el siguiente proceso; afecta únicamente al espacio seleccionado.
+
+Validación: `npm test` aprobó **160 pruebas** y `npm run build:web` pasó. La aceptación completa `npm run test:web` terminó correctamente sobre el HTML de **10 326 133 bytes**, SHA-256 `9211a4ca1a73f385f5b1cf000a6233c18dbeb599b745cf9079fb1905264bcedc`.
+
+Se verificó la espera de autoguardados y escaneos, cancelación sin cambios, respaldo opcional, eliminación individual con original/versiones/duplicado, conservación íntegra de otras fichas y reimportación del mismo PDF. La limpieza de una evaluación cerrada eliminó todos los registros y archivos reales, incluido un Blob huérfano sin metadatos, conservó todos los parámetros salvo `closed=false` y dejó el espacio de demostración idéntico. El panel y el respaldo quedaron vacíos, sin que reaparecieran datos tras reiniciar Chromium. La API añadió comprobaciones de estudiantes sin PDF, propietarios distintos con el mismo hash, confirmaciones desactualizadas y reversión transaccional ante fallos de persistencia.
+
+Se completaron siete descargas en la primera sesión, sin errores de página/consola ni solicitudes HTTP durante las operaciones. Se inspeccionaron los dos controles y sus diálogos en escritorio y a 390 px. Todas las eliminaciones de prueba utilizaron directorios o perfiles temporales; no se limpiaron datos del usuario.
+
 ## Áreas aplicables y validación mínima
 
 La versión vigente oculta e ignora las asignaturas sin ninguna nota AD/A/B/C de I–III. Las notas de IV por sí solas no hacen que un área sea cursada. Las asignaturas parcialmente registradas conservan sus pendientes. Los cursos y grupos no cursados se excluyen de promedios, progreso, escaneo automático y validaciones, sin borrar las filas originales.

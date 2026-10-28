@@ -6,10 +6,11 @@ import path from 'node:path';
 import type { Server } from 'node:http';
 import ExcelJS from 'exceljs';
 import { createApp } from '../server/index.js';
+import { createHash, randomUUID } from 'node:crypto';
 import type { AppState, Student } from '../shared/types.js';
 import { createStudent, defaultSettings } from '../shared/defaults.js';
 import { SUPPLEMENTAL_REPORT_AREAS } from '../shared/report-catalog.js';
-import { applyRescannedGrades } from '../shared/report-workflow.js';
+import { applyRescannedGrades, deleteStudentAndReports } from '../shared/report-workflow.js';
 import type { ExtractedReport } from '../shared/pdf-parser.js';
 import { calculateStudent } from '../shared/calculations.js';
 import { hasActiveGrades } from '../shared/academic-policy.js';
@@ -564,5 +565,94 @@ test('Excel exporta solo F admitidos, tres periodos y los campos manuales del co
     assert.equal((await h.request(`/api/pdfs/${pdf.id}`,'DELETE')).status,423);
     assert.equal((await h.request('/api/settings','PUT',{...settings,closed:false})).status,423);
     assert.equal((await h.request('/api/settings','PUT',{...settings,closed:false,confirmReopen:true})).status,200);
+  }finally{await h.close();}
+});
+
+
+test('Eliminar un expediente sin PDF exige su nombre exacto y funciona con la evaluación abierta o cerrada',async()=>{
+  for(const closed of [false,true]){
+    const h=await harness();try{
+      const state=await readState(h),student=createStudent({code:'EMPTY-DELETE',name:'Estudiante Sin Libreta',grade:'3.º de secundaria',section:'F'},state.settings);
+      state.students.push(student);state.settings.closed=closed;state.settings.criteriaApproved=closed;h.app.locals.store.save('real',state);
+      const settings=structuredClone(state.settings),route=`/api/students/${student.id}?dataset=real`;
+      for(const body of [undefined,{}, {confirmation:true}, {confirmation:'Otro estudiante'}, {confirmation:student.name.toLowerCase()}])assert.equal((await h.request(route,'DELETE',body)).status,400);
+      assert.equal((await readState(h)).students.length,1);
+      if(closed)assert.equal((await h.request(route,'DELETE',{confirmation:student.name})).status,423);
+      assert.equal((await h.request(route,'DELETE',{confirmation:student.name,allowClosed:true,expectedUpdatedAt:'anterior'})).status,409);
+      const response=await h.request(route,'DELETE',{confirmation:student.name,allowClosed:true,expectedUpdatedAt:student.updatedAt});
+      assert.equal(response.status,200,await response.clone().text());
+      assert.deepEqual(await response.json(),{deleted:true,studentId:student.id,deletedPdfIds:[],students:1,pdfs:0});
+      const after=await readState(h);assert.deepEqual(after.students,[]);assert.deepEqual(after.pdfs,[]);assert.deepEqual(after.settings,settings);
+    }finally{await h.close();}
+  }
+});
+
+test('Eliminar desde la ficha borra versiones y copias propias, conserva otros propietarios del mismo hash y permite reimportar',async()=>{
+  const h=await harness();try{
+    const bytes=reportPdf('FILE-DELETE','Estudiante A Eliminar'),original=await upload(h,bytes,'original.pdf');await confirm(h,original.id);
+    const copy=await upload(h,bytes,'copia.pdf');
+    const version=await upload(h,reportPdf('FILE-DELETE','Estudiante A Eliminar','matematica'),'nueva-version.pdf');
+    const other=await upload(h,reportPdf('FILE-KEEP','Estudiante Conservado'),'conservado.pdf');await confirm(h,other.id);
+    const store=h.app.locals.store,state=await readState(h),student=state.students.find(value=>value.id===original.studentId)!,remaining=state.students.find(value=>value.id===other.studentId)!;
+    const unownedCopy=state.pdfs.find(value=>value.id===copy.id)!;unownedCopy.studentId=null;student.pdfIds=student.pdfIds.filter(id=>id!==copy.id);
+    const foreignCopy={...structuredClone(original),id:randomUUID(),studentId:remaining.id,status:'duplicate' as const};
+    state.pdfs.push(foreignCopy);remaining.pdfIds.push(foreignCopy.id);
+    const unrelated={...structuredClone(original),id:randomUUID(),studentId:null,status:'failed' as const,hash:'a'.repeat(64),name:'fallido-que-menciona-el-codigo.pdf',text:student.code};
+    state.pdfs.push(unrelated);
+    store.transaction(()=>{store.putFile('real',foreignCopy.id,bytes);store.putFile('real',unrelated.id,bytes);store.save('real',state);});
+    // Even malformed historical links cannot select a document explicitly owned by somebody else.
+    const malformed=structuredClone(state);malformed.students.find(value=>value.id===student.id)!.pdfIds.push(other.id,foreignCopy.id);
+    const preview=deleteStudentAndReports(malformed,student.id);
+    assert.deepEqual(new Set(preview.deletedPdfIds),new Set([original.id,copy.id,version.id]));
+    assert(malformed.students.some(value=>value.id===remaining.id));assert(malformed.pdfs.some(value=>value.id===foreignCopy.id));
+    const response=await h.request(`/api/students/${student.id}?dataset=real`,'DELETE',{confirmation:student.name,expectedUpdatedAt:student.updatedAt});
+    assert.equal(response.status,200,await response.clone().text());
+    const deletion=await response.json();assert.equal(deletion.students,1);assert.equal(deletion.pdfs,3);assert.deepEqual(new Set(deletion.deletedPdfIds),new Set([original.id,copy.id,version.id]));
+    const after=await readState(h);assert.deepEqual(after.students,[remaining]);assert.deepEqual(new Set(after.pdfs.map(value=>value.id)),new Set([other.id,foreignCopy.id,unrelated.id]));
+    for(const id of deletion.deletedPdfIds)assert.equal(store.file('real',id),null);
+    assert.equal(store.files('real').length,3);assert.deepEqual(store.file('real',foreignCopy.id),bytes);
+    const reimported=await upload(h,bytes,'reimportado.pdf');assert.equal(reimported.status,'review');assert(reimported.studentId);assert.notEqual(reimported.studentId,student.id);
+  }finally{await h.close();}
+});
+
+test('Vaciar la evaluación limpia todos los registros y originales huérfanos solo de la base seleccionada, preserva parámetros y es idempotente',async()=>{
+  for(const dataset of ['real','demo'] as const)for(const closed of [false,true]){
+    const h=await harness();try{
+      const store=h.app.locals.store,otherDataset=dataset==='real'?'demo':'real',bytes=Buffer.from('original conservado');
+      const state:AppState=store.read(dataset),legacy=createStudent({code:'LEGACY-CLEAR',name:'Estudiante de aula antigua',grade:'5.º de secundaria',section:'A'},state.settings);
+      state.students.push(legacy);
+      state.settings={...state.settings,closed,year:2031,version:'Parámetros conservados',criteriaApproved:true,naPolicy:'other_component',naPolicyApproved:true,academicWeights:{general:0.5,specialized:0.3,progress:0.2},performanceWeights:{attendance:0.6,discipline:0.4},scienceWeight:0.35,familyTypes:['Reunión personalizada'],cohortRecords:[{id:'keep-catalog',kind:'family',name:'Criterio institucional conservado',date:'2031-06-01',grade:'',section:'F',required:true}],disciplineTypes:state.settings.disciplineTypes.map((type,index)=>({...type,discount:index+1})),areas:[...state.settings.areas,{id:'keep-area',name:'Área configurada',group:'other',eligible:true,competencies:['Competencia configurada']}]};
+      const pdfBase:AppState['pdfs'][number]={id:randomUUID(),name:'original-antiguo.pdf',hash:createHash('sha256').update(bytes).digest('hex'),size:bytes.length,uploadedAt:new Date().toISOString(),status:'failed',studentId:null,extractedCode:'LEGACY-CLEAR',extractedName:'',extractedGrade:'5.º de secundaria',extractedSection:'A',period:'',text:'',ocr:false,warnings:[],areas:[]};
+      const records=[pdfBase,{...structuredClone(pdfBase),id:randomUUID(),status:'duplicate' as const},{...structuredClone(pdfBase),id:randomUUID(),status:'review' as const},{...structuredClone(pdfBase),id:randomUUID(),status:'replaced' as const,replacesId:pdfBase.id}];
+      state.pdfs.push(...records);
+      const orphanId=randomUUID(),otherOrphanId=randomUUID();
+      store.transaction(()=>{for(const record of records)store.putFile(dataset,record.id,bytes);store.putFile(dataset,orphanId,bytes);store.save(dataset,state);store.putFile(otherDataset,otherOrphanId,bytes);});
+      const before=store.read(dataset),otherBefore={state:store.read(otherDataset),files:store.files(otherDataset)},route=`/api/evaluation?dataset=${dataset}`,expectedCounts={students:before.students.length,pdfs:before.pdfs.length};
+      assert.equal((await h.request('/api/evaluation','DELETE',{confirmation:'ELIMINAR TODO',allowClosed:true})).status,400);
+      for(const confirmation of [undefined,true,'eliminar todo',' ELIMINAR TODO','OTRA BASE'])assert.equal((await h.request(route,'DELETE',{confirmation,allowClosed:true})).status,400);
+      assert.equal((await h.request(route,'DELETE',{confirmation:'ELIMINAR TODO',allowClosed:true,expectedCounts:{...expectedCounts,pdfs:expectedCounts.pdfs+1}})).status,409);
+      assert.equal((await h.request(route,'DELETE',{confirmation:'ELIMINAR TODO',allowClosed:true,expectedCounts:{students:-1,pdfs:0}})).status,400);
+      if(closed)assert.equal((await h.request(route,'DELETE',{confirmation:'ELIMINAR TODO'})).status,423);
+      assert.deepEqual(store.read(dataset),before);assert.equal(store.files(dataset).length,5);
+      const response=await h.request(route,'DELETE',{confirmation:'ELIMINAR TODO',allowClosed:true,expectedCounts});
+      assert.equal(response.status,200,await response.clone().text());assert.deepEqual(await response.json(),{deleted:true,...expectedCounts,files:5});
+      assert.deepEqual(store.read(dataset),{students:[],pdfs:[],settings:{...before.settings,closed:false}});assert.deepEqual(store.files(dataset),[]);assert.equal(store.file(dataset,orphanId),null);
+      assert.deepEqual({state:store.read(otherDataset),files:store.files(otherDataset)},otherBefore);
+      const repeated=await h.request(route,'DELETE',{confirmation:'ELIMINAR TODO',expectedCounts:{students:0,pdfs:0}});assert.equal(repeated.status,200);assert.deepEqual(await repeated.json(),{deleted:true,students:0,pdfs:0,files:0});
+    }finally{await h.close();}
+  }
+});
+
+test('La eliminación de expediente y la limpieza total revierten también los archivos si falla el guardado',async()=>{
+  const h=await harness();try{
+    const original=await upload(h,reportPdf('ROLLBACK-DELETE','Estudiante Conservado Ante Fallo'));
+    const store=h.app.locals.store,student=(await readState(h)).students[0],orphanId=randomUUID();store.putFile('real',orphanId,Buffer.from('huérfano'));
+    const before={state:store.read('real'),files:store.files('real')},save=store.save;
+    for(const [route,body] of [[`/api/students/${student.id}?dataset=real`,{confirmation:student.name}],['/api/evaluation?dataset=real',{confirmation:'ELIMINAR TODO'}]] as const){
+      store.save=()=>{throw new Error('Fallo de persistencia simulado al eliminar');};
+      try{assert.equal((await h.request(route,'DELETE',body)).status,500);}finally{store.save=save;}
+      assert.deepEqual({state:store.read('real'),files:store.files('real')},before);
+      assert.equal((await h.request(`/api/pdfs/${original.id}/file`)).status,200);assert(store.file('real',orphanId));
+    }
   }finally{await h.close();}
 });
