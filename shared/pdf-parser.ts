@@ -1,7 +1,7 @@
-import type { AcademicArea, Grade, Settings, SupplementalArea } from './types.js';
+import type { AcademicArea, Grade, Settings, Student, SupplementalArea } from './types.js';
 import { ACTIVE_BIMESTERS, normalizeCohort } from './policy.js';
 import { SUPPLEMENTAL_REPORT_AREAS } from './report-catalog.js';
-import { hasActiveGrades } from './academic-policy.js';
+import { hasActiveGrades, omittedCompetencyIndexes } from './academic-policy.js';
 
 export interface ExtractedReport {
   extractedCode: string;
@@ -156,12 +156,12 @@ function readIdentity(source: string): { extractedCode: string; extractedName: s
 }
 
 /** Summary warnings can be regenerated after independent native/OCR readings are merged. */
-export function reportWarnings(report: Pick<ExtractedReport, 'extractedCode' | 'extractedName' | 'extractedGrade' | 'extractedSection' | 'period' | 'areas' | 'supplementalAreas'>, settings: Settings): string[] {
+export function reportWarnings(report: Pick<ExtractedReport, 'extractedCode' | 'extractedName' | 'extractedGrade' | 'extractedSection' | 'period' | 'areas' | 'supplementalAreas'>, settings: Settings, cohort?: Pick<Student, 'grade' | 'section'>): string[] {
   const warnings: string[] = [];
   if (!report.extractedCode) warnings.push('Código de estudiante no reconocido automáticamente; se necesita una lectura legible del PDF original.');
   if (!report.extractedName) warnings.push('Apellidos y nombres completos no reconocidos automáticamente; se necesita una lectura legible del PDF original.');
   if (!report.extractedGrade || !report.extractedSection) warnings.push('Grado o sección no reconocidos automáticamente; se necesita una lectura legible del PDF original.');
-  else if (!normalizeCohort(report.extractedGrade, report.extractedSection)) warnings.push('El aula reconocida no corresponde a 2.º F, 3.º F o 4.º F. Revise el PDF original antes de confirmar.');
+  else if (!normalizeCohort(report.extractedGrade, report.extractedSection)) warnings.push('El aula reconocida no corresponde a 2.º F, 3.º F, 4.º F o 5.º F. Revise el PDF original antes de confirmar.');
   if (!report.period) warnings.push('Año de la libreta no reconocido; confirme que corresponde al periodo de evaluación.');
   else if (Number(report.period) !== settings.year - 1) warnings.push(`La libreta indica ${report.period}; se esperaba ${settings.year - 1}. Revise el periodo.`);
   const courses = [
@@ -171,9 +171,13 @@ export function reportWarnings(report: Pick<ExtractedReport, 'extractedCode' | '
     }),
     ...(report.supplementalAreas || []).filter(hasActiveGrades),
   ];
-  const expected = courses.reduce((sum, area) => sum + area.definition.competencies.length * ACTIVE_BIMESTERS.length, 0);
-  const recognized = courses.reduce((sum, area) => sum + area.grades.reduce((total, row) =>
-    total + ACTIVE_BIMESTERS.filter((_, index) => ['AD', 'A', 'B', 'C'].includes(row[index] || '')).length, 0), 0);
+  const classroom = { grade: cohort?.grade || report.extractedGrade, section: cohort?.section || report.extractedSection };
+  const expected = courses.reduce((sum, area) => sum + (area.definition.competencies.length - omittedCompetencyIndexes(area.definition, area, classroom).length) * ACTIVE_BIMESTERS.length, 0);
+  const recognized = courses.reduce((sum, area) => {
+    const omitted = new Set(omittedCompetencyIndexes(area.definition, area, classroom));
+    return sum + area.grades.reduce((total, row, competency) => total + (omitted.has(competency) ? 0 :
+      ACTIVE_BIMESTERS.filter((_, index) => ['AD', 'A', 'B', 'C'].includes(row[index] || '')).length), 0);
+  }, 0);
   if (!courses.length) warnings.push('No se reconocieron notas en ningún curso de los bimestres I–III. Reintente el escaneo con una copia legible del PDF.');
   else if (recognized < expected) warnings.push(`Se reconocieron ${recognized} de ${expected} casillas del catálogo. Reintente el escaneo con una copia legible del PDF.`);
   return warnings;
@@ -261,7 +265,7 @@ function readPrintedRow(line: string): PrintedRow | undefined {
 }
 
 /** Parse only identifiable rows; uncertain cells remain empty until a person reviews the source. */
-export function parseReportText(text: string, settings: Settings): ExtractedReport {
+export function parseReportText(text: string, settings: Settings, cohort?: Pick<Student, 'grade' | 'section'>): ExtractedReport {
   const lines = text.replace(/\r/g, '').split('\n').filter(line => line.trim());
   const warnings: string[] = [REPORT_REVIEW_WARNING];
   const identity = readIdentity(text);
@@ -415,7 +419,7 @@ export function parseReportText(text: string, settings: Settings): ExtractedRepo
   if (pendingCells) consume(pendingCells);
   const configuredAreas = areas.slice(0, settings.areas.length);
   const supplementalAreas = areas.flatMap((area, index) => index >= settings.areas.length && detectedAreas.has(index) ? [{ definition: structuredClone(definitions[index]), grades: area.grades }] : []);
-  warnings.push(...reportWarnings({ ...identity, areas: configuredAreas, supplementalAreas }, settings));
+  warnings.push(...reportWarnings({ ...identity, areas: configuredAreas, supplementalAreas }, settings, cohort));
   if (ambiguous) warnings.push(`${ambiguous} fila(s) con notas no pudieron vincularse con seguridad a una competencia del catálogo.`);
   return { ...identity, text, ocr: false, warnings, areas: configuredAreas, ...(supplementalAreas.length ? { supplementalAreas } : {}) };
 }

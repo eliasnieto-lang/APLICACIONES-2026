@@ -7,6 +7,7 @@ import { ACTIVE_BIMESTERS, ALLOWED_COHORTS, cohortKey, isReportApproved, normali
 import { migrateState } from '../shared/migrations';
 import { activeAreas, hasActiveGrades, isAreaComplete } from '../shared/academic-policy';
 import { commitmentRequiredFields, incidentRequiredFields } from '../shared/record-validation';
+import { semanticStudentErrors } from '../server/validation';
 
 const approved = (): Settings => {
   const settings = structuredClone(defaultSettings);
@@ -139,6 +140,59 @@ test('Un curso parcialmente cargado sigue exigiendo todas sus competencias I–I
   assert.equal(result.eligible, false);
   math.grades[0][2] = 'A';
   assert.equal(isAreaComplete(settings.areas[0], math), true);
+});
+test('4.º F y 5.º F promedian solo las dos competencias cursadas de Ciencia y exigen su revisión manual', () => {
+  for (const grade of ['4', '5']) {
+    const settings = approved(), student = complete(settings);
+    student.grade = grade;
+    const science = student.academic.find(area => area.areaId === 'ciencia')!;
+    science.grades[0] = ['', '', '', 'AD'];
+    science.validated = false; student.validated.academic = false;
+    const original = structuredClone(student);
+    const provisional = calculateStudent(student, settings);
+    for (const field of ['g', 'r', 'p', 'a'] as const) assert.equal(provisional[field], 75, `${grade}: ${field}`);
+    assert.equal(provisional.areaAverages.ciencia, 3);
+    assert.equal(provisional.academicComplete, true);
+    assert.equal(provisional.pa, 100 * 36 / 42);
+    assert.equal(provisional.eligible, false);
+    assert.ok(provisional.pending.includes('Validar área: Ciencia y Tecnología.'));
+    assert.ok(provisional.pending.every(message => !message.includes('notas del')));
+    assert.deepEqual(student, original);
+    science.validated = true; student.validated.academic = true;
+    const validated = calculateStudent(student, settings);
+    assert.equal(validated.pa, 100);
+    assert.equal(validated.eligible, true);
+    assert.deepEqual(semanticStudentErrors(student, settings), []);
+    assert.deepEqual(science.grades[0], ['', '', '', 'AD']);
+  }
+});
+test('La excepción de Indaga conserva la ponderación y progresión calculadas desde las otras competencias', () => {
+  const settings = approved(), student = complete(settings); student.grade = '4';
+  const science = student.academic.find(area => area.areaId === 'ciencia')!;
+  science.grades = [['', '', ''], ['B', 'A', 'AD'], ['A', 'AD', 'AD']];
+  const result = calculateStudent(student, settings);
+  assert.equal(result.areaAverages.ciencia, 10 / 3);
+  assert.ok(Math.abs(result.g! - 230 / 3) < 1e-12);
+  assert.ok(Math.abs(result.r! - 77.5) < 1e-12);
+  assert.equal(result.s1, 3);
+  assert.equal(result.s2, 3.2);
+  assert.equal(result.p, 82.5);
+  assert.ok(Math.abs(result.a! - 469 / 6) < 1e-12);
+});
+test('Una Indaga parcial u otra competencia incompleta sigue pendiente y no se puede validar', () => {
+  for (const grade of ['2', '3', '4', '5']) {
+    const settings = approved(), student = complete(settings); student.grade = grade;
+    const science = student.academic.find(area => area.areaId === 'ciencia')!;
+    science.grades[0] = grade === '2' || grade === '3' ? ['', '', ''] : ['', 'A', ''];
+    assert.equal(calculateStudent(student, settings).a, null);
+    assert.equal(calculateStudent(student, settings).eligible, false);
+    assert.ok(semanticStudentErrors(student, settings).some(error => error.includes('calificaciones vacías')));
+  }
+  const settings = approved(), student = complete(settings); student.grade = '4';
+  const science = student.academic.find(area => area.areaId === 'ciencia')!;
+  science.grades[0] = ['', '', '']; science.grades[1][2] = '';
+  assert.equal(calculateStudent(student, settings).a, null);
+  assert.ok(semanticStudentErrors(student, settings).some(error => error.includes('calificaciones vacías')));
 });
 test('R usa el grupo cursado completo cuando Ciencias o Letras carece de notas', () => {
   for (const scienceOnly of [true, false]) {
@@ -515,13 +569,13 @@ test('Nombre, fecha real y estado siguen siendo obligatorios en compromisos fami
   }
 });
 
-test('Solo se normalizan los grados completos de 2.º F, 3.º F y 4.º F de secundaria', () => {
+test('Solo se normalizan los grados completos habilitados de secundaria F', () => {
   assert.deepEqual(ACTIVE_BIMESTERS, ['I', 'II', 'III']);
   for (const [grade, canonical] of [
     ['2', '2.º de secundaria'], [' 2.° de Secundaria ', '2.º de secundaria'], ['segundo grado de secundaria', '2.º de secundaria'],
-    ['3ro secundaria', '3.º de secundaria'], ['TERCERO', '3.º de secundaria'], ['tercer grado de educación secundaria', '3.º de secundaria'], ['3.er de secundaria', '3.º de secundaria'], ['4to grado', '4.º de secundaria'], ['cuarto de secundaria', '4.º de secundaria'],
+    ['3ro secundaria', '3.º de secundaria'], ['TERCERO', '3.º de secundaria'], ['tercer grado de educación secundaria', '3.º de secundaria'], ['3.er de secundaria', '3.º de secundaria'], ['4to grado', '4.º de secundaria'], ['cuarto de secundaria', '4.º de secundaria'], ['5to grado', '5.º de secundaria'], ['quinto de secundaria', '5.º de secundaria'],
   ]) assert.equal(normalizeCohort(grade, ' f ')?.grade, canonical);
-  for (const grade of ['12', '25', '23', '2do primaria', '2.º F', 'pre 3', '3.º de secundaria extra', '2to', '4ro', '3do', '1', '5']) assert.equal(normalizeCohort(grade, 'F'), null, grade);
+  for (const grade of ['12', '25', '23', '2do primaria', '2.º F', 'pre 3', '3.º de secundaria extra', '2to', '4ro', '3do', '1', '6']) assert.equal(normalizeCohort(grade, 'F'), null, grade);
   for (const section of ['A', 'FF', '2F', '']) assert.equal(normalizeCohort('3', section), null, section);
 });
 
@@ -572,7 +626,7 @@ test('Sin aprobación de PDF no se evalúan A/B/C ni se alteran los registros ma
 
 test('Una cohorte no admitida nunca participa del ranking aunque mantenga su expediente', () => {
   const settings = approved();
-  for (const [grade, section] of [['5', 'F'], ['3', 'A'], ['12', 'F']]) {
+  for (const [grade, section] of [['6', 'F'], ['3', 'A'], ['12', 'F']]) {
     const student = complete(settings);
     student.grade = grade; student.section = section;
     assert.equal(calculateStudent(student, settings).eligible, false);
@@ -634,7 +688,7 @@ test('La migración no inventa aprobación para documentos pendientes, ajenos, r
     state => { state.pdfs[0].extractedName = 'Otro estudiante'; },
     state => { state.pdfs[0].extractedGrade = '2'; },
     state => { state.pdfs[0].extractedSection = 'A'; },
-    state => { state.students[0].grade = '5'; state.pdfs[0].extractedGrade = '5'; },
+    state => { state.students[0].grade = '6'; state.pdfs[0].extractedGrade = '6'; },
     state => { state.pdfs = []; },
   ];
   for (const change of changes) {

@@ -1,5 +1,15 @@
 # Validación de la edición web
 
+## Indaga no cursada en 4.º F y 5.º F
+
+Se incorpora 5.º F junto con 2.º F, 3.º F y 4.º F. En 4.º F y 5.º F, Indaga completamente vacía en I–III queda excluida de promedios, progresión, pendientes y denominadores de avance. La fila original permanece vacía y visible; Ciencia y Tecnología requiere revisión manual y las demás competencias completas. Una sola nota de Indaga devuelve sus vacíos restantes al estado pendiente. Las otras aulas conservan las reglas anteriores.
+
+Validación: **171/171 pruebas** en `npm test`, construcción `npm run build:web` y aceptación completa `npm run test:web` aprobadas. HTML comprobado: **10 328 121 bytes**, SHA-256 `ea6c3873fcc5efc2ef4a63b3919b904216b2052056aec917883e69b1ac490a11`.
+
+Los PDF compactos de prueba de 4.º F y 5.º F conservaron Indaga vacía y las otras seis calificaciones A; el área promedió 3,00/4 y Académico 75,00. Confirmar el PDF dejó pendientes las marcas manuales del área y la confirmación final. Ambas pudieron confirmarse y persistieron después de recargar, sin OCR ni reescaneo automático por la fila no cursada. La imagen del área muestra dos competencias evaluadas y “No se evalúa en esta aula”. La API rechazó Indaga vacía en 2.º F/3.º F, Indaga parcial en 4.º F y otra nota faltante en 5.º F. También se verificaron las ponderaciones con notas mixtas, conservación de IV, normalización precisa de quinto y advertencias coherentes con la identidad del archivo.
+
+Se conservaron los escenarios anteriores de respaldo, restauración, eliminación, reimportación, concursos y reinicio. Hubo siete descargas, sin errores de página o consola ni solicitudes HTTP durante las operaciones. Todos los datos fueron ficticios en directorios o perfiles temporales.
+
 ## Eliminación individual y total
 
 La entrega incorpora **Eliminar estudiante** al final de la ficha y **Eliminar todos los datos de evaluación** en el panel principal. Funcionan con la evaluación abierta o cerrada, con confirmación explícita y respaldo opcional. La limpieza total exige `ELIMINAR TODO`, conserva los parámetros y abre el siguiente proceso; afecta únicamente al espacio seleccionado.

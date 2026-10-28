@@ -1,4 +1,4 @@
-import { ACTIVE_BIMESTERS } from './policy';
+import { ACTIVE_BIMESTERS, normalizeCohort } from './policy';
 import type { AcademicArea, AreaDefinition, Settings, Student } from './types';
 
 /** A course is taken only when the active I–III periods contain a grade. */
@@ -11,7 +11,22 @@ export function activeAreas(student: Pick<Student, 'academic'>, settings: Pick<S
   return settings.areas.filter(area => area.eligible && hasActiveGrades(student.academic.find(input => input.areaId === area.id)));
 }
 
-export function isAreaComplete(definition: AreaDefinition, input?: Pick<AcademicArea, 'grades'>): boolean {
-  return definition.competencies.length > 0 && definition.competencies.every((_, competency) =>
-    ACTIVE_BIMESTERS.every((__, bimester) => ['AD', 'A', 'B', 'C'].includes(input?.grades[competency]?.[bimester] ?? '')));
+/** Indaga is not taught in 4.º F/5.º F only when every active-period cell is blank. */
+export function omittedCompetencyIndexes(definition: AreaDefinition, input?: Pick<AcademicArea, 'grades'>, cohort?: Pick<Student, 'grade' | 'section'>): number[] {
+  const normalized = cohort && normalizeCohort(cohort.grade, cohort.section);
+  if (definition.group !== 'science' || !normalized || !['4.º de secundaria', '5.º de secundaria'].includes(normalized.grade)) return [];
+  return definition.competencies.flatMap((competency, index) => {
+    const label = competency.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const isIndaga = /^indaga mediante metodos cientificos(?:\s|$)/.test(label);
+    const blank = ACTIVE_BIMESTERS.every((_, period) => (input?.grades[index]?.[period] ?? '') === '');
+    return isIndaga && blank ? [index] : [];
+  });
+}
+
+/** Without a cohort context, automatic PDF validation always requires every note. */
+export function isAreaComplete(definition: AreaDefinition, input?: Pick<AcademicArea, 'grades'>, cohort?: Pick<Student, 'grade' | 'section'>): boolean {
+  const omitted = new Set(omittedCompetencyIndexes(definition, input, cohort));
+  const required = definition.competencies.map((_, index) => index).filter(index => !omitted.has(index));
+  return required.length > 0 && required.every(competency =>
+    ACTIVE_BIMESTERS.every((_, bimester) => ['AD', 'A', 'B', 'C'].includes(input?.grades[competency]?.[bimester] ?? '')));
 }

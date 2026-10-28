@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { Server } from 'node:http';
+import { createRequire } from 'node:module';
 import ExcelJS from 'exceljs';
 import { createApp } from '../server/index.js';
 import { createHash, randomUUID } from 'node:crypto';
@@ -14,6 +15,8 @@ import { applyRescannedGrades, deleteStudentAndReports } from '../shared/report-
 import type { ExtractedReport } from '../shared/pdf-parser.js';
 import { calculateStudent } from '../shared/calculations.js';
 import { hasActiveGrades } from '../shared/academic-policy.js';
+
+const { makeCompactPdf } = createRequire(import.meta.url)('./compact-report-fixture.cjs') as { makeCompactPdf: (settings: AppState['settings'], options: { code: string; name: string; grade: string; grades?: string[]; gradesByArea?: Record<string,string[][]> }) => Buffer };
 
 function reportPdf(code:string,name:string,omitArea='',grade='3',section='F',identityLayout:'inline'|'stacked'|'none'|'classroom'='inline',includeSupplemental=false) {
   const normalize=(text:string)=>text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[()\\]/g,'\\$&');
@@ -193,6 +196,44 @@ test('Los cursos totalmente vacíos se ignoran al confirmar, guardar la validaci
     const finalOnly={...student,validated:{...student.validated,academic:true}};
     assert.equal((await h.request(`/api/students/${student.id}`,'PUT',finalOnly)).status,400,'Un curso con notas parciales impide la validación final.');
     assert.equal((await h.request(`/api/students/${student.id}`,'PUT',{...student,academic:student.academic.map(area=>({...area,validated:hasActiveGrades(area)}))})).status,400,'Las notas parciales tampoco permiten validar el curso.');
+  }finally{await h.close();}
+});
+
+test('Indaga vacía en 4.º F y 5.º F admite validación manual, conserva el blanco y calcula con las competencias cursadas',async()=>{
+  const h=await harness();try{
+    const science=defaultSettings.areas.find(area=>area.group==='science')!,indaga=science.competencies.findIndex(label=>/^Indaga\b/i.test(label));assert(indaga>=0);
+    for(const grade of ['4','5']){
+      const code=`INDAGA-${grade}-F`,name=`ESTUDIANTE INDAGA ${grade==='4'?'CUARTO':'QUINTO'}`,rows=science.competencies.map((_,index)=>index===indaga?['','','']:['A','A','A']);
+      const bytes=makeCompactPdf(defaultSettings,{code,name,grade,grades:['A','A','A'],gradesByArea:{[science.id]:rows}});
+      const pdf=await upload(h,bytes,`BOLETA_${grade}to año F_Secundaria_${name.replaceAll(' ','_')}.pdf`);
+      assert.deepEqual(pdf.areas.find(area=>area.areaId===science.id)!.grades[indaga],['','','']);
+      await confirm(h,pdf.id);
+      let state=await readState(h),student=state.students.find(value=>value.code===code)!;
+      assert.equal(student.grade,`${grade}.º de secundaria`);assert.equal(student.academic.find(area=>area.areaId===science.id)!.validated,false,'Confirmar la libreta no sustituye la revisión manual de Indaga no cursada.');
+      assert.equal(student.validated.academic,false);
+      const before=structuredClone(student.academic.map(area=>({areaId:area.areaId,grades:area.grades}))),provisional=calculateStudent(student,state.settings);
+      assert.equal(provisional.areaAverages[science.id],3);assert.equal(provisional.a,75);assert(provisional.pa<100);
+      student.academic.find(area=>area.areaId===science.id)!.validated=true;student.validated.academic=true;
+      const response=await h.request(`/api/students/${student.id}`,'PUT',student);
+      assert.equal(response.status,200,await response.clone().text());student=await response.json() as Student;
+      assert.equal(student.validated.academic,true);assert.equal(calculateStudent(student,state.settings).pa,100);assert.equal(calculateStudent(student,state.settings).a,75);
+      assert.deepEqual(student.academic.map(area=>({areaId:area.areaId,grades:area.grades})),before);
+      state=await readState(h);student=state.students.find(value=>value.code===code)!;
+      assert.equal(student.academic.find(area=>area.areaId===science.id)!.validated,true);assert.equal(student.validated.academic,true);
+      assert.deepEqual(state.pdfs.find(value=>value.id===pdf.id)!.areas.find(area=>area.areaId===science.id)!.grades[indaga],['','','']);
+      assert.deepEqual(Buffer.from(await(await h.request(`/api/pdfs/${pdf.id}/file`)).arrayBuffer()),bytes);
+    }
+    for(const [grade,mode] of [['2','blank'],['3','blank'],['4','partial-indaga'],['5','missing-other']] as const){
+      const rows=science.competencies.map((_,index)=>index===indaga?(mode==='partial-indaga'?['A','','']:['','','']):['A','A','A']);
+      if(mode==='missing-other')rows[(indaga+1)%rows.length][1]='';
+      const pdf=await upload(h,makeCompactPdf(defaultSettings,{code:`STRICT-${grade}`,name:'ESTUDIANTE ESTRICTO PRUEBA',grade,grades:['A','A','A'],gradesByArea:{[science.id]:rows}}));
+      assert.deepEqual(pdf.areas.find(area=>area.areaId===science.id)!.grades,rows,`La libreta conserva los vacíos de ${grade} ${mode}`);
+      await confirm(h,pdf.id);
+      const student=(await readState(h)).students.find(value=>value.code===`STRICT-${grade}`)!;
+      student.academic.find(area=>area.areaId===science.id)!.validated=true;
+      const response=await h.request(`/api/students/${student.id}`,'PUT',student);
+      assert.equal(response.status,400,`Se rechaza la validación con notas obligatorias faltantes: ${grade} ${mode}`);
+    }
   }finally{await h.close();}
 });
 
@@ -391,7 +432,7 @@ test('Una nueva lectura parcial conserva notas del mismo original y descarta aju
 
 test('Las aulas ajenas permanecen en revisión; el código ausente no bloquea una identidad y aula reconocidas',async()=>{
   const h=await harness();try{
-    for(const [grade,section] of [['1','F'],['5','F'],['12','F'],['25','F'],['3xyz','F'],['3','A']]){
+    for(const [grade,section] of [['1','F'],['6','F'],['12','F'],['25','F'],['3xyz','F'],['3','A']]){
       assert.equal((await h.request('/api/students','POST',{code:`BAD-${grade}-${section}`,name:'No permitido',grade,section})).status,400);
     }
     const pdf=await upload(h,reportPdf('COR-1','Identidad Leida','','3','A'),'fuera_de_aula.pdf');

@@ -159,11 +159,15 @@ test('keeps conflicts and staff identity empty while preserving complete explici
   assert.equal(stacked.extractedName, 'Estudiante Recuperado review');
 });
 
-test('cohorts outside 2.º F, 3.º F and 4.º F remain visible and require correction', () => {
-  for (const pair of ['Grado: 1\nSección: F', 'Grado: 3\nSección: A', 'Grado: 5\nSección: F', 'Grado: 2 primaria\nSección: F', 'Grado: 25\nSección: F']) {
+test('cohorts outside 2.º F, 3.º F, 4.º F and 5.º F remain visible and require correction', () => {
+  for (const pair of ['Grado: 1\nSección: F', 'Grado: 3\nSección: A', 'Grado: 6\nSección: F', 'Grado: 2 primaria\nSección: F', 'Grado: 25\nSección: F']) {
     const result = parseReportText(pair, settings);
-    assert.ok(result.warnings.some(warning => warning.includes('no corresponde a 2.º F, 3.º F o 4.º F')));
+    assert.ok(result.warnings.some(warning => warning.includes('no corresponde a 2.º F, 3.º F, 4.º F o 5.º F')));
   }
+  const fifth = parseReportText('Grado: quinto de secundaria\nSección: F', settings);
+  assert.equal(fifth.extractedGrade, 'quinto de secundaria');
+  assert.equal(fifth.extractedSection, 'F');
+  assert.ok(!fifth.warnings.some(warning => warning.includes('El aula reconocida no corresponde')));
   const missing = parseReportText('Apellidos y nombres: Pérez Ana', settings);
   assert.equal(missing.extractedGrade, '');
   assert.equal(missing.extractedSection, '');

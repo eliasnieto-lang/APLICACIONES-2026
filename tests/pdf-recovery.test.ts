@@ -104,6 +104,41 @@ test('no active courses retain the unread-report recovery fallback and a dedicat
   assert.ok(!report.warnings.some(warning => warning.includes('0 de 6')));
 });
 
+test('only completely blank Indaga in 4.º F or 5.º F is excluded from grade recovery and summary counts', () => {
+  const science = defaultSettings.areas.find(area => area.group === 'science')!;
+  const scienceSettings = { ...settings, areas: [science] };
+  const body = `Competencias Bimestre I II III IV\n${science.name}\n${science.competencies.map((competency, index) => `${competency} ${index ? 'A B C -' : '- - - -'}`).join('\n')}`;
+  for (const grade of ['2', '3', '4', '5']) {
+    const report = parseReportText(`${identity.replace('Grado: 3', `Grado: ${grade}`)}\n${body}`, scienceSettings);
+    const exempt = grade === '4' || grade === '5';
+    assert.deepEqual(report.areas[0].grades[0], ['', '', ''], `Indaga remains blank in ${grade}.º F`);
+    assert.equal(needsPdfRecovery(report, true, scienceSettings), !exempt, `${grade}.º F recovery`);
+    assert.equal(needsRenderedGradeRecovery(report, scienceSettings), !exempt, `${grade}.º F rendered recovery`);
+    assert.equal(needsRenderedGradeRecovery(report, scienceSettings, true), !exempt, `${grade}.º F explicit recovery`);
+    assert.equal(report.warnings.some(warning => warning.includes('6 de 9 casillas')), !exempt, `${grade}.º F missing-cell warning`);
+    if (exempt) {
+      report.areas[0].grades[0][0] = 'A';
+      assert.equal(needsPdfRecovery(report, true, scienceSettings), true, 'partly read Indaga still needs recovery');
+      report.areas[0].grades[0][0] = '';
+      report.areas[0].grades[1][1] = '';
+      assert.equal(needsRenderedGradeRecovery(report, scienceSettings), true, 'another missing science grade stays required');
+    }
+  }
+  const otherSection = parseReportText(`${identity.replace('Grado: 3', 'Grado: 4').replace('Sección: F', 'Sección: G')}\n${body}`, scienceSettings);
+  assert.equal(needsPdfRecovery(otherSection, true, scienceSettings), true, 'the exception does not apply to another section');
+  const filenameCohort = { grade: '5.º de secundaria', section: 'F' };
+  const reading = parseReportText(`${identity}\n${body}`, scienceSettings, filenameCohort);
+  assert.equal(reading.extractedGrade, '3', 'filename context does not rewrite native source fields');
+  assert.equal(needsPdfRecovery(reading, true, scienceSettings, filenameCohort), false, 'known filename identity takes priority for recovery');
+  assert.equal(needsRenderedGradeRecovery(reading, scienceSettings, true, filenameCohort), false);
+  assert.ok(!reading.warnings.some(warning => warning.includes('casillas')));
+  assert.equal(needsPdfRecovery(reading, true, scienceSettings), true, 'without filename context the native third grade remains strict');
+  const oldNative = parseReportText(`${identity}\n${body}`, scienceSettings);
+  const contextualMerge = mergePdfReadings(oldNative, structuredClone(oldNative), scienceSettings, filenameCohort);
+  assert.ok(!contextualMerge.warnings.some(warning => warning.includes('casillas')), 'a known filename context replaces stale native summary warnings');
+  assert.deepEqual(contextualMerge.areas[0].grades[0], ['', '', '']);
+});
+
 test('independent OCR fills a missing identity without making repeated native grade rows conflict', () => {
   const native = parseReportText(grades, settings);
   const result = mergePdfReadings(native, parseReportText(`${identity}\n${grades}`, settings), settings);

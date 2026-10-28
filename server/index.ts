@@ -64,7 +64,7 @@ export function createApp(options: {dataDir?: string} = {}) {
     const ds=dataset(req),state=store.read(ds);unlocked(state);
     const input=newStudentSchema.parse(req.body);
     const cohort=normalizeCohort(input.grade,input.section);
-    if(!cohort)throw new HttpError(400,'Solo se admiten los salones 2.º F, 3.º F y 4.º F.');
+    if(!cohort)throw new HttpError(400,'Solo se admiten los salones 2.º F, 3.º F, 4.º F y 5.º F.');
     if(state.students.some(s=>s.code.toLocaleLowerCase()===input.code.toLocaleLowerCase()))throw new HttpError(409,'Ya existe un estudiante con ese código.');
     const student=createStudent({...input,grade:cohort.grade,section:cohort.section},state.settings);student.history=[audit('Creación de expediente','',input)];
     state.students.push(student);store.save(ds,state);res.status(201).json(student);
@@ -76,7 +76,7 @@ export function createApp(options: {dataDir?: string} = {}) {
     if(student.id!==current.id)throw new HttpError(400,'El identificador del estudiante no se puede modificar.');
     if(student.updatedAt!==current.updatedAt)throw new HttpError(409,'El expediente cambió en otra pestaña. Recargue antes de guardar.');
     const cohort=normalizeCohort(student.grade,student.section);
-    if(!cohort)throw new HttpError(400,'Solo se admiten los salones 2.º F, 3.º F y 4.º F.');
+    if(!cohort)throw new HttpError(400,'Solo se admiten los salones 2.º F, 3.º F, 4.º F y 5.º F.');
     student.grade=cohort.grade;student.section=cohort.section;
     if(['code','name','grade','section'].some(field=>student[field as keyof Student]!==current[field as keyof Student]))throw new HttpError(409,'Los datos del estudiante se obtienen automáticamente del PDF y no se editan en la ficha.');
     student.reportApproval=current.reportApproval;
@@ -175,7 +175,7 @@ export function createApp(options: {dataDir?: string} = {}) {
           const source=path.join(dir,'document.pdf');await writeFile(source,file.buffer);
           const extractionSettings=structuredClone(state.settings);
           const sourceIdentity=resolveReportIdentity(pdf);
-          Object.assign(pdf,await extractPdf(source,extractionSettings,{identityFromFilename:Boolean(sourceIdentity.name&&normalizeCohort(sourceIdentity.grade,sourceIdentity.section))}));
+          Object.assign(pdf,await extractPdf(source,extractionSettings,{identityFromFilename:Boolean(sourceIdentity.name&&normalizeCohort(sourceIdentity.grade,sourceIdentity.section)),cohort:sourceIdentity}));
           // Extraction can take time; reload so simultaneous manual edits are retained.
           state=store.read(ds);unlocked(state);
           if(!same(extractionSettings,state.settings)){
@@ -225,7 +225,7 @@ export function createApp(options: {dataDir?: string} = {}) {
       const directory=await mkdtemp(path.join(os.tmpdir(),'circulos-notas-'));
       try{
         const source=path.join(directory,'original.pdf');await writeFile(source,content);
-        const reading=await extractPdf(source,structuredClone(state.settings),{identityFromFilename:true,forceGrades:true});
+        const reading=await extractPdf(source,structuredClone(state.settings),{identityFromFilename:true,forceGrades:true,cohort:state.students.find(student=>student.id===pdf.studentId)??resolveReportIdentity(pdf)});
         let updated:PdfRecord|undefined;
         store.transaction(()=>{
           const latest=store.read(ds);unlocked(latest);
@@ -246,7 +246,7 @@ export function createApp(options: {dataDir?: string} = {}) {
         const source=path.join(directory,'original.pdf');
         await writeFile(source,content);
         const sourceIdentity=resolveReportIdentity(pdf);
-        const reading=await extractPdf(source,structuredClone(state.settings),{identityFromFilename:Boolean(sourceIdentity.name&&normalizeCohort(sourceIdentity.grade,sourceIdentity.section))});
+        const reading=await extractPdf(source,structuredClone(state.settings),{identityFromFilename:Boolean(sourceIdentity.name&&normalizeCohort(sourceIdentity.grade,sourceIdentity.section)),cohort:sourceIdentity});
         const latest=store.read(ds);unlocked(latest);
         const current=latest.pdfs.find(record=>record.id===pdf.id);
         if(!current||current.hash!==pdf.hash||!same(state.settings,latest.settings)||!same(current,pdf))throw new HttpError(409,'El documento o sus parámetros cambiaron durante la lectura automática. Vuelva a abrir la revisión.');
@@ -261,7 +261,7 @@ export function createApp(options: {dataDir?: string} = {}) {
       store.save(ds,state);res.json(result.pdf);return;
     }
     const student=findStudent(state,req.body.studentId||pdf.studentId);
-    if(!normalizeCohort(student.grade,student.section))throw new HttpError(400,'El estudiante debe pertenecer a 2.º F, 3.º F o 4.º F.');
+    if(!normalizeCohort(student.grade,student.section))throw new HttpError(400,'El estudiante debe pertenecer a 2.º F, 3.º F, 4.º F o 5.º F.');
     if(pdf.extractedCode&&pdf.extractedCode.toLocaleLowerCase()!==student.code.toLocaleLowerCase()&&req.body.confirmMismatch!==true)throw new HttpError(409,'El código extraído no coincide. Confirme la reasignación antes de unir los registros.');
     {
       const old=pdf.studentId?state.students.find(s=>s.id===pdf.studentId):null;

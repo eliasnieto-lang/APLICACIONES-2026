@@ -99,7 +99,7 @@ export function registerImportedReport(state: AppState, pdf: PdfRecord): Student
   const identity = normalizeIdentity(identityOf(pdf));
   if (!identity) {
     pdf.status = 'review';
-    warn(pdf, 'Revise los apellidos y nombres y el aula. Solo se admiten 2.º F, 3.º F y 4.º F.');
+    warn(pdf, 'Revise los apellidos y nombres y el aula. Solo se admiten 2.º F, 3.º F, 4.º F y 5.º F.');
     return null;
   }
   const linked = state.students.find(candidate => candidate.id === pdf.studentId);
@@ -140,7 +140,7 @@ export function identifyReport(state: AppState, pdfId: string, options: { name: 
   const linked = state.students.find(student => student.id === pdf.studentId);
   const current = identityOf(pdf);
   const cohort = normalizeCohort(options.grade ?? current.grade, options.section ?? current.section);
-  if ((options.grade !== undefined || options.section !== undefined) && !cohort) throw new ReportWorkflowError(400, 'Solo se admiten 2.º F, 3.º F y 4.º F.');
+  if ((options.grade !== undefined || options.section !== undefined) && !cohort) throw new ReportWorkflowError(400, 'Solo se admiten 2.º F, 3.º F, 4.º F y 5.º F.');
   const draftMatches = !linked && name && cohort ? matchingStudents(state, { ...current, name, grade: cohort.grade, section: cohort.section }) : [];
   if (draftMatches.length > 1) throw new ReportWorkflowError(409, 'Hay varios expedientes con los mismos apellidos, nombres y aula. Seleccione el expediente correcto antes de confirmar.');
   pdf.manualName = name;
@@ -222,8 +222,8 @@ export function applyRescannedGrades(state: AppState, pdfId: string, reading: Ex
   }
   pdf.text = reading.text;
   pdf.ocr = reading.ocr || usedRetainedGrade && priorOcr;
-  const initialSummary = new Set(reportWarnings(reading, state.settings));
-  pdf.warnings = [...new Set([...reading.warnings.filter(warning => !initialSummary.has(warning)), ...reportWarnings(pdf, state.settings)])];
+  const initialSummary = new Set([...reportWarnings(reading, state.settings), ...reportWarnings(reading, state.settings, student)]);
+  pdf.warnings = [...new Set([...reading.warnings.filter(warning => !initialSummary.has(warning)), ...reportWarnings(pdf, state.settings, student)])];
   student.academic = structuredClone(pdf.areas);
   for (const area of student.academic) {
     const previous = before.find(candidate => candidate.areaId === area.areaId);

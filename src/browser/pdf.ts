@@ -6,7 +6,7 @@ import ocrCoreSource from 'tesseract.js-core/tesseract-core-lstm.wasm.js?raw';
 import spanishModelUrl from '../../.tools/tessdata/spa.traineddata?url&inline';
 import { parseReportText, type ExtractedReport } from '../../shared/pdf-parser';
 import { layoutPdfText, mergePdfReadings, needsPdfRecovery, needsRenderedGradeRecovery } from '../../shared/pdf-recovery';
-import type { Settings } from '../../shared/types';
+import type { Settings, Student } from '../../shared/types';
 
 const MAX_BYTES = 20 * 1024 * 1024;
 const MAX_PAGES = 20;
@@ -92,7 +92,7 @@ function makeOcrWorkerSource(): string {
 }
 
 /** Browser-only PDF and Spanish OCR. All document processing stays on this device. */
-export async function extractBrowserPdf(file: Blob, settings: Settings, options: { identityFromFilename?: boolean; forceGrades?: boolean } = {}): Promise<ExtractedReport> {
+export async function extractBrowserPdf(file: Blob, settings: Settings, options: { identityFromFilename?: boolean; forceGrades?: boolean; cohort?: Pick<Student, 'grade' | 'section'> } = {}): Promise<ExtractedReport> {
   if (file.size > MAX_BYTES) throw new Error('El PDF debe ser un archivo de hasta 20 MB.');
   const data = new Uint8Array(await file.arrayBuffer());
   const header = new TextDecoder('latin1').decode(data.subarray(0, 1024));
@@ -125,16 +125,16 @@ export async function extractBrowserPdf(file: Blob, settings: Settings, options:
       if (texts.reduce((length, text) => length + text.length, 0) > MAX_TEXT) throw new Error('El PDF contiene demasiado texto para una libreta. Divídalo antes de importarlo.');
     }
     const nativeText = texts.join('\n\f\n');
-    const nativeReading = parseReportText(nativeText, settings);
+    const nativeReading = parseReportText(nativeText, settings, options.cohort);
     let rasterPresent = false;
-    if (needsPdfRecovery(nativeReading, !options.identityFromFilename)) {
+    if (needsPdfRecovery(nativeReading, !options.identityFromFilename, settings, options.cohort)) {
       for (let i = 1; i <= documentPdf.numPages && !rasterPresent; i++) {
         const page = await documentPdf.getPage(i);
         const operators = await timed(page.getOperatorList(), Math.min(20_000, remaining()), 'No se pudieron inspeccionar las imágenes del PDF a tiempo.');
         rasterPresent = hasReadableRaster(operators);
       }
     }
-    const renderGrades = needsRenderedGradeRecovery(nativeReading, settings, options.forceGrades);
+    const renderGrades = needsRenderedGradeRecovery(nativeReading, settings, options.forceGrades, options.cohort);
     if (!rasterPresent && !renderGrades) return nativeReading;
     if (documentPdf.numPages > MAX_OCR_PAGES) throw new Error(`El PDF escaneado supera ${MAX_OCR_PAGES} páginas. Divídalo para realizar el reconocimiento automático.`);
 
@@ -171,7 +171,7 @@ export async function extractBrowserPdf(file: Blob, settings: Settings, options:
       const result = await timed(ocrWorker.recognize(canvas), Math.min(45_000, remaining()), 'El reconocimiento de una página tardó demasiado. Divida el PDF o vuelva a procesar una copia más legible.');
       recognized.push(result.data.text);
     }
-    const result = mergePdfReadings(nativeReading, parseReportText(recognized.join('\n\f\n'), settings), settings);
+    const result = mergePdfReadings(nativeReading, parseReportText(recognized.join('\n\f\n'), settings, options.cohort), settings, options.cohort);
     result.warnings.unshift('PDF renderizado: OCR local en español aplicado para completar la lectura automática. Compare las celdas reconocidas con el PDF original.');
     return result;
   } catch (error) {

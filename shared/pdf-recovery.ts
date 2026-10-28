@@ -1,18 +1,23 @@
 import { REPORT_REVIEW_WARNING, reportWarnings, type ExtractedReport } from './pdf-parser.js';
 import { ACTIVE_BIMESTERS, normalizeCohort } from './policy.js';
-import { hasActiveGrades } from './academic-policy.js';
-import type { Grade, Settings } from './types.js';
+import { hasActiveGrades, omittedCompetencyIndexes } from './academic-policy.js';
+import type { Grade, Settings, Student } from './types.js';
 
 const metadataFields = ['extractedCode', 'extractedName', 'extractedGrade', 'extractedSection', 'period'] as const;
 const gradeTables = (report: ExtractedReport) => [...report.areas, ...(report.supplementalAreas || [])];
 const labelKey = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 /** Empty courses are not taken; an entirely unread report still needs recovery. */
-function needsGradeRecovery(report: ExtractedReport): boolean {
+function needsGradeRecovery(report: ExtractedReport, settings?: Settings, cohort?: Pick<Student, 'grade' | 'section'>): boolean {
   const tables = gradeTables(report);
   const active = tables.filter(hasActiveGrades);
-  return (active.length ? active : tables).some(area => area.grades.some(row =>
-    ACTIVE_BIMESTERS.some((_, index) => !['AD', 'A', 'B', 'C'].includes(row[index] || ''))));
+  const classroom = { grade: cohort?.grade || report.extractedGrade, section: cohort?.section || report.extractedSection };
+  return (active.length ? active : tables).some(area => {
+    const definition = 'definition' in area ? area.definition : settings?.areas.find(candidate => candidate.id === area.areaId);
+    const omitted = new Set(definition ? omittedCompetencyIndexes(definition, area, classroom) : []);
+    return area.grades.some((row, competency) => !omitted.has(competency) &&
+      ACTIVE_BIMESTERS.some((_, index) => !['AD', 'A', 'B', 'C'].includes(row[index] || '')));
+  });
 }
 
 export interface PositionedPdfText {
@@ -57,14 +62,14 @@ export function layoutPdfText(items: PositionedPdfText[]): string {
 }
 
 /** Image recognition is useful only while a labelled field or a catalog cell is missing. */
-export function needsPdfRecovery(report: ExtractedReport, requireMetadata = true): boolean {
+export function needsPdfRecovery(report: ExtractedReport, requireMetadata = true, settings?: Settings, cohort?: Pick<Student, 'grade' | 'section'>): boolean {
   return requireMetadata && metadataFields.some(field => !report[field].trim())
-    || needsGradeRecovery(report);
+    || needsGradeRecovery(report, settings, cohort);
 }
 
 /** Vector outlines and unusable font mappings can hide grades without any raster image. */
-export function needsRenderedGradeRecovery(report: ExtractedReport, settings: Settings, forceGrades = false): boolean {
-  if (!needsGradeRecovery(report)) return false;
+export function needsRenderedGradeRecovery(report: ExtractedReport, settings: Settings, forceGrades = false, cohort?: Pick<Student, 'grade' | 'section'>): boolean {
+  if (!needsGradeRecovery(report, settings, cohort)) return false;
   if (forceGrades) return true;
   const text = report.text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ');
   const hasTable = /\b(?:bimestres?|calificaciones?)\b/.test(text) && /\bcompetencias?\b/.test(text);
@@ -82,7 +87,7 @@ function comparable(field: typeof metadataFields[number], value: string): string
 }
 
 /** Keep independent readings independent: repeated OCR rows cannot erase native evidence. */
-export function mergePdfReadings(native: ExtractedReport, recognized: ExtractedReport, settings: Settings): ExtractedReport {
+export function mergePdfReadings(native: ExtractedReport, recognized: ExtractedReport, settings: Settings, cohort?: Pick<Student, 'grade' | 'section'>): ExtractedReport {
   const conflicts = metadataFields.filter(field => native[field] && recognized[field] && comparable(field, native[field]) !== comparable(field, recognized[field]));
   const result: ExtractedReport = {
     ...native,
@@ -123,8 +128,8 @@ export function mergePdfReadings(native: ExtractedReport, recognized: ExtractedR
     }
   }
   // Recreate summary warnings from the final fields, retaining source-specific ambiguity.
-  const summaryWarnings = new Set([REPORT_REVIEW_WARNING, ...reportWarnings(native, settings), ...reportWarnings(recognized, settings)]);
+  const summaryWarnings = new Set([REPORT_REVIEW_WARNING, ...reportWarnings(native, settings), ...reportWarnings(recognized, settings), ...reportWarnings(native, settings, cohort), ...reportWarnings(recognized, settings, cohort)]);
   const sourceWarnings = [...native.warnings, ...recognized.warnings].filter(warning => !summaryWarnings.has(warning));
-  result.warnings = [...new Set([REPORT_REVIEW_WARNING, ...reportWarnings(result, settings), ...sourceWarnings, ...recoveryWarnings])];
+  result.warnings = [...new Set([REPORT_REVIEW_WARNING, ...reportWarnings(result, settings, cohort), ...sourceWarnings, ...recoveryWarnings])];
   return result;
 }

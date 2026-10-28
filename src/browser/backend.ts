@@ -235,7 +235,7 @@ async function install(): Promise<void> {
       unlocked(state);
       const newInput = newStudentSchema.parse(await bodyJson(input, init));
       const cohort = normalizeCohort(newInput.grade, newInput.section);
-      if (!cohort) throw new HttpError(400, 'Solo se admiten estudiantes de 2.º F, 3.º F y 4.º F de secundaria.');
+      if (!cohort) throw new HttpError(400, 'Solo se admiten estudiantes de 2.º F, 3.º F, 4.º F y 5.º F de secundaria.');
       newInput.grade = cohort.grade; newInput.section = cohort.section;
       if (state.students.some(student => student.code.toLocaleLowerCase() === newInput.code.toLocaleLowerCase())) throw new HttpError(409, 'Ya existe un estudiante con ese código.');
       const student = createStudent(newInput, state.settings); student.history = [audit('Creación de expediente', '', newInput)];
@@ -345,7 +345,7 @@ async function install(): Promise<void> {
         else {
           try {
             const sourceIdentity = resolveReportIdentity(pdf);
-            Object.assign(pdf, await extractBrowserPdf(file, structuredClone(state.settings), { identityFromFilename: Boolean(sourceIdentity.name && normalizeCohort(sourceIdentity.grade, sourceIdentity.section)) }));
+            Object.assign(pdf, await extractBrowserPdf(file, structuredClone(state.settings), { identityFromFilename: Boolean(sourceIdentity.name && normalizeCohort(sourceIdentity.grade, sourceIdentity.section)), cohort: sourceIdentity }));
             registerImportedReport(state, pdf);
           } catch (error) {
             const message = error instanceof Error ? error.message : 'No fue posible leer el PDF.';
@@ -397,7 +397,7 @@ async function install(): Promise<void> {
         if (!original) throw new HttpError(404, 'No está disponible el PDF original para actualizar sus notas.');
         const header = new TextDecoder('latin1').decode(await original.slice(0, 1024).arrayBuffer());
         if (!header.includes('%PDF-') || await sha256(original) !== pdf.hash) throw new HttpError(400, 'El archivo original no es un PDF válido o no coincide con la libreta conservada.');
-        const reading = await extractBrowserPdf(original, structuredClone(state.settings), { identityFromFilename: true, forceGrades: true });
+        const reading = await extractBrowserPdf(original, structuredClone(state.settings), { identityFromFilename: true, forceGrades: true, cohort: state.students.find(student => student.id === pdf.studentId) ?? resolveReportIdentity(pdf) });
         // OCR runs outside the storage transaction. Apply its A reading to the
         // latest snapshot so another tab's manual B/C edits remain intact.
         const latest = await readState(db, dataset), latestExpected = JSON.stringify(latest);
@@ -413,7 +413,7 @@ async function install(): Promise<void> {
         const original = (await readFiles(db, dataset)).get(pdf.id);
         if (!original) throw new HttpError(404, 'No está disponible el PDF original para leerlo automáticamente.');
         const sourceIdentity = resolveReportIdentity(pdf);
-        const reading = await extractBrowserPdf(original, structuredClone(state.settings), { identityFromFilename: Boolean(sourceIdentity.name && normalizeCohort(sourceIdentity.grade, sourceIdentity.section)) });
+        const reading = await extractBrowserPdf(original, structuredClone(state.settings), { identityFromFilename: Boolean(sourceIdentity.name && normalizeCohort(sourceIdentity.grade, sourceIdentity.section)), cohort: sourceIdentity });
         const updated = applyReprocessedReport(state, pdf.id, reading);
         await save(dataset, state, expected);
         return json(updated);
@@ -432,7 +432,7 @@ async function install(): Promise<void> {
         await save(dataset, state, expected); return json(confirmed.pdf);
       }
       const student = findStudent(state, typeof body.studentId === 'string' && body.studentId ? body.studentId : pdf.studentId ?? '');
-      if (!normalizeCohort(student.grade, student.section)) throw new HttpError(400, 'La libreta debe corresponder a 2.º F, 3.º F o 4.º F de secundaria.');
+      if (!normalizeCohort(student.grade, student.section)) throw new HttpError(400, 'La libreta debe corresponder a 2.º F, 3.º F, 4.º F o 5.º F de secundaria.');
       if (pdf.extractedCode && pdf.extractedCode.toLocaleLowerCase() !== student.code.toLocaleLowerCase() && body.confirmMismatch !== true) throw new HttpError(409, 'El código extraído no coincide. Confirme la reasignación antes de unir los registros.');
       if (action === 'link' || action === 'replace') {
         const old = pdf.studentId ? state.students.find(value => value.id === pdf.studentId) : undefined;

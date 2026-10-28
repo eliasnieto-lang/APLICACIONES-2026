@@ -45,6 +45,24 @@ test('the supplied filename registers and confirms with all text identity fields
   assert.equal(stateSchema.safeParse(app).success, true);
 });
 
+test('a fifth F filename registers, confirms and retains its classroom after migration', () => {
+  const app = state(), pdf = report({ name: 'BOLETA_5to año F_Secundaria_SEGURA_CAMONES_ANDRES ADRIAN.pdf' });
+  const settings = structuredClone(app.settings);
+  app.pdfs.push(pdf);
+  const student = registerImportedReport(app, pdf)!;
+  assert.ok(student);
+  assert.equal(student.grade, '5.º de secundaria');
+  assert.equal(student.section, 'F');
+  confirmReport(app, pdf.id);
+  const migrated = migrateState(app);
+  assert.equal(migrated.students.length, 1);
+  assert.equal(migrated.students[0].id, student.id);
+  assert.equal(migrated.students[0].grade, '5.º de secundaria');
+  assert.deepEqual(migrated.students[0].reportApproval, student.reportApproval);
+  assert.deepEqual(migrated.settings, settings);
+  assert.deepEqual(stateReferenceErrors(migrated), []);
+});
+
 test('filename name and classroom take precedence over conflicting text extraction', () => {
   const app = state(), pdf = report({ extractedCode: 'KNOWN-1', extractedName: 'Nombre equivocado', extractedGrade: '4', extractedSection: 'F' }); app.pdfs.push(pdf);
   const student = registerImportedReport(app, pdf)!;
@@ -146,7 +164,7 @@ test('a recognized existing code resolves homonyms and unsupported classrooms re
   for (const code of ['HOM-1', 'HOM-2']) app.students.push(createStudent({ code, name: 'SEGURA CAMONES ANDRES ADRIAN', grade: '2', section: 'F' }, app.settings));
   const pdf = report({ extractedCode: 'HOM-2' }); app.pdfs.push(pdf);
   assert.equal(registerImportedReport(app, pdf)?.id, app.students[1].id);
-  const invalid = report({ name: 'libreta.pdf', extractedName: 'Nombre Completo', extractedGrade: '5', extractedSection: 'F' }); app.pdfs.push(invalid);
+  const invalid = report({ name: 'libreta.pdf', extractedName: 'Nombre Completo', extractedGrade: '6', extractedSection: 'F' }); app.pdfs.push(invalid);
   assert.equal(registerImportedReport(app, invalid), null);
   assert.throws(() => confirmReport(app, invalid.id, { name: 'Nombre Corregido' }), (error: unknown) => error instanceof ReportWorkflowError && error.status === 400);
   assert.throws(() => identifyReport(app, invalid.id, { name: 'Nombre Corregido', grade: '2', section: 'A' }), (error: unknown) => error instanceof ReportWorkflowError && error.status === 400);

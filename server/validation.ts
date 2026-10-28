@@ -64,7 +64,7 @@ export function semanticStudentErrors(student: Student, settings: Settings): str
   for (const area of student.academic) {
     const def = settings.areas.find(v=>v.id===area.areaId);
     if (!def || def.competencies.length !== area.grades.length) errors.push('Las áreas y competencias deben corresponder al catálogo vigente.');
-    if (def && hasActiveGrades(area) && area.validated && !isAreaComplete(def, area)) errors.push('No se puede validar un área con calificaciones vacías en I, II o III.');
+    if (def && hasActiveGrades(area) && area.validated && !isAreaComplete(def, area, student)) errors.push('No se puede validar un área con calificaciones vacías en I, II o III, salvo Indaga no cursada en 4.º F o 5.º F.');
   }
   if (new Set(student.discipline.incidents.map(v=>v.id)).size !== student.discipline.incidents.length) errors.push('Hay incidencias duplicadas.');
   for (const incident of student.discipline.incidents) {

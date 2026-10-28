@@ -5,6 +5,7 @@ export const ALLOWED_COHORTS = [
   { grade: '2.º de secundaria', section: 'F', label: '2.º F' },
   { grade: '3.º de secundaria', section: 'F', label: '3.º F' },
   { grade: '4.º de secundaria', section: 'F', label: '4.º F' },
+  { grade: '5.º de secundaria', section: 'F', label: '5.º F' },
 ] as const;
 export type AllowedCohort = typeof ALLOWED_COHORTS[number];
 
@@ -17,6 +18,7 @@ export function normalizeCohort(grade: string, section: string): AllowedCohort |
     new RegExp(`^(?:2(?:\\s*\\.?(?:º|°|o|do))?|segundo)${suffix}$`),
     new RegExp(`^(?:3(?:\\s*\\.?(?:º|°|o|ro|ero|er))?|tercero|tercer)${suffix}$`),
     new RegExp(`^(?:4(?:\\s*\\.?(?:º|°|o|to))?|cuarto)${suffix}$`),
+    new RegExp(`^(?:5(?:\\s*\\.?(?:º|°|o|to))?|quinto)${suffix}$`),
   ];
   return ALLOWED_COHORTS.find((_, index) => forms[index].test(value)) ?? null;
 }

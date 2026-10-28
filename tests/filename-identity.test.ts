@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyFilenameIdentity, parseReportFilename, resolveReportIdentity } from '../shared/filename-identity.js';
+import { normalizeCohort } from '../shared/policy.js';
 
 test('reads the complete ordered name and canonical classroom from the report filename', () => {
   assert.deepEqual(parseReportFilename('BOLETA_2do año F_Secundaria_SEGURA_CAMONES_ANDRES ADRIAN.pdf'), {
@@ -37,12 +38,26 @@ test('generic files and unexplained numeric suffixes cannot become student names
 });
 
 test('unsupported classrooms remain unsupported instead of borrowing a supported grade', () => {
-  for (const filename of ['BOLETA_5F_PEREZ_GARCIA_ANA.pdf', 'BOLETA_25_F_PEREZ_GARCIA_ANA.pdf', 'BOLETA_2do_A_Secundaria_PEREZ_GARCIA_ANA.pdf', 'BOLETA_2do_F_Primaria_PEREZ_GARCIA_ANA.pdf']) {
+  for (const filename of ['BOLETA_6F_PEREZ_GARCIA_ANA.pdf', 'BOLETA_1F_PEREZ_GARCIA_ANA.pdf', 'BOLETA_25_F_PEREZ_GARCIA_ANA.pdf', 'BOLETA_5to_G_Secundaria_PEREZ_GARCIA_ANA.pdf', 'BOLETA_2do_A_Secundaria_PEREZ_GARCIA_ANA.pdf', 'BOLETA_2do_F_Primaria_PEREZ_GARCIA_ANA.pdf']) {
     const identity = parseReportFilename(filename);
     assert.equal(identity.name, 'PEREZ GARCIA ANA', filename);
-    assert.ok(identity.grade !== '2.º de secundaria' && identity.grade !== '3.º de secundaria' && identity.grade !== '4.º de secundaria', filename);
+    assert.equal(normalizeCohort(identity.grade, identity.section), null, filename);
   }
-  assert.equal(parseReportFilename('BOLETA_5F_PEREZ_GARCIA_ANA.pdf').grade, '5');
+  assert.equal(parseReportFilename('BOLETA_6F_PEREZ_GARCIA_ANA.pdf').grade, '6');
+});
+
+test('fifth F is recognized precisely in filenames and grade normalization', () => {
+  for (const filename of [
+    'BOLETA_5F_PEREZ_GARCIA_ANA.pdf',
+    'BOLETA_5to año F_Secundaria_PEREZ_GARCIA_ANA.pdf',
+    'LIBRETA_quinto grado de secundaria_Sección F_PEREZ_GARCIA_ANA.pdf',
+    'PEREZ_GARCIA_ANA_5.º de secundaria_F.pdf',
+  ]) assert.deepEqual(parseReportFilename(filename), { name: 'PEREZ GARCIA ANA', grade: '5.º de secundaria', section: 'F' }, filename);
+  for (const grade of ['5', '5.º', '5°', '5o', '5to', 'quinto', 'quinto grado de secundaria']) {
+    assert.equal(normalizeCohort(grade, 'F')?.grade, '5.º de secundaria', grade);
+    assert.equal(normalizeCohort(grade, 'G'), null, grade);
+  }
+  for (const grade of ['15', '25', '5ro', '5do', '5to primaria', 'pre 5', '5to de secundaria extra']) assert.equal(normalizeCohort(grade, 'F'), null, grade);
 });
 
 test('filename values precede PDF text, while missing filename fields retain existing readings', () => {

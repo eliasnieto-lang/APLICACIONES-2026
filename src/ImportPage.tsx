@@ -2,10 +2,12 @@ import { documentUrl } from './runtime';
 import { useEffect, useRef, useState } from 'react';
 import { UploadCloud, Files, FileText, CircleCheck, CircleAlert, LoaderCircle, Eye, ExternalLink, Plus, Trash2, X } from 'lucide-react';
 import type { Dataset, PdfRecord, Settings, Student } from '../shared/types';
-import { ACTIVE_BIMESTERS, normalizeCohort } from '../shared/policy';
+import { ACTIVE_BIMESTERS, ALLOWED_COHORTS, normalizeCohort } from '../shared/policy';
 import { hasActiveGrades } from '../shared/academic-policy';
 import { reportWarnings } from '../shared/pdf-parser';
 import { resolveReportIdentity } from '../shared/filename-identity';
+
+const cohortLabels = ALLOWED_COHORTS.map(cohort => cohort.label).join(', ');
 
 interface Props {
   pdfs: PdfRecord[]; students: Student[]; settings: Settings; dataset: Dataset;
@@ -23,7 +25,7 @@ const reviewWarnings = (pdf: PdfRecord, name = reportIdentity(pdf).name, setting
   const identity = reportIdentity(pdf);
   const hasName = recognizedValue(name);
   const hasClassroom = Boolean(normalizeCohort(identity.grade, identity.section));
-  const warnings = [...pdf.warnings.filter(warning => !/^Se reconocieron \d+ de \d+ casillas|^No se reconocieron notas/.test(warning)), ...reportWarnings(pdf, settings).filter(warning => /^Se reconocieron \d+ de \d+ casillas|^No se reconocieron notas/.test(warning))];
+  const warnings = [...pdf.warnings.filter(warning => !/^Se reconocieron \d+ de \d+ casillas|^No se reconocieron notas/.test(warning)), ...reportWarnings(pdf, settings, identity).filter(warning => /^Se reconocieron \d+ de \d+ casillas|^No se reconocieron notas/.test(warning))];
   return warnings.filter(warning => {
     if (/c[oó]digo|a[ñn]o de la libreta no reconocido|revise el per[ií]odo|confirme que corresponde al per[ií]odo/i.test(warning)) return false;
     if (hasName && /apellidos y nombres.*no reconocid/i.test(warning)) return false;
@@ -173,7 +175,7 @@ export default function ImportPage({ pdfs, students, settings, dataset, onRefres
     finally { if (mountedRef.current) setBusy(false); }
   }
   return <div className="import-page">
-    <div className="page-heading"><div><p className="eyebrow">CARGA Y REVISIÓN DOCUMENTAL</p><h1>Importación masiva</h1><p className="muted">Importa las libretas de 2.º F, 3.º F y 4.º F. Los estudiantes reconocidos aparecen automáticamente; confirma cada libreta para habilitar su evaluación.</p></div></div>
+    <div className="page-heading"><div><p className="eyebrow">CARGA Y REVISIÓN DOCUMENTAL</p><h1>Importación masiva</h1><p className="muted">Importa las libretas de {cohortLabels}. Los estudiantes reconocidos aparecen automáticamente; confirma cada libreta para habilitar su evaluación.</p></div></div>
     {settings.closed && <div className="notice warning">La evaluación está cerrada. Puedes consultar documentos; reabre desde Parámetros para importar o corregir.</div>}
     {error && <div className="notice error" role="alert"><CircleAlert size={18}/>{error}<button className="icon-button" onClick={() => setError('')} aria-label="Cerrar error"><X size={16}/></button></div>}
     <section className={`card import-dropzone ${dragging ? 'dragging' : ''}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); void uploadFiles(event.dataTransfer.files); }}>
@@ -192,7 +194,7 @@ export default function ImportPage({ pdfs, students, settings, dataset, onRefres
       <div className="import-review-grid"><div className="import-original"><a className="button secondary small" href={documentUrl(selected.id, dataset)} target="_blank" rel="noreferrer"><ExternalLink size={15}/>Abrir PDF original</a><iframe title={`Documento original: ${selected.name}`} src={documentUrl(selected.id, dataset)}/></div>
       <div className="import-extraction"><h3>Datos del estudiante</h3><label className="field"><span>Apellidos y nombres</span><input value={draftName} maxLength={200} autoComplete="off" disabled={reviewLocked} onChange={event => changeName(event.target.value)} onBlur={saveName} placeholder="Escribe los apellidos y nombres completos" /></label><p className="muted">El nombre se toma del archivo PDF. Puedes completarlo o corregirlo aquí.</p><dl className="detail-list import-identity"><div><dt>Grado y sección</dt><dd>{cohort?.label || [identity?.grade, identity?.section].filter(Boolean).join(' ') || 'No reconocido'}</dd></div></dl>
       <div className="button-row import-review-actions"><button className="button primary" disabled={reviewLocked || !identityComplete} onClick={() => void confirmReport()}><CircleCheck size={16}/>Confirmar libreta</button><button className="button danger" disabled={busy || uploading || settings.closed} onClick={() => void deleteReport()}><Trash2 size={16}/>Eliminar libreta</button></div>
-      {!identityComplete && <p className="notice warning">{!cohort ? 'El aula debe reconocerse como 2.º F, 3.º F o 4.º F en el archivo o en la libreta.' : 'Completa los apellidos y nombres para confirmar la libreta.'}</p>}
+      {!identityComplete && <p className="notice warning">{!cohort ? `El aula debe reconocerse como ${cohortLabels} en el archivo o en la libreta.` : 'Completa los apellidos y nombres para confirmar la libreta.'}</p>}
       {selected.status === 'validated' && <p className="notice success">Libreta confirmada y evaluación habilitada.</p>}
       {selectedWarnings.length > 0 && <div className="notice warning"><div><strong>Observaciones de lectura</strong><ul>{selectedWarnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></div></div>}
       <div className="notice">La confirmación habilita las tres áreas de evaluación. Las notas A se completan automáticamente; B y C quedan pendientes para tu evaluación. Las casillas ilegibles permanecen vacías.</div>

@@ -303,14 +303,14 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
       await fs.writeFile(destination, index === 0 ? makeCompactPdf(settings, pupils[index]) : makePdf(settings, pupils[index]));
       fixtures.push(destination);
     }
-    const outside = { code: 'AJUSTE-F5-001', name: 'FUERA DE AULA Estudiante Ficticio', grade: 5 };
+    const outside = { code: 'AJUSTE-F6-001', name: 'FUERA DE AULA Estudiante Ficticio', grade: 6 };
     const outsidePath = path.join(directory, 'aula-no-admitida.pdf');
     await fs.writeFile(outsidePath, makePdf(settings, outside));
     await navigate('Importar libretas');
     await upload([...fixtures, outsidePath]);
     let current = await snapshot();
     assert.equal(current.state.pdfs.length, 4);
-    assert.equal(current.state.students.length, 3, 'La carga crea solo las tres aulas admitidas.');
+    assert.equal(current.state.students.length, 3, 'La carga crea solo los estudiantes de aulas admitidas.');
     for (const [index, pupil] of pupils.entries()) {
       const record = current.state.pdfs.find(pdf => pdf.extractedCode === pupil.code);
       assert(record, 'El código se reconoce desde el contenido del PDF.');
@@ -331,7 +331,7 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     assert(!outsideIdentity.includes(outside.code), 'El ingreso no exige mostrar códigos de estudiante.');
     assert.equal(await page.getByLabel('Apellidos y nombres', { exact: true }).inputValue(), outside.name);
     const outsideCohort = page.locator('.import-identity > div').filter({ has: page.locator('dt', { hasText: /^Grado y sección$/ }) }).locator('dd');
-    assert.match(await outsideCohort.innerText(), /^5(?:[.º°\s]*(?:de secundaria)?)?\s+F$/, 'El aula ajena se muestra tal como fue reconocida.');
+    assert.match(await outsideCohort.innerText(), /^6(?:[.º°\s]*(?:de secundaria)?)?\s+F$/, 'El aula ajena se muestra tal como fue reconocida.');
     assert(await page.locator('.import-review').getByRole('button', { name: 'Confirmar libreta', exact: true }).isDisabled());
     assert(await page.locator('.import-review').getByRole('button', { name: 'Eliminar libreta', exact: true }).isEnabled(), 'Una libreta de aula ajena se puede eliminar.');
     const originalUrl = await page.locator('.import-original iframe').getAttribute('src');
@@ -366,7 +366,7 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
       assertBlankManual(approved);
     }
     await navigate('Estudiantes');
-    assert.deepEqual(await page.getByLabel('Filtrar por aula').locator('option').allTextContents(), ['Las tres aulas habilitadas', '2.º F', '3.º F', '4.º F']);
+    assert.deepEqual(await page.getByLabel('Filtrar por aula').locator('option').allTextContents(), ['Todas las aulas habilitadas', '2.º F', '3.º F', '4.º F', '5.º F']);
     await openStudent(pupils[0].code, pupils[0].name);
     for (const name of ['Académico', 'Desempeño', 'Compromiso']) assert(await tab(name).isEnabled());
     await tab('Académico').click();
@@ -764,6 +764,61 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     await deleteImported(path.basename(blankCoursesPath));
     assert.equal((await snapshot()).state.students.length, 3);
 
+    // In 4.º F and 5.º F only, an entirely blank Indaga row is not taught.
+    // Its six remaining science grades must still be scanned and reviewed;
+    // confirming the PDF does not substitute the manual area confirmation.
+    const science = settings.areas.find(area => area.group === 'science');
+    const indagaIndex = science.competencies.findIndex(label => /^Indaga\b/i.test(label));
+    assert(indagaIndex >= 0);
+    for (const grade of [4, 5]) {
+      const indagaPupil = { code: `INDAGA-F${grade}-001`, name: `INDAGA ${grade === 4 ? 'CUARTO' : 'QUINTO'} PRUEBA`, grade };
+      const indagaPath = path.join(directory, `BOLETA_${grade}to año F_Secundaria_${indagaPupil.name.replaceAll(' ', '_')}.pdf`);
+      const scienceRows = science.competencies.map((_, index) => index === indagaIndex ? ['', '', '', 'AD'] : ['A', 'A', 'A', 'AD']);
+      await fs.writeFile(indagaPath, makeCompactPdf(settings, { ...indagaPupil, grades: ['A', 'A', 'A', 'AD'], gradesByArea: { [science.id]: scienceRows } }));
+      await navigate('Importar libretas');
+      await upload([indagaPath]);
+      const indagaPdf = (await snapshot()).state.pdfs.find(pdf => pdf.name === path.basename(indagaPath));
+      assert.equal(indagaPdf.extractedName, indagaPupil.name, 'La identidad de 4.º/5.º F procede también del nombre del archivo.');
+      assert.equal(indagaPdf.extractedGrade, `${grade}.º de secundaria`);
+      assert.equal(indagaPdf.ocr, false, 'Indaga no cursada no provoca OCR de una nota inexistente.');
+      assert.deepEqual(indagaPdf.areas.find(area => area.areaId === science.id).grades[indagaIndex], ['', '', '']);
+      await startPdfTrace();
+      await confirm(path.basename(indagaPath));
+      await tab('Académico').click();
+      const scienceCard = page.locator('.detail-area').filter({ has: page.getByRole('heading', { name: science.name, exact: true }) });
+      const scienceValidation = page.getByLabel(`${science.name}: área revisada y validada`, { exact: true });
+      const finalValidation = page.getByLabel('Académico revisado y validado', { exact: true });
+      assert.equal((await student(indagaPupil.code)).academic.find(area => area.areaId === science.id).validated, false);
+      assert.equal((await student(indagaPupil.code)).validated.academic, false);
+      assert(await scienceValidation.isEnabled(), 'La excepción permite revisar el área con Indaga totalmente vacía.');
+      assert(!await scienceValidation.isChecked(), 'La validación del área sigue siendo un acto manual.');
+      assert(await finalValidation.isDisabled());
+      assert.match(await scienceCard.innerText(), /Indaga/);
+      assert.match(await scienceCard.innerText(), /no se evalúa|no cursada/i);
+      assert.match(await scienceCard.innerText(), /3[.,]00/);
+      assert.match(await metric('General · G').innerText(), /75[.,]00/);
+      assert.match(await dimension('Académico').innerText(), /75[.,]00/);
+      const beforeIndagaValidation = structuredClone((await student(indagaPupil.code)).academic.map(area => ({ areaId: area.areaId, grades: area.grades })));
+      await check(scienceValidation); await saved();
+      assert(await finalValidation.isEnabled());
+      await check(finalValidation); await saved();
+      assert.equal((await student(indagaPupil.code)).validated.academic, true);
+      assert.deepEqual((await student(indagaPupil.code)).academic.map(area => ({ areaId: area.areaId, grades: area.grades })), beforeIndagaValidation, 'La revisión manual conserva Indaga vacía y las notas leídas.');
+      await pause(600);
+      assertRescanCalls(await stopPdfTrace(), indagaPdf.id, 0);
+      if (grade === 4) await scienceCard.screenshot({ path: '/tmp/circulos-indaga-manual-4f.png' });
+      await load();
+      await startPdfTrace();
+      await openStudent(indagaPupil.code, indagaPupil.name);
+      await tab('Académico').click();
+      assert(await page.getByLabel(`${science.name}: área revisada y validada`, { exact: true }).isChecked(), 'La validación manual persiste al recargar.');
+      assert(await page.getByLabel('Académico revisado y validado', { exact: true }).isChecked());
+      assert.deepEqual((await snapshot()).state.pdfs.find(pdf => pdf.id === indagaPdf.id).areas.find(area => area.areaId === science.id).grades[indagaIndex], ['', '', '']);
+      assertRescanCalls(await stopPdfTrace(), indagaPdf.id, 0);
+      await deleteImported(path.basename(indagaPath));
+      assert.equal((await snapshot()).state.students.length, 3);
+    }
+
     // A single missing active note is a pending reading, so its course stays
     // visible and its academic validation remains unavailable.
     const partialPupil = { code: 'NOTA-PARCIAL-F4-001', name: 'VALDIVIA ROJAS Clara Sofia', grade: 4 };
@@ -1080,8 +1135,8 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     assert.deepEqual(requests.filter(request => /^https?:/.test(request.url) && /\/api(?:\/|\?)/.test(new URL(request.url).pathname)), [], 'No se usa una API HTTP.');
     assert.deepEqual(requests.filter(request => /^https?:/.test(request.url) && new URL(request.url).origin !== new URL(appUrl).origin), [], 'No se descargan recursos externos.');
     assert.deepEqual(errors, [], 'Sin excepciones JavaScript.');
-    const report = { passed: true, classrooms: ['2.º F', '3.º F', '4.º F'], rejectedClassroom: '5.º F', bimesters: ['I', 'II', 'III'], provisionalImport: true, automaticIdentityWithoutColons: true, editableFullNameConfirmDeleteReview: true, filenameIdentityBeforeConfirmation: true, filenameWithoutCodeOrYear: true, manualNameFallback: true, missingGradesRemainPending: true, existingPdfFilenameRecoveryWithoutOcr: true, recoveryPreservesManualRecords: true, mixedRasterHeaderNativeGrades: true, reportGate: true, automaticAcademicOnly: true, progression: { firstTwo: 1.5, third: 3, score: 93.75, academic: 58.75 }, compactFourBimesterPdf: true, automatic45NotesPreview: true, all10Courses78Notes: true, supplementalCoursesSurviveRescan: true, incompleteReportAutomaticRescanOnce: true, readOnlyAcademicNotes: true, activeOriginalRescanPreservesManualRecords: true, contestOnlyEventTypes: true, threeRequiredContestFields: true, contestScores: { local: 40, regional: 70, national: 100 }, bestCompletedContest: true, scores: { a: 58.75, b: 95.5, c: 100, total: (58.75 + 95.5 + 100) / 3 }, replacementAndDuplicateCascade: true, exactFileReimport: true, indexedDBPersistenceAfterRestart: true, standaloneInlineHtml: true, offlineOperations: true, httpRequestsAfterLoad: operationHttpRequests, downloads, pageErrors: errors, consoleErrors };
-    Object.assign(report, { blankCoursesExcludedFromPreviewAndScores: true, ivOnlyCoursesRemainInactive: true, blankRawGradesPreserved: true, blankCoursesDoNotTriggerRescan: true, manualAcademicValidationWithoutGradeEntry: true, partiallyReadCourseRemainsPending: true, threeRequiredIncidentFields: true, unapprovedDiscountRemainsPending: true, threeRequiredFamilyFields: true, optionalFamilyEvidence: true, familyScore: 100, explicitStudentDeletion: true, studentDeletionWhileClosed: true, deletionCancellationPreservesData: true, deletionWaitsForRescanAndAutosave: true, explicitDeletionCascadesVersionsDuplicatesAndBlobs: true, reimportAfterExplicitStudentDeletion: true, totalCleanupRequiresTypedConfirmation: true, totalCleanupWhileClosed: true, totalCleanupRemovesOrphanPdfBlobs: true, totalCleanupPreservesParameters: true, realCleanupPreservesDemo: true, emptyCleanupBackup: true, emptyCleanupDashboardAndRestart: true });
+    const report = { passed: true, classrooms: ['2.º F', '3.º F', '4.º F', '5.º F'], rejectedClassroom: '6.º F', bimesters: ['I', 'II', 'III'], provisionalImport: true, automaticIdentityWithoutColons: true, editableFullNameConfirmDeleteReview: true, filenameIdentityBeforeConfirmation: true, filenameWithoutCodeOrYear: true, manualNameFallback: true, missingGradesRemainPending: true, existingPdfFilenameRecoveryWithoutOcr: true, recoveryPreservesManualRecords: true, mixedRasterHeaderNativeGrades: true, reportGate: true, automaticAcademicOnly: true, progression: { firstTwo: 1.5, third: 3, score: 93.75, academic: 58.75 }, compactFourBimesterPdf: true, automatic45NotesPreview: true, all10Courses78Notes: true, supplementalCoursesSurviveRescan: true, incompleteReportAutomaticRescanOnce: true, readOnlyAcademicNotes: true, activeOriginalRescanPreservesManualRecords: true, contestOnlyEventTypes: true, threeRequiredContestFields: true, contestScores: { local: 40, regional: 70, national: 100 }, bestCompletedContest: true, scores: { a: 58.75, b: 95.5, c: 100, total: (58.75 + 95.5 + 100) / 3 }, replacementAndDuplicateCascade: true, exactFileReimport: true, indexedDBPersistenceAfterRestart: true, standaloneInlineHtml: true, offlineOperations: true, httpRequestsAfterLoad: operationHttpRequests, downloads, pageErrors: errors, consoleErrors };
+    Object.assign(report, { indaga4F5FManualValidation: true, indagaBlankGradesPreserved: true, indagaExcludedFromAverages: true, indagaDoesNotTriggerRecovery: true, indagaManualValidationPersistsAfterReload: true, blankCoursesExcludedFromPreviewAndScores: true, ivOnlyCoursesRemainInactive: true, blankRawGradesPreserved: true, blankCoursesDoNotTriggerRescan: true, manualAcademicValidationWithoutGradeEntry: true, partiallyReadCourseRemainsPending: true, threeRequiredIncidentFields: true, unapprovedDiscountRemainsPending: true, threeRequiredFamilyFields: true, optionalFamilyEvidence: true, familyScore: 100, explicitStudentDeletion: true, studentDeletionWhileClosed: true, deletionCancellationPreservesData: true, deletionWaitsForRescanAndAutosave: true, explicitDeletionCascadesVersionsDuplicatesAndBlobs: true, reimportAfterExplicitStudentDeletion: true, totalCleanupRequiresTypedConfirmation: true, totalCleanupWhileClosed: true, totalCleanupRemovesOrphanPdfBlobs: true, totalCleanupPreservesParameters: true, realCleanupPreservesDemo: true, emptyCleanupBackup: true, emptyCleanupDashboardAndRestart: true });
     await fs.writeFile('/tmp/circulos-adjustment-result.json', JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
   } catch (error) {

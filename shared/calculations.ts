@@ -1,7 +1,7 @@
 import type { CohortRecord, Commitment, Settings, Student } from './types';
 import { ACTIVE_BIMESTERS, cohortKey, isReportApproved, normalizeCohort } from './policy';
 import { ACADEMIC_CONTEST_LABEL, contestPoints, contestRequiredFields, isAcademicContest } from './contests';
-import { activeAreas, hasActiveGrades } from './academic-policy';
+import { activeAreas, hasActiveGrades, omittedCompetencyIndexes } from './academic-policy';
 import { commitmentRequiredFields, incidentRequiredFields, isValidRecordDate } from './record-validation';
 
 export interface StudentResult {
@@ -148,10 +148,13 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
   const missingByBimester = ACTIVE_BIMESTERS.map(() => 0);
   for (const area of eligibleAreas) {
     const input = student.academic.find(a => a.areaId === area.id);
+    const omitted = new Set(omittedCompetencyIndexes(area, input, student));
+    const competencyCount = area.competencies.length - omitted.size;
     const bimesters: (number | null)[] = [];
     for (let b = 0; b < ACTIVE_BIMESTERS.length; b++) {
       const values: number[] = [];
       for (let c = 0; c < area.competencies.length; c++) {
+        if (omitted.has(c)) continue;
         expectedGrades++;
         const value = levels[input?.grades[c]?.[b] ?? ''];
         if (value) {
@@ -160,7 +163,7 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
           if (input?.validated) validatedGrades++;
         } else missingByBimester[b]++;
       }
-      bimesters.push(values.length === area.competencies.length ? mean(values) : null);
+      bimesters.push(values.length === competencyCount ? mean(values) : null);
     }
     bimestersByArea[area.id] = bimesters;
     areaAverages[area.id] = bimesters.every(present) ? mean(bimesters as number[]) : null;
@@ -248,7 +251,7 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
   const identityValid = ![student.code, student.name, student.grade, student.section].some(unresolvedIdentity);
   if (!identityValid) pending.push('Completar código, nombre, grado y sección del estudiante.');
   const cohortValid = Boolean(normalizeCohort(student.grade, student.section));
-  if (!cohortValid) pending.push('El grado y sección deben corresponder a 2.º F, 3.º F o 4.º F de secundaria.');
+  if (!cohortValid) pending.push('El grado y sección deben corresponder a 2.º F, 3.º F, 4.º F o 5.º F de secundaria.');
   if (!student.validated.academic) pending.push('Confirmar validación final de Académico.');
   if (!student.validated.performance) pending.push('Confirmar validación final de Desempeño.');
   if (!student.validated.commitment) pending.push('Confirmar validación final de Compromiso.');
