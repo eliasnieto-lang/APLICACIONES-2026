@@ -3,7 +3,7 @@ import { cohortRecordApplies } from './calculations.js';
 import { ACTIVE_BIMESTERS, normalizeCohort } from './policy.js';
 import { applyFilenameIdentity, resolveReportIdentity } from './filename-identity.js';
 import type { AppState, Grade, PdfRecord, Settings, Student } from './types.js';
-import type { ExtractedReport } from './pdf-parser.js';
+import { reportWarnings, type ExtractedReport } from './pdf-parser.js';
 
 type Identity = NonNullable<PdfRecord['confirmedIdentity']>;
 const stamp = () => new Date().toISOString();
@@ -174,6 +174,60 @@ export function applyReprocessedReport(state: AppState, pdfId: string, reading: 
     student.updatedAt = stamp();
     audit(student, 'Nueva lectura automática del PDF original', before, { code: pdf.extractedCode, name: pdf.extractedName, grade: pdf.extractedGrade, section: pdf.extractedSection });
   }
+  return pdf;
+}
+
+/** Refresh A from the retained original while preserving identity, approval and all manual B/C data. */
+export function applyRescannedGrades(state: AppState, pdfId: string, reading: ExtractedReport): PdfRecord {
+  const pdf = state.pdfs.find(record => record.id === pdfId);
+  if (!pdf) throw new ReportWorkflowError(404, 'PDF no encontrado.');
+  if (!['review', 'validated'].includes(pdf.status)) throw new ReportWorkflowError(409, 'Solo una libreta activa en revisión o validada permite actualizar sus notas.');
+  const student = state.students.find(candidate => candidate.id === pdf.studentId);
+  if (!student || !student.pdfIds.includes(pdf.id)) throw new ReportWorkflowError(409, 'La libreta debe estar vinculada a un expediente antes de actualizar sus notas.');
+  if (student.reportApproval && student.reportApproval.pdfId !== pdf.id) throw new ReportWorkflowError(409, 'Las notas solo pueden actualizarse desde la libreta activa del expediente.');
+  const before = structuredClone(student.academic);
+  // The previous PDF reading is independent evidence. Manual academic edits are
+  // deliberately excluded so a retry restores grades from the original document.
+  let usedRetainedGrade = false;
+  const priorOcr = pdf.ocr;
+  const gradeFromDocument = (recognized: Grade | undefined, retained: Grade | undefined): Grade => {
+    if (recognized && ['AD', 'A', 'B', 'C'].includes(recognized)) return recognized;
+    if (retained && ['AD', 'A', 'B', 'C'].includes(retained)) { usedRetainedGrade = true; return retained; }
+    return '';
+  };
+  pdf.areas = state.settings.areas.map(def => {
+    const source = reading.areas.find(area => area.areaId === def.id);
+    const previous = pdf.areas.find(area => area.areaId === def.id);
+    const grades = def.competencies.map((_, index) => ACTIVE_BIMESTERS.map((__, period) => {
+      const recognized = source?.grades[index]?.[period];
+      const retained = previous?.grades[index]?.[period];
+      return gradeFromDocument(recognized, retained);
+    }));
+    return { areaId: def.id, grades, validated: grades.length > 0 && grades.every(row => row.length === ACTIVE_BIMESTERS.length && row.every(Boolean)) };
+  });
+  const supplemental = reading.supplementalAreas ?? [];
+  const previousSupplemental = pdf.supplementalAreas ?? [];
+  if (supplemental.length || previousSupplemental.length) {
+    const definitions = [...supplemental, ...previousSupplemental.filter(previous => !supplemental.some(area => area.definition.id === previous.definition.id))];
+    pdf.supplementalAreas = definitions.map(area => {
+      const source = supplemental.find(candidate => candidate.definition.id === area.definition.id);
+      const previous = previousSupplemental.find(candidate => candidate.definition.id === area.definition.id);
+      return { definition: structuredClone(area.definition), grades: area.definition.competencies.map(competency => {
+        const sourceIndex = source?.definition.competencies.indexOf(competency) ?? -1;
+        const previousIndex = previous?.definition.competencies.indexOf(competency) ?? -1;
+        return ACTIVE_BIMESTERS.map((_, period) => gradeFromDocument(sourceIndex >= 0 ? source?.grades[sourceIndex]?.[period] : undefined, previousIndex >= 0 ? previous?.grades[previousIndex]?.[period] : undefined));
+      }) };
+    });
+  }
+  pdf.text = reading.text;
+  pdf.ocr = reading.ocr || usedRetainedGrade && priorOcr;
+  const initialSummary = new Set(reportWarnings(reading, state.settings));
+  pdf.warnings = [...new Set([...reading.warnings.filter(warning => !initialSummary.has(warning)), ...reportWarnings(pdf, state.settings)])];
+  student.academic = structuredClone(pdf.areas);
+  const eligible = state.settings.areas.filter(area => area.eligible);
+  student.validated.academic = eligible.length > 0 && eligible.every(def => student.academic.find(area => area.areaId === def.id)?.validated === true);
+  student.updatedAt = stamp();
+  audit(student, 'Actualización automática de notas desde el PDF original', before, student.academic);
   return pdf;
 }
 

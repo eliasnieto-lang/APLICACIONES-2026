@@ -15,7 +15,8 @@ import { calculateStudent, validateSettings, cohortRecordApplies } from '../shar
 import { normalizeCohort, isReportApproved } from '../shared/policy.js';
 import { migrateState } from '../shared/migrations.js';
 import { resolveReportIdentity } from '../shared/filename-identity.js';
-import { registerImportedReport, identifyReport, applyReprocessedReport, confirmReport, deleteReportAndStudent, linkAcademic, ReportWorkflowError } from '../shared/report-workflow.js';
+import { registerImportedReport, identifyReport, applyReprocessedReport, applyRescannedGrades, confirmReport, deleteReportAndStudent, linkAcademic, ReportWorkflowError } from '../shared/report-workflow.js';
+import { ACADEMIC_CONTEST_LABEL, isAcademicContest } from '../shared/contests.js';
 import { Store, CapacityError } from './store.js';
 import { extractPdf } from './pdf.js';
 import { buildWorkbook } from './export.js';
@@ -38,6 +39,7 @@ const findStudent=(state:AppState,id:string)=>{const student=state.students.find
 function syncExistingCohortRecords(student:Student,settings:AppState['settings']) {
   const before={institutional:structuredClone(student.institutional),family:structuredClone(student.family)};
   for(const kind of ['institutional','family'] as const)for(const record of student[kind]){
+    if(kind==='institutional'&&isAcademicContest(record))continue;
     if(!record.catalogId)continue;
     const criterion=settings.cohortRecords?.find(value=>value.id===record.catalogId&&value.kind===kind&&cohortRecordApplies(value,student));
     if(!criterion){delete record.catalogId;record.validated=false;continue;}
@@ -112,6 +114,7 @@ export function createApp(options: {dataDir?: string} = {}) {
   });
   app.put('/api/settings',(req,res)=>{
     const ds=dataset(req),state=store.read(ds),settings=settingsSchema.parse(req.body);
+    settings.activityTypes=[ACADEMIC_CONTEST_LABEL];
     if(state.settings.closed&&(req.body.confirmReopen!==true||settings.closed))throw new HttpError(423,'Confirme explícitamente la reapertura de la evaluación antes de modificar los parámetros.');
     checkErrors(validateSettings(settings));
     const criteriaChanged=!same({...state.settings,closed:false},{...settings,closed:false});
@@ -190,11 +193,31 @@ export function createApp(options: {dataDir?: string} = {}) {
     if(!req.body||typeof req.body!=='object')throw new HttpError(400,'Envíe una acción y un estudiante para actualizar el PDF.');
     const pdf=state.pdfs.find(p=>p.id===req.params.id);if(!pdf)throw new HttpError(404,'PDF no encontrado.');
     const action=req.body.action;
-    if(!['link','replace','validate','identify','reprocess'].includes(action))throw new HttpError(400,'Acción de PDF no válida.');
+    if(!['link','replace','validate','identify','reprocess','rescan-grades'].includes(action))throw new HttpError(400,'Acción de PDF no válida.');
     if(action==='identify'){
       if(typeof req.body.name!=='string')throw new HttpError(400,'Indique los apellidos y nombres del estudiante.');
       const updated=identifyReport(state,pdf.id,{name:req.body.name});
       store.save(ds,state);res.json(updated);return;
+    }
+    if(action==='rescan-grades'){
+      if(!['review','validated'].includes(pdf.status))throw new HttpError(409,'Solo una libreta activa en revisión o validada permite actualizar sus notas.');
+      const content=store.file(ds,pdf.id);
+      if(!content)throw new HttpError(404,'No está disponible el PDF original para actualizar sus notas.');
+      if(!content.subarray(0,1024).includes(Buffer.from('%PDF-'))||createHash('sha256').update(content).digest('hex')!==pdf.hash)throw new HttpError(400,'El archivo original no es un PDF válido o no coincide con la libreta conservada.');
+      const directory=await mkdtemp(path.join(os.tmpdir(),'circulos-notas-'));
+      try{
+        const source=path.join(directory,'original.pdf');await writeFile(source,content);
+        const reading=await extractPdf(source,structuredClone(state.settings),{identityFromFilename:true,forceGrades:true});
+        let updated:PdfRecord|undefined;
+        store.transaction(()=>{
+          const latest=store.read(ds);unlocked(latest);
+          const current=latest.pdfs.find(record=>record.id===pdf.id);
+          if(!current||!same(current,pdf)||!same(state.settings,latest.settings))throw new HttpError(409,'El documento o sus parámetros cambiaron durante la lectura. Vuelva a actualizar sus notas.');
+          updated=applyRescannedGrades(latest,pdf.id,reading);
+          store.save(ds,latest);
+        });
+        res.json(updated);return;
+      }finally{await rm(directory,{recursive:true,force:true});}
     }
     if(action==='reprocess'){
       if(!['pending','review','failed'].includes(pdf.status))throw new HttpError(409,'Esta versión ya está confirmada, duplicada o reemplazada.');

@@ -2,6 +2,7 @@ import type { AppState, PdfRecord, Student } from './types';
 import { isReportApproved, normalizeCohort } from './policy';
 import { applyFilenameIdentity, parseReportFilename, resolveReportIdentity } from './filename-identity';
 import { registerImportedReport } from './report-workflow';
+import { ACADEMIC_CONTEST_LABEL } from './contests';
 
 const identityKey = (value: string): string => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('es');
 const validTimestamp = (value: string | undefined): value is string => Boolean(value?.trim() && Number.isFinite(Date.parse(value)));
@@ -22,6 +23,7 @@ export function migrateState(state: AppState): AppState {
   const upgrading = result.settings.workflowVersion !== 2 || result.settings.progressionComparison !== 'first_two_vs_third';
   result.settings.workflowVersion = 2;
   result.settings.progressionComparison = 'first_two_vs_third';
+  result.settings.activityTypes = [ACADEMIC_CONTEST_LABEL];
   // The changed academic comparison must be reviewed and closed again under I–III.
   if (upgrading) { result.settings.criteriaApproved = false; result.settings.closed = false; }
 

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { extractPdf, parseReportText } from '../server/pdf.js';
 import type { Settings } from '../shared/types.js';
+import { SUPPLEMENTAL_REPORT_AREAS } from '../shared/report-catalog.js';
 
 const settings: Settings = {
   year: 2027, version: 'test',
@@ -221,6 +222,155 @@ test('uses printed bimester positions when an aligned middle cell is empty', () 
 test('an area outside the catalog cannot reuse the previous area competencies', () => {
   const result = parseReportText('Matemática\nResuelve problemas de cantidad A B C\nINGLÉS\nResuelve problemas de regularidad AD AD AD', settings);
   assert.deepEqual(result.areas[0].grades, [['A', 'B', 'C'], ['', '', '']]);
+});
+
+const compactSettings: Settings = { ...settings, areas: [
+  { id: 'math', name: 'Matemática', group: 'math', eligible: true, competencies: ['Resuelve problemas de cantidad', 'Resuelve problemas de regularidad, equivalencia y cambio', 'Resuelve problemas de forma, movimiento y localización', 'Resuelve problemas de gestión de datos e incertidumbre'] },
+  { id: 'science', name: 'Ciencia y Tecnología', group: 'science', eligible: true, competencies: ['Indaga mediante métodos científicos', 'Explica el mundo físico', 'Diseña y construye soluciones tecnológicas'] },
+  { id: 'communication', name: 'Comunicación', group: 'communication', eligible: true, competencies: ['Se comunica oralmente en su lengua materna', 'Lee diversos tipos de textos', 'Escribe diversos tipos de textos'] },
+  { id: 'social', name: 'Ciencias Sociales', group: 'social', eligible: true, competencies: ['Construye interpretaciones históricas', 'Gestiona responsablemente el espacio y el ambiente', 'Gestiona responsablemente los recursos económicos'] },
+  { id: 'dpcc', name: 'Desarrollo Personal, Ciudadanía y Cívica', group: 'dpcc', eligible: true, competencies: ['Construye su identidad', 'Convive y participa democráticamente'] },
+] };
+const compactExpected = [
+  [['A', 'B', 'AD'], ['C', 'AD', 'B'], ['B', 'C', 'A'], ['AD', 'A', 'C']],
+  [['C', 'B', 'AD'], ['A', 'AD', 'C'], ['B', 'A', 'AD']],
+  [['AD', 'C', 'B'], ['B', 'AD', 'A'], ['C', 'A', 'B']],
+  [['A', 'C', 'AD'], ['AD', 'B', 'C'], ['B', 'A', 'C']],
+  [['C', 'AD', 'A'], ['AD', 'C', 'B']],
+];
+const compactHeading = 'ÁREA'.padEnd(50) + 'COMPETENCIAS'.padEnd(200) + ['I', 'II', 'III', 'IV'].map(value => value.padEnd(8)).join('');
+const compactRow = (area: string, competency: string, cells: string[]) => area.padEnd(50) + competency.padEnd(200) + cells.map(value => value.padEnd(8)).join('');
+
+test('compact SIAGIE rows read all 45 active grades when the area shares its first competency line', () => {
+  const printed = [
+    ['MATEMÁTICA', 'RESUELVE PROBLEMAS DE CANTIDAD'],
+    ['', 'RESUELVE PROBLEMAS DE REGULARIDAD'],
+    ['', 'RESUELVE PROBLEMAS DE FORMA'],
+    ['', 'RESUELVE PROBLEMAS DE GESTIÓN DE DATOS'],
+    ['CIENCIA Y TECNOLOGÍA', 'INDAGA MEDIANTE MÉTODOS CIENTÍFICOS PARA CONSTRUIR SUS CONOCIMIENTOS'],
+    ['', 'EXPLICA EL MUNDO FÍSICO BASÁNDOSE EN CONOCIMIENTOS SOBRE LOS SERES VIVOS, MATERIA Y ENERGÍA, BIODIVERSIDAD, TIERRA Y UNIVERSO'],
+    ['', 'DISEÑA Y CONSTRUYE SOLUCIONES TECNOLÓGICAS PARA RESOLVER PROBLEMAS DE SU ENTORNO'],
+    ['COMUNICACIÓN', 'SE COMUNICA ORALMENTE'],
+    ['', 'LEE DIVERSOS TIPOS DE TEXTOS ESCRITOS EN SU LENGUA MATERNA'],
+    ['', 'ESCRIBE DIVERSOS TIPOS DE TEXTOS EN SU LENGUA MATERNA'],
+    ['CIENCIAS SOCIALES', 'CONSTRUYE INTERPRETACIONES HISTÓRICAS'],
+    ['', 'GESTIONA RESPONSABLEMENTE EL ESPACIO Y EL AMBIENTE'],
+    ['', 'GESTIONA RESPONSABLEMENTE LOS RECURSOS ECONÓMICOS'],
+    ['DESARROLLO PERSONAL, CIUDADANÍA Y CÍVICA', 'CONSTRUYE SU IDENTIDAD'],
+    ['', 'CONVIVE Y PARTICIPA DEMOCRÁTICAMENTE EN LA BÚSQUEDA DEL BIEN COMÚN'],
+  ];
+  const expected = compactExpected.flat();
+  const report = parseReportText([compactHeading, ...printed.map(([area, label], index) => compactRow(area, label, [...expected[index], 'C']))].join('\n'), compactSettings);
+  assert.deepEqual(report.areas.map(area => area.grades), compactExpected);
+  assert.equal(report.areas.flatMap(area => area.grades.flat()).filter(Boolean).length, 45);
+  assert.ok(!report.warnings.some(warning => warning.includes('casillas del catálogo') || warning.includes('no pudieron vincularse')));
+});
+
+test('wrapped area cells beside the first competency retain every active grade with a blank IV', () => {
+  const lines = [compactHeading];
+  for (const [areaIndex, area] of compactSettings.areas.entries()) {
+    const areaLines = areaIndex === 1 ? ['CIENCIA Y', 'TECNOLOGÍA'] : areaIndex === 4 ? ['DESARROLLO PERSONAL,', 'CIUDADANÍA Y CÍVICA'] : [area.name];
+    area.competencies.forEach((label, competency) => {
+      lines.push(compactRow(competency === 0 ? areaLines[0] : '', label, [...compactExpected[areaIndex][competency], '']));
+      if (competency === 0 && areaLines[1]) lines.push(areaLines[1]);
+    });
+  }
+  const report = parseReportText(lines.join('\n'), compactSettings);
+  assert.deepEqual(report.areas.map(area => area.grades), compactExpected);
+});
+
+test('native missing first, middle and last cells preserve their printed columns even with one or two grades', () => {
+  const rows = [
+    compactRow('MATEMÁTICA', compactSettings.areas[0].competencies[0], ['', 'B', 'AD', 'C']),
+    compactRow('', compactSettings.areas[0].competencies[1], ['A', '', 'C', '']),
+    compactRow('', compactSettings.areas[0].competencies[2], ['', '', 'B', '']),
+    compactRow('', compactSettings.areas[0].competencies[3], ['', '', '', 'AD']),
+  ];
+  const report = parseReportText([compactHeading, ...rows].join('\n'), compactSettings);
+  assert.deepEqual(report.areas[0].grades, [['', 'B', 'AD'], ['A', '', 'C'], ['', '', 'B'], ['', '', '']]);
+});
+
+test('explicit table delimiters preserve blanks and exclude the fourth column', () => {
+  const report = parseReportText(`| MATEMÁTICA | Resuelve problemas de cantidad | | AD | C | B |
+| | Resuelve problemas de regularidad | B | | AD | |`, settings);
+  assert.deepEqual(report.areas[0].grades, [['', 'AD', 'C'], ['B', '', 'AD']]);
+});
+
+test('separately drawn grade cells are associated only with the preceding identifiable competency', () => {
+  const cells = ['A', '', 'AD', 'C'].map((cell, index) => ' '.repeat(250 + index * 8) + cell).filter(line => line.trim());
+  const report = parseReportText([compactHeading, 'MATEMÁTICA', 'Resuelve problemas de cantidad', ...cells, 'Otra competencia', ' '.repeat(250) + 'B', ' '.repeat(258) + 'C', ' '.repeat(266) + 'AD'].join('\n'), settings);
+  assert.deepEqual(report.areas[0].grades, [['A', '', 'AD'], ['', '', '']]);
+});
+
+test('a neighboring unknown area or an unrelated prefix cannot donate grades to configured competencies', () => {
+  const report = parseReportText(`MATEMÁTICA Resuelve problemas de cantidad A B C
+INGLÉS Resuelve problemas de regularidad AD AD AD
+MATEMÁTICA
+Resumen de clase Resuelve problemas de regularidad C C C
+Resuelve problemas de regularidad A B C
+Resuelve problemas de regularidad AD AD AD
+Resuelve problemas de regularidad A B C`, settings);
+  assert.deepEqual(report.areas[0].grades, [['A', 'B', 'C'], ['', '', '']]);
+  assert.ok(report.warnings.some(warning => warning.includes('repetida')));
+});
+
+test('all ten report subjects retain 78 scanned grades without changing the approved five-area catalog', () => {
+  const original = structuredClone(compactSettings);
+  const rows = [compactHeading];
+  for (const area of [...compactSettings.areas, ...SUPPLEMENTAL_REPORT_AREAS]) {
+    area.competencies.forEach((competency, index) => rows.push(compactRow(index === 0 ? area.name : '', competency, ['AD', 'B', 'C', 'A'])));
+  }
+  const report = parseReportText(rows.join('\n'), compactSettings);
+  assert.equal(report.areas.length, 5);
+  assert.equal(report.supplementalAreas?.length, 5);
+  assert.deepEqual(report.supplementalAreas?.map(area => area.definition.id), ['ingles', 'educacion-fisica', 'arte-cultura', 'educacion-religiosa', 'educacion-trabajo']);
+  assert.equal([...report.areas, ...(report.supplementalAreas || [])].flatMap(area => area.grades.flat()).filter(Boolean).length, 78);
+  for (const extra of report.supplementalAreas || []) for (const grades of extra.grades) assert.deepEqual(grades, ['AD', 'B', 'C']);
+  assert.deepEqual(compactSettings, original);
+  assert.ok(!report.warnings.some(warning => warning.includes('casillas del catálogo')));
+});
+
+test('only supplemental subjects printed in the report contribute to expected cells or returned definitions', () => {
+  const rows = [compactHeading, ...compactSettings.areas.flatMap(area => area.competencies.map((competency, index) => compactRow(index === 0 ? area.name : '', competency, ['A', 'B', 'C', ''])))];
+  const base = parseReportText(rows.join('\n'), compactSettings);
+  assert.equal(base.supplementalAreas, undefined);
+  assert.ok(!base.warnings.some(warning => warning.includes('casillas del catálogo')));
+  rows.push('EDUCACIÓN FÍSICA', compactRow('', 'Asume una vida saludable', ['AD', '', 'B', '']));
+  const partial = parseReportText(rows.join('\n'), compactSettings);
+  assert.deepEqual(partial.supplementalAreas?.map(area => area.definition.id), ['educacion-fisica']);
+  assert.deepEqual(partial.supplementalAreas?.[0].grades, [['', '', ''], ['AD', '', 'B'], ['', '', '']]);
+  assert.ok(partial.warnings.some(warning => warning.includes('47 de 54')));
+});
+
+test('OCR whitespace artifacts are tolerated without substituting letters or matching an unrelated prefix', () => {
+  const report = parseReportText(`MATEMÁTICA
+Resuelve problem as DECANTIDAD AD B C
+Resuelve problemas DEREGULARIDAD A B AD`, settings);
+  assert.deepEqual(report.areas[0].grades, [['AD', 'B', 'C'], ['A', 'B', 'AD']]);
+  const unknown = parseReportText(`MATEMÁTICA
+Resuelve problemas de cantidades AD AD AD
+Resuelve problemas de regubridad C C C`, settings);
+  assert.deepEqual(unknown.areas[0].grades, [['', '', ''], ['', '', '']]);
+});
+
+test('an area and its first competency may both wrap across the same two table lines', () => {
+  const report = parseReportText(`CIENCIA Y          Indaga mediante métodos
+TECNOLOGÍA         científicos para construir sus conocimientos A B C
+DESARROLLO PERSONAL,       Convive y participa
+CIUDADANÍA Y CÍVICA        democráticamente AD C B`, compactSettings);
+  assert.deepEqual(report.areas[1].grades[0], ['A', 'B', 'C']);
+  assert.deepEqual(report.areas[4].grades[1], ['AD', 'C', 'B']);
+});
+
+test('explicit English and religion text cannot populate a stale Communication or DPCC area', () => {
+  const report = parseReportText(`COMUNICACIÓN
+Se comunica oralmente en inglés como lengua extranjera A B C
+Lee diversos tipos de textos escritos en inglés como lengua extranjera AD B C
+Escribe diversos tipos de textos en inglés como lengua extranjera B C AD
+DESARROLLO PERSONAL, CIUDADANÍA Y CÍVICA
+Construye su identidad como persona humana, amada por Dios, digna, libre y trascendente C C C`, compactSettings);
+  assert.deepEqual(report.areas[2].grades, [['', '', ''], ['', '', ''], ['', '', '']]);
+  assert.deepEqual(report.areas[4].grades, [['', '', ''], ['', '', '']]);
 });
 
 test('extracts a real PDF through poppler', async () => {

@@ -1,10 +1,11 @@
 import { documentUrl } from './runtime';
 import { useEffect, useRef, useState } from 'react';
-import type { ClipboardEvent } from 'react';
 import { ArrowLeft, ArrowRight, BookOpen, Check, CheckCircle2, ChevronDown, Clock3, FileText, History, Info, LoaderCircle, Plus, Save, ShieldCheck, Trash2, Users } from 'lucide-react';
-import type { AcademicArea, Commitment, Dataset, Grade, PdfRecord, Settings, Student } from '../shared/types';
+import type { AreaDefinition, Commitment, Dataset, Grade, PdfRecord, Settings, Student } from '../shared/types';
 import { calculateStudent, fmt } from '../shared/calculations';
 import { ACTIVE_BIMESTERS, ALLOWED_COHORTS, isReportApproved, normalizeCohort } from '../shared/policy';
+import { ACADEMIC_CONTEST_LABEL, ACADEMIC_CONTEST_TYPE, CONTEST_SCOPE_OPTIONS, contestRequiredFields, isContestScope } from '../shared/contests';
+import { PDF_GRADE_PARSER_VERSION } from '../shared/pdf-parser';
 
 interface Props {
   student: Student;
@@ -13,6 +14,7 @@ interface Props {
   onSave: (student: Student) => Promise<Student>;
   onBack: () => void;
   onReview?: () => void;
+  onRescan?: () => Promise<void>;
   readOnly: boolean;
   onNext: () => void;
   dataset?: Dataset;
@@ -35,12 +37,17 @@ function Metric({ label, value, hint, na }: { label: string; value: number | nul
   return <div className="detail-metric"><span>{label}</span><strong>{na ? 'No aplica' : value === null ? 'Pendiente' : fmt(value)}</strong>{hint && <small>{hint}</small>}</div>;
 }
 
-export default function StudentDetail({ student, settings, pdfs, onSave, onBack, onReview, readOnly, onNext, dataset = 'real' }: Props) {
+function GradeTable({ definition, grades }: { definition: AreaDefinition; grades: Grade[][] }) {
+  return <div className="table-wrap"><table className="academic-table"><thead><tr><th>Competencia</th>{ACTIVE_BIMESTERS.map(b => <th key={b}>{b} bim.</th>)}</tr></thead><tbody>{definition.competencies.map((competency, row) => <tr key={row}><td>{competency}</td>{ACTIVE_BIMESTERS.map((b, col) => <td key={b}><span className={`grade-select grade-${grades[row]?.[col] || 'empty'}`} aria-label={`${definition.name}, ${competency}, bimestre ${b}: ${grades[row]?.[col] || 'pendiente de lectura'}`}>{grades[row]?.[col] || '—'}</span></td>)}</tr>)}</tbody></table></div>;
+}
+
+export default function StudentDetail({ student, settings, pdfs, onSave, onBack, onReview, onRescan, readOnly, onNext, dataset = 'real' }: Props) {
   const [draft, setDraft] = useState<Student>(() => structuredClone(student));
   const [tab, setTab] = useState<Tab>('academic');
   const [status, setStatus] = useState<SaveStatus>('saved');
   const [saveError, setSaveError] = useState('');
-  const [pasteNotice, setPasteNotice] = useState('');
+  const [rescanning, setRescanning] = useState(false);
+  const [rescanError, setRescanError] = useState('');
   const [showProfile, setShowProfile] = useState(false);
   const draftRef = useRef(draft);
   const version = useRef(0);
@@ -51,6 +58,8 @@ export default function StudentDetail({ student, settings, pdfs, onSave, onBack,
   const saveContext = useRef({ studentId: student.id, dataset });
   const flushRef = useRef<() => Promise<boolean>>(async () => true);
   const mounted = useRef(true);
+  const rescanInFlight = useRef(false);
+  const rescanAttempts = useRef(new Set<string>());
   // The parent clears the previous dataset in an effect. During that intermediate
   // render, keep its save callback so an unmount cannot write demo data to real.
   if (saveContext.current.studentId === student.id && saveContext.current.dataset === dataset) saveFn.current = onSave;
@@ -126,11 +135,13 @@ export default function StudentDetail({ student, settings, pdfs, onSave, onBack,
     if (student.id !== draftRef.current.id) return;
     setDraft(current => {
       if (student.updatedAt < current.updatedAt) return current;
-      const next = { ...current, history: student.history, updatedAt: student.updatedAt };
+      // Grades come only from the scanner. Refresh them after a rescan while
+      // keeping any newer manual performance or commitment edits in the draft.
+      const next = { ...current, academic: structuredClone(student.academic), validated: { ...current.validated, academic: student.validated.academic }, history: student.history, updatedAt: student.updatedAt };
       draftRef.current = next;
       return next;
     });
-  }, [student.history, student.updatedAt]);
+  }, [student.academic, student.validated.academic, student.history, student.updatedAt]);
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
@@ -162,7 +173,8 @@ export default function StudentDetail({ student, settings, pdfs, onSave, onBack,
     if (await flushRef.current() && mounted.current && version.current === confirmingVersion && draftRef.current.id === confirmingStudent) change(mutate);
   };
   const associatedPdfs = pdfs.filter(pdf => pdf.studentId === draft.id || draft.pdfIds.includes(pdf.id));
-  const reportApproved = isReportApproved(draft) && associatedPdfs.some(pdf => pdf.id === draft.reportApproval?.pdfId && pdf.studentId === draft.id && pdf.status === 'validated');
+  const approvedPdf = associatedPdfs.find(pdf => pdf.id === draft.reportApproval?.pdfId && pdf.studentId === draft.id && pdf.status === 'validated');
+  const reportApproved = isReportApproved(draft) && Boolean(approvedPdf);
   const computed = calculateStudent(draft, settings);
   const result = reportApproved ? computed : {
     ...computed, a: null, b: null, c: null, total: null, pa: 0, pb: 0, pc: 0, progress: 0,
@@ -177,55 +189,38 @@ export default function StudentDetail({ student, settings, pdfs, onSave, onBack,
   const required = attendance.required !== null && attendance.exempted !== null ? attendance.required - attendance.exempted : null;
   const academicAreas = settings.areas.filter(area => area.eligible);
   const bimestres = ACTIVE_BIMESTERS;
+  const supplementalAreas = approvedPdf?.supplementalAreas ?? [];
+  const supplementalIncomplete = supplementalAreas.some(({ definition, grades }) => definition.competencies.some((_, row) => bimestres.some((_, col) => !['AD', 'A', 'B', 'C'].includes(grades[row]?.[col] ?? ''))));
+  const academicValidated = draft.validated.academic && academicAreas.every(definition => draft.academic.find(area => area.areaId === definition.id)?.validated);
   const cohort = normalizeCohort(draft.grade, draft.section);
   const reviewReport = () => void navigate(onReview ?? onBack);
+  const gradeScanKey = approvedPdf ? `${dataset}:${draft.id}:${approvedPdf.id}:${PDF_GRADE_PARSER_VERSION}` : '';
 
-  const academicArea = (next: Student, areaId: string): AcademicArea => {
-    let found = next.academic.find(area => area.areaId === areaId);
-    if (!found) {
-      const definition = settings.areas.find(area => area.id === areaId)!;
-      found = { areaId, grades: definition.competencies.map(() => ['', '', '']), validated: false };
-      next.academic.push(found);
+  const rescanGrades = async () => {
+    if (!onRescan || readOnly || rescanInFlight.current || !reportApproved || !approvedPdf) return;
+    const scanningStudent = draftRef.current.id;
+    const scanningPdf = approvedPdf.id;
+    rescanInFlight.current = true;
+    rescanAttempts.current.add(gradeScanKey);
+    setRescanning(true);
+    setRescanError('');
+    try {
+      if (await flushRef.current() && mounted.current && draftRef.current.id === scanningStudent && draftRef.current.reportApproval?.pdfId === scanningPdf) await onRescan();
+    } catch (error) {
+      if (mounted.current && draftRef.current.id === scanningStudent) setRescanError(error instanceof Error ? error.message : 'No se pudo volver a leer la libreta PDF.');
+    } finally {
+      rescanInFlight.current = false;
+      if (mounted.current) setRescanning(false);
     }
-    return found;
   };
 
-  const gradeChange = (areaId: string, competency: number, bimestre: number, value: Grade) => {
-    if (!reportApproved) return;
-    change(next => {
-      const area = academicArea(next, areaId);
-      if (!area.grades[competency]) area.grades[competency] = ['', '', ''];
-      area.grades[competency][bimestre] = value;
-      area.validated = false;
-      next.validated.academic = false;
-    });
-  };
-
-  const pasteGrades = (event: ClipboardEvent, areaId: string, startRow: number, startCol: number) => {
-    if (readOnly || !reportApproved) return;
-    const text = event.clipboardData.getData('text/plain');
-    if (!/[\t\n]/.test(text)) return;
-    event.preventDefault();
-    const rows = text.trim().split(/\r?\n/).map(line => line.split('\t').map(value => value.trim().toUpperCase()));
-    const definition = settings.areas.find(area => area.id === areaId)!;
-    let applied = 0;
-    let ignored = 0;
-    change(next => {
-      const area = academicArea(next, areaId);
-      rows.forEach((row, rowOffset) => row.forEach((value, colOffset) => {
-        const rowIndex = startRow + rowOffset;
-        const colIndex = startCol + colOffset;
-        if (rowIndex >= definition.competencies.length || colIndex >= ACTIVE_BIMESTERS.length) { ignored += 1; return; }
-        if (!['', 'AD', 'A', 'B', 'C'].includes(value)) { ignored += 1; return; }
-        if (!area.grades[rowIndex]) area.grades[rowIndex] = ['', '', ''];
-        area.grades[rowIndex][colIndex] = value as Grade;
-        applied += 1;
-      }));
-      area.validated = false;
-      next.validated.academic = false;
-    });
-    setPasteNotice(`${applied} casillas pegadas.${ignored ? ` Se omitieron ${ignored} valores fuera de la tabla o no reconocidos.` : ''} Revisa y confirma el área.`);
-  };
+  useEffect(() => {
+    if (!onRescan || readOnly || !reportApproved || !gradeScanKey || (computed.academicComplete && academicValidated && !supplementalIncomplete) || !academicAreas.some(area => area.competencies.length) || rescanAttempts.current.has(gradeScanKey)) return;
+    // Repair an older incomplete reading once. An incomplete result or an error
+    // stays visible for review and can be retried explicitly with the button.
+    rescanAttempts.current.add(gradeScanKey);
+    void rescanGrades();
+  }, [gradeScanKey, reportApproved, computed.academicComplete, academicValidated, supplementalIncomplete, readOnly, onRescan]);
 
   const commitmentChange = (kind: 'institutional' | 'family', id: string, patch: Partial<Commitment>, invalidate = true) => change(next => {
     const record = next[kind].find(item => item.id === id)!;
@@ -234,7 +229,40 @@ export default function StudentDetail({ student, settings, pdfs, onSave, onBack,
     next.validated.commitment = false;
   });
 
+  const renderContests = () => <section className="card detail-records">
+    <div className="section-heading">
+      <div><span className="eyebrow">PI · ESTUDIANTE</span><h3>CONCURSOS ACADÉMICOS</h3><p className="muted">Completa el tipo de evento, la fecha y la ubicación o puesto. Los demás detalles son opcionales.</p></div>
+      <button type="button" className="button secondary" disabled={readOnly} onClick={() => change(next => {
+        next.institutional.push({ ...emptyRecord(), name: ACADEMIC_CONTEST_LABEL, eventType: ACADEMIC_CONTEST_TYPE, placement: '', required: true, status: 'fulfilled' });
+        next.validated.commitment = false;
+      })}><Plus size={16} /> Agregar concurso</button>
+    </div>
+    <p className="muted">Puntaje por alcance: local 40, regional 70 y nacional 100. PI toma el mayor puntaje de los concursos registrados con datos completos. El resultado es provisional hasta confirmar los registros.</p>
+    {draft.institutional.length === 0 && <div className="empty-state detail-empty"><Users size={24} /><p>No hay concursos académicos registrados.</p><small>Agrega un concurso cuando cuentes con los tres datos requeridos.</small></div>}
+    {draft.institutional.map((record, index) => {
+      const selectedScope = record.eventType === ACADEMIC_CONTEST_TYPE ? CONTEST_SCOPE_OPTIONS.find(scope => scope.value === record.scope) : undefined;
+      const complete = contestRequiredFields(record).length === 0;
+      return <div className="commitment-card" key={record.id}>
+        <div className="detail-record-header"><strong>{String(index + 1).padStart(2, '0')} · {record.name || 'CONCURSOS ACADÉMICOS'}</strong><span className={`badge ${record.validated ? 'success' : 'warning'}`}>{record.validated ? 'Confirmado' : 'Por confirmar'}</span><button className="icon-button danger" aria-label={`Eliminar ${record.name || 'concurso'}`} disabled={readOnly || Boolean(record.catalogId)} onClick={() => { if (window.confirm(`¿Eliminar el registro “${record.name || 'sin nombre'}”? Se conservará el cambio en el historial.`)) change(next => { next.institutional = next.institutional.filter(item => item.id !== record.id); next.validated.commitment = false; }); }}><Trash2 size={15} /></button></div>
+        {record.eventType !== ACADEMIC_CONTEST_TYPE && <p className="muted"><Info size={14} /> Registro anterior conservado. Selecciona un tipo de concurso académico para incorporarlo a la regla actual.</p>}
+        <div className="form-grid">
+          <label className="field"><span>Tipo de evento · requerido</span><select value={selectedScope?.value ?? ''} disabled={readOnly} onChange={e => commitmentChange('institutional', record.id, { eventType: ACADEMIC_CONTEST_TYPE, scope: isContestScope(e.target.value) ? e.target.value : undefined })}><option value="">Seleccionar tipo de evento</option>{CONTEST_SCOPE_OPTIONS.map(scope => <option key={scope.value} value={scope.value}>Concurso académico {scope.label.toLowerCase()}</option>)}</select></label>
+          <label className="field"><span>Fecha · requerida</span><input type="date" value={record.date} disabled={readOnly} onChange={e => commitmentChange('institutional', record.id, { date: e.target.value })} /></label>
+          <label className="field"><span>Ubicación / puesto del estudiante · requerido</span><input value={record.placement ?? ''} disabled={readOnly} onChange={e => commitmentChange('institutional', record.id, { placement: e.target.value })} placeholder="Ej.: 1.er puesto" /></label>
+        </div>
+        {selectedScope && <p className="muted">{record.status === 'missed' ? 'No cumplió: este registro aporta 0 puntos.' : record.status === 'justified' || record.status === 'na' ? 'Este registro no aporta puntaje por su estado.' : <>Concurso académico {selectedScope.label.toLowerCase()}: {selectedScope.points} puntos{complete ? record.validated ? ' confirmados.' : ' provisionales; falta confirmar el registro.' : ' posibles al completar los datos requeridos.'}</>}</p>}
+        <details><summary>Detalles opcionales</summary>
+          <div className="form-grid"><label className="field"><span>Nombre del concurso · opcional</span><input value={record.name} disabled={readOnly || Boolean(record.catalogId)} onChange={e => commitmentChange('institutional', record.id, { name: e.target.value })} /></label><label className="field"><span>Estado · opcional</span><select value={record.status} disabled={readOnly} onChange={e => commitmentChange('institutional', record.id, { status: e.target.value as Commitment['status'] })}><option value="fulfilled">Cumplió</option><option value="pending">Pendiente</option><option value="missed">No cumplió</option><option value="justified">Justificado</option><option value="na">No aplica</option></select></label><label className="field"><span>Justificación / observación · opcional</span><textarea rows={2} value={record.justification} disabled={readOnly} onChange={e => commitmentChange('institutional', record.id, { justification: e.target.value })} /></label><label className="field"><span>Evidencia documental · opcional</span><textarea rows={2} value={record.evidence} disabled={readOnly} onChange={e => commitmentChange('institutional', record.id, { evidence: e.target.value })} /></label></div>
+          <label className="checkbox-label"><input type="checkbox" checked={record.representingSchool ?? false} disabled={readOnly} onChange={e => commitmentChange('institutional', record.id, { representingSchool: e.target.checked })} /> Participó representando al colegio · opcional</label>
+          {record.catalogId && <p className="muted"><Info size={14} /> Registro conservado de una convocatoria anterior.</p>}
+        </details>
+        <label className="checkbox-label"><input type="checkbox" checked={record.validated} disabled={readOnly || !complete} onChange={e => { const checked = e.target.checked; void confirmChange(next => { next.institutional.find(item => item.id === record.id)!.validated = checked; next.validated.commitment = false; }); }} /><ShieldCheck size={16} /> He revisado y confirmo este concurso</label>
+      </div>;
+    })}
+  </section>;
+
   const renderRecords = (kind: 'institutional' | 'family') => {
+    if (kind === 'institutional') return renderContests();
     const family = kind === 'family';
     const records = draft[kind];
     const types = family ? settings.familyTypes : settings.activityTypes;
@@ -275,24 +303,28 @@ export default function StudentDetail({ student, settings, pdfs, onSave, onBack,
     {showProfile && <section className="card"><div className="form-grid"><label className="field"><span>Apellidos y nombres</span><input value={draft.name} readOnly /></label><label className="field"><span>Aula</span><select value={cohort?.label ?? ''} disabled><option value="">Pendiente de confirmar</option>{ALLOWED_COHORTS.map(item => <option key={item.label} value={item.label}>{item.label}</option>)}</select></label></div><p className="muted">Los apellidos y nombres se reconocen desde el archivo PDF. Puedes corregirlos al revisar la libreta.</p><button className="button ghost" onClick={reviewReport}>Revisar libreta original <ArrowRight size={16} /></button></section>}
     <div className="detail-layout">
       <main className="detail-main">
+        {isReportApproved(draft) && !approvedPdf && <div className="alert error" role="alert"><FileText size={18} /><span>No está disponible la libreta PDF aprobada de este estudiante. Revisa los documentos originales y vuelve a vincular o confirmar la libreta para escanear sus notas.</span></div>}
         {!reportApproved && <section className="card detail-intro" role="status"><span className="eyebrow">CONFIRMACIÓN DE LA LIBRETA</span><h2>Libreta pendiente de confirmación</h2><p className="muted">Revisa y confirma la libreta PDF y los datos del estudiante en Importar libretas para habilitar Académico, Desempeño y Compromiso. Los tres ámbitos permanecen pendientes hasta completar este paso.</p><button type="button" className="button primary" onClick={reviewReport}><FileText size={17} /> Revisar y confirmar libreta <ArrowRight size={16} /></button></section>}
         <nav className="tab-list" aria-label="Secciones de la ficha">{(Object.keys(labels) as Tab[]).map(key => <button key={key} type="button" className={`tab ${tab === key ? 'active' : ''}`} disabled={!reportApproved && key !== 'documents'} onClick={() => setTab(key)} aria-current={tab === key ? 'page' : undefined}>{key === 'academic' ? <BookOpen size={16} /> : key === 'performance' ? <ShieldCheck size={16} /> : key === 'commitment' ? <Users size={16} /> : <FileText size={16} />}{labels[key]}</button>)}</nav>
         {reportApproved && tab === 'academic' && <div className="detail-tab-content">
-          <section className="card detail-intro"><span className="eyebrow">A · RENDIMIENTO ACADÉMICO</span><h2>La trayectoria detrás del puntaje</h2><p className="muted">Libreta escolar {settings.year - 1}. Los puntajes se calculan automáticamente con las notas de los bimestres I, II y III de la libreta confirmada. Corrige o completa las casillas faltantes y contrasta cada área con el documento original.</p><div className="detail-grade-legend"><span>AD <b>4</b></span><span>A <b>3</b></span><span>B <b>2</b></span><span>C <b>1</b></span><small>Una casilla vacía sigue pendiente.</small></div></section>
-          {associatedPdfs.length > 0 && <details className="card detail-original-preview"><summary><FileText size={17} /> Contrastar con la libreta original</summary><p className="muted">Mantén abierto el documento mientras revisas y corriges las tablas. Las notas extraídas originalmente permanecen en Documentos e historial.</p>{associatedPdfs.filter(pdf => pdf.status !== 'replaced').map(pdf => <div key={pdf.id}><a className="button ghost" href={documentUrl(pdf.id, dataset)} target="_blank" rel="noreferrer">{pdf.name} · Abrir en otra ventana</a><iframe title={`Libreta original: ${pdf.name}`} src={documentUrl(pdf.id, dataset)} style={{ width: '100%', height: 460, border: '1px solid #e9e2dc', borderRadius: 8 }} /></div>)}</details>}
-          {pasteNotice && <div className="alert" role="status"><Info size={17} />{pasteNotice}</div>}
-          <p className="muted detail-paste-tip">Puedes copiar filas de tres notas de Excel (I, II y III) y pegarlas sobre la primera casilla de la tabla.</p>
+          <section className="card detail-intro"><span className="eyebrow">A · RENDIMIENTO ACADÉMICO</span><h2>La trayectoria detrás del puntaje</h2><p className="muted">Libreta escolar {settings.year - 1}. Las notas de los bimestres I, II y III se leen del PDF y el puntaje se calcula automáticamente. Si falta alguna nota, vuelve a escanear la libreta. Las casillas pendientes se mantienen vacías hasta reconocerlas con seguridad.</p><div className="detail-grade-legend"><span>AD <b>4</b></span><span>A <b>3</b></span><span>B <b>2</b></span><span>C <b>1</b></span><small>Una casilla vacía sigue pendiente de lectura.</small></div><button type="button" className="button secondary" disabled={readOnly || rescanning || !onRescan} onClick={() => void rescanGrades()}>{rescanning ? <LoaderCircle size={16} className="spin" /> : <FileText size={16} />}{rescanning ? 'Escaneando notas…' : 'Volver a escanear notas'}</button>{rescanError && <p className="alert error" role="alert">{rescanError}</p>}</section>
+          {associatedPdfs.length > 0 && <details className="card detail-original-preview"><summary><FileText size={17} /> Contrastar con la libreta original</summary><p className="muted">Compara las notas reconocidas con el documento original. Para actualizar la lectura, usa “Volver a escanear notas”.</p>{associatedPdfs.filter(pdf => pdf.status !== 'replaced').map(pdf => <div key={pdf.id}><a className="button ghost" href={documentUrl(pdf.id, dataset)} target="_blank" rel="noreferrer">{pdf.name} · Abrir en otra ventana</a><iframe title={`Libreta original: ${pdf.name}`} src={documentUrl(pdf.id, dataset)} style={{ width: '100%', height: 460, border: '1px solid #e9e2dc', borderRadius: 8 }} /></div>)}</details>}
           {academicAreas.map(definition => {
             const area = draft.academic.find(item => item.areaId === definition.id);
             const complete = definition.competencies.length > 0 && definition.competencies.every((_, i) => bimestres.every((_, j) => Boolean(area?.grades[i]?.[j])));
             return <section className="card detail-area" key={definition.id}>
               <div className="section-heading"><div><h3>{definition.name}</h3><span className="muted">{definition.competencies.length} competencias · Promedio I–III: <strong>{fmt(result.areaAverages[definition.id] ?? null)}</strong> / 4</span></div><span className={`badge ${area?.validated ? 'success' : 'warning'}`}>{area?.validated ? 'Área validada' : 'Provisional'}</span></div>
-              <div className="table-wrap"><table className="academic-table"><thead><tr><th>Competencia</th>{bimestres.map(b => <th key={b}>{b} bim.</th>)}</tr></thead><tbody>{definition.competencies.map((competency, row) => <tr key={row}><td>{competency}</td>{bimestres.map((b, col) => <td key={b}><select className={`grade-select grade-${area?.grades[row]?.[col] || 'empty'}`} aria-label={`${definition.name}, ${competency}, bimestre ${b}`} disabled={readOnly} value={area?.grades[row]?.[col] || ''} onChange={e => gradeChange(definition.id, row, col, e.target.value as Grade)} onPaste={e => pasteGrades(e, definition.id, row, col)}><option value="">—</option>{(['AD', 'A', 'B', 'C'] as Grade[]).map(grade => <option key={grade} value={grade}>{grade}</option>)}</select></td>)}</tr>)}</tbody></table></div>
-              <label className="checkbox-label detail-area-confirm"><input type="checkbox" checked={area?.validated ?? false} disabled={readOnly || !complete} onChange={e => { const checked = e.target.checked; void confirmChange(next => { academicArea(next, definition.id).validated = checked; next.validated.academic = false; }); }} /><CheckCircle2 size={16} /> Confirmo que todas las calificaciones de esta área coinciden con la libreta</label>
+              <GradeTable definition={definition} grades={area?.grades ?? []} />
+              <p className="muted detail-area-confirm"><CheckCircle2 size={16} /> {complete ? 'Notas reconocidas desde la libreta PDF.' : 'Lectura incompleta: vuelve a escanear las notas de esta libreta.'}</p>
             </section>;
           })}
+          {supplementalAreas.length > 0 && <section className="card detail-intro"><h2>Otras notas de la libreta</h2><p className="muted">Estas áreas también se leen del PDF. El puntaje académico se calcula con las áreas elegibles definidas en Parámetros.</p></section>}
+          {supplementalAreas.map(({ definition, grades }) => {
+            const complete = definition.competencies.every((_, row) => bimestres.every((_, col) => ['AD', 'A', 'B', 'C'].includes(grades[row]?.[col] ?? '')));
+            return <section className="card detail-area" key={`supplemental-${definition.id}`}><div className="section-heading"><div><h3>{definition.name}</h3><span className="muted">{definition.competencies.length} competencias · Notas de la libreta PDF</span></div><span className={`badge ${complete ? 'success' : 'warning'}`}>{complete ? 'Lectura completa' : 'Pendiente de escaneo'}</span></div><GradeTable definition={definition} grades={grades} /></section>;
+          })}
           <section className="card detail-formula"><h3>Fórmula y componentes</h3><div className="detail-metric-grid"><Metric label="General · G" value={result.g} hint={`Peso: ${settings.academicWeights.general * 100} %`} /><Metric label="Ciencias y Letras · R" value={result.r} hint={`Peso: ${settings.academicWeights.specialized * 100} %`} /><Metric label="Progresión · P" value={result.p} hint={`Peso: ${settings.academicWeights.progress * 100} %`} /><Metric label="Ciencias" value={result.science} hint="Índice 1–4 · Matemática + CyT" /><Metric label="Letras" value={result.letters} hint="Índice 1–4 · Comunicación + CCSS + DPCC" /><Metric label="Promedio I–II · S1" value={result.s1} hint={`III · S2: ${fmt(result.s2)} · Índices 1–4`} /></div><p className="formula">G = 25 × promedio de áreas · R = 25 × [{settings.scienceWeight.toFixed(2)} × Ciencias + {(1 - settings.scienceWeight).toFixed(2)} × Letras]</p><p className="formula">P = 25 × mín(4; máx(1; S2 + 0,50 × (S2 − S1))) · S1 = promedio de I y II · S2 = III</p></section>
-          <section className="card detail-final-validation"><ShieldCheck size={22} /><div><h3>Validación final académica</h3><p className="muted">El puntaje es definitivo después de confirmar las áreas y esta revisión.</p></div><label className="checkbox-label"><input type="checkbox" checked={draft.validated.academic} disabled={readOnly || !result.academicComplete || !academicAreas.every(def => draft.academic.find(a => a.areaId === def.id)?.validated)} onChange={e => { const checked = e.target.checked; void confirmChange(next => { next.validated.academic = checked; }); }} /> Revisado y validado</label></section>
+          <section className="card detail-final-validation"><ShieldCheck size={22} /><div><h3>Lectura académica</h3><p className="muted">{result.academicComplete && draft.validated.academic ? 'Todas las notas requeridas se reconocieron desde la libreta confirmada. El ámbito académico está completo.' : 'El ámbito académico permanece pendiente hasta reconocer todas las notas requeridas de la libreta confirmada.'}</p></div><span className={`badge ${result.academicComplete && draft.validated.academic ? 'success' : 'warning'}`}>{result.academicComplete && draft.validated.academic ? 'Completo' : 'Pendiente de escaneo'}</span></section>
         </div>}
         {reportApproved && tab === 'performance' && <div className="detail-tab-content">
           <section className="card"><div className="section-heading"><div><span className="eyebrow">B · DESEMPEÑO ESTUDIANTIL</span><h2>Asistencia y puntualidad</h2><p className="muted">Los días eximidos se restan de los días lectivos. La puntualidad se calcula sobre los días asistidos.</p></div></div><div className="form-grid detail-attendance-grid">{([['required', 'Días lectivos del periodo'], ['exempted', 'Días formalmente eximidos'], ['attended', 'Días asistidos'], ['punctual', 'Ingresos puntuales']] as const).map(([key, label]) => <label className="field" key={key}><span>{label}</span><input type="number" inputMode="numeric" min="0" step="1" value={attendance[key] ?? ''} disabled={readOnly} placeholder="Sin datos" onChange={e => change(next => { next.attendance[key] = numberOrNull(e.target.value); next.attendance.validated = false; next.validated.performance = false; })} /></label>)}</div><div className="detail-derived"><span>Días exigibles <strong>{required ?? 'Pendiente'}</strong></span><span>Tardanzas <strong>{attendance.attended !== null && attendance.punctual !== null ? attendance.attended - attendance.punctual : 'Pendiente'}</strong></span></div><div className="detail-metric-grid"><Metric label="Asistencia" value={result.attendance} hint="100 × asistidos / exigibles" /><Metric label="Puntualidad" value={result.punctuality} hint="100 × puntuales / asistidos" /><Metric label="AP" value={result.ap} hint="(Asistencia + Puntualidad) / 2" /></div><label className="checkbox-label"><input type="checkbox" checked={attendance.validated} disabled={readOnly || result.ap === null} onChange={e => { const checked = e.target.checked; void confirmChange(next => { next.attendance.validated = checked; next.validated.performance = false; }); }} /><ShieldCheck size={16} /> He contrastado y validado la asistencia</label></section>
@@ -307,8 +339,8 @@ export default function StudentDetail({ student, settings, pdfs, onSave, onBack,
           <section className="card detail-formula"><h3>Resultado de desempeño</h3><div className="detail-metric-grid"><Metric label="Asistencia y puntualidad · AP" value={result.ap} hint={`Peso: ${settings.performanceWeights.attendance * 100} %`} /><Metric label="Disciplina · D" value={result.discipline} hint={`Peso: ${settings.performanceWeights.discipline * 100} %`} /><Metric label="Desempeño · B" value={result.b} hint="Puntaje sobre 100" /></div><p className="formula">B = {settings.performanceWeights.attendance.toFixed(2)} × AP + {settings.performanceWeights.discipline.toFixed(2)} × D · D = máx(0; 100 − descuentos verificados)</p></section>
           <section className="card detail-final-validation"><ShieldCheck size={22} /><div><h3>Validación final de desempeño</h3><p className="muted">Requiere asistencia revisada y disciplina confirmada.</p></div><label className="checkbox-label"><input type="checkbox" checked={draft.validated.performance} disabled={readOnly || !result.performanceComplete || !draft.attendance.validated || !draft.discipline.confirmed} onChange={e => { const checked = e.target.checked; void confirmChange(next => { next.validated.performance = checked; }); }} /> Revisado y validado</label></section>
         </div>}
-        {reportApproved && tab === 'commitment' && <div className="detail-tab-content"><section className="card detail-intro"><span className="eyebrow">C · COMPROMISO INSTITUCIONAL Y FAMILIAR</span><h2>La participación también cuenta</h2><p className="muted">Completa manualmente las participaciones y los compromisos. Para registrar un incumplimiento, añade su observación y evidencia. Los registros justificados y no exigibles no se consideran incumplimientos.</p><div className="detail-metric-grid"><Metric label="Participación institucional · PI" value={result.participation} na={result.participationNA} hint={`Peso: ${settings.commitmentWeights.participation * 100} %`} /><Metric label="Compromiso familiar · CF" value={result.family} na={result.familyNA} hint={`Peso: ${settings.commitmentWeights.family * 100} %`} /><Metric label="Compromiso · C" value={result.c} hint="Puntaje sobre 100" /></div></section>{renderRecords('institutional')}{renderRecords('family')}<section className="card detail-formula"><h3>Regla de cálculo</h3><p className="formula">C = {settings.commitmentWeights.participation.toFixed(2)} × PI + {settings.commitmentWeights.family.toFixed(2)} × CF</p><p className="muted">PI / CF = 100 × obligaciones cumplidas / obligaciones exigibles. Sin obligaciones exigibles: “No aplica”, sujeto a la regla común aprobada para la cohorte.</p><p className="muted">Regla actual de “No aplica”: <strong>{settings.naPolicy === 'other_component' ? 'Usar el otro subcomponente cuando solo uno no aplica' : 'Mantener resultado pendiente'}</strong>{settings.naPolicyApproved ? ' · Confirmada institucionalmente' : ' · Pendiente de confirmación institucional'}.</p></section><section className="card detail-final-validation"><ShieldCheck size={22} /><div><h3>Validación final de compromiso</h3><p className="muted">Confirma ambos registros y las justificaciones aplicables.</p></div><label className="checkbox-label"><input type="checkbox" checked={draft.validated.commitment} disabled={readOnly || !result.commitmentComplete || [...draft.institutional, ...draft.family].some(record => !record.validated)} onChange={e => { const checked = e.target.checked; void confirmChange(next => { next.validated.commitment = checked; }); }} /> Revisado y validado</label></section></div>}
-        {tab === 'documents' && <div className="detail-tab-content"><section className="card"><div className="section-heading"><div><span className="eyebrow">DOCUMENTOS ORIGINALES</span><h2>Libretas y trazabilidad</h2><p className="muted">La lectura original se conserva aunque corrijas las notas de la ficha.</p></div></div>{associatedPdfs.length === 0 ? <div className="empty-state"><FileText size={28} /><p>Aún no hay PDF vinculados a este estudiante.</p><small>Vincula una libreta desde Importación masiva.</small></div> : associatedPdfs.map(pdf => <div className="detail-pdf" key={pdf.id}><FileText size={22} /><div><strong>{pdf.name}</strong><small>{new Date(pdf.uploadedAt).toLocaleString('es-PE')} · {pdf.ocr ? 'Lectura OCR' : 'Lectura de texto'} · {pdf.period || 'Libreta PDF'}</small><span className={`badge ${pdf.status === 'validated' ? 'success' : 'warning'}`}>{pdf.status === 'validated' ? 'Lectura confirmada' : pdf.status === 'replaced' ? 'Versión reemplazada' : 'Pendiente de revisión'}</span></div><a className="button secondary" href={documentUrl(pdf.id, dataset)} target="_blank" rel="noreferrer">Ver original <ArrowRight size={15} /></a><details><summary>Ver extracción original y observaciones</summary>{documentWarnings(pdf).length > 0 && <ul>{documentWarnings(pdf).map((warning, i) => <li key={i}>{warning}</li>)}</ul>}<pre className="detail-extracted-text">{pdf.text || 'No se reconoció texto en este documento.'}</pre></details></div>)}</section><section className="card"><div className="section-heading"><div><span className="eyebrow">AUDITORÍA</span><h3>Historial de ajustes</h3><p className="muted">Cada cambio queda registrado con su valor anterior y posterior.</p></div><History size={22} /></div>{draft.history.length === 0 ? <p className="muted">Todavía no hay modificaciones registradas.</p> : <div className="history-list">{[...draft.history].reverse().map(entry => <details className="detail-history-item" key={entry.id}><summary><strong>{entry.field}</strong><time>{new Date(entry.date).toLocaleString('es-PE')}</time></summary><div className="form-grid"><div><span className="eyebrow">ANTES</span><pre>{entry.before || 'Sin valor'}</pre></div><div><span className="eyebrow">DESPUÉS</span><pre>{entry.after || 'Sin valor'}</pre></div></div></details>)}</div>}</section></div>}
+        {reportApproved && tab === 'commitment' && <div className="detail-tab-content"><section className="card detail-intro"><span className="eyebrow">C · COMPROMISO INSTITUCIONAL Y FAMILIAR</span><h2>La participación también cuenta</h2><p className="muted">Registra los concursos académicos con su alcance, fecha y ubicación o puesto. Completa los compromisos familiares según sus propias reglas de revisión.</p><div className="detail-metric-grid"><Metric label="Participación institucional · PI" value={result.participation} na={result.participationNA} hint={`Peso: ${settings.commitmentWeights.participation * 100} %`} /><Metric label="Compromiso familiar · CF" value={result.family} na={result.familyNA} hint={`Peso: ${settings.commitmentWeights.family * 100} %`} /><Metric label="Compromiso · C" value={result.c} hint="Puntaje sobre 100" /></div></section>{renderRecords('institutional')}{renderRecords('family')}<section className="card detail-formula"><h3>Regla de cálculo</h3><p className="formula">C = {settings.commitmentWeights.participation.toFixed(2)} × PI + {settings.commitmentWeights.family.toFixed(2)} × CF</p><p className="muted">PI = mayor puntaje alcanzado en concursos académicos: local 40, regional 70 o nacional 100. CF = 100 × obligaciones cumplidas / obligaciones exigibles. Confirma los registros para completar el ámbito.</p><p className="muted">Regla actual de “No aplica”: <strong>{settings.naPolicy === 'other_component' ? 'Usar el otro subcomponente cuando solo uno no aplica' : 'Mantener resultado pendiente'}</strong>{settings.naPolicyApproved ? ' · Confirmada institucionalmente' : ' · Pendiente de confirmación institucional'}.</p></section><section className="card detail-final-validation"><ShieldCheck size={22} /><div><h3>Validación final de compromiso</h3><p className="muted">Confirma los concursos académicos y los compromisos familiares registrados.</p></div><label className="checkbox-label"><input type="checkbox" checked={draft.validated.commitment} disabled={readOnly || !result.commitmentComplete || [...draft.institutional, ...draft.family].some(record => !record.validated)} onChange={e => { const checked = e.target.checked; void confirmChange(next => { next.validated.commitment = checked; }); }} /> Revisado y validado</label></section></div>}
+        {tab === 'documents' && <div className="detail-tab-content"><section className="card"><div className="section-heading"><div><span className="eyebrow">DOCUMENTOS ORIGINALES</span><h2>Libretas y trazabilidad</h2><p className="muted">Consulta la libreta original y las notas reconocidas durante el escaneo.</p></div></div>{associatedPdfs.length === 0 ? <div className="empty-state"><FileText size={28} /><p>Aún no hay PDF vinculados a este estudiante.</p><small>Vincula una libreta desde Importación masiva.</small></div> : associatedPdfs.map(pdf => <div className="detail-pdf" key={pdf.id}><FileText size={22} /><div><strong>{pdf.name}</strong><small>{new Date(pdf.uploadedAt).toLocaleString('es-PE')} · {pdf.ocr ? 'Lectura OCR' : 'Lectura de texto'} · {pdf.period || 'Libreta PDF'}</small><span className={`badge ${pdf.status === 'validated' ? 'success' : 'warning'}`}>{pdf.status === 'validated' ? 'Lectura confirmada' : pdf.status === 'replaced' ? 'Versión reemplazada' : 'Pendiente de revisión'}</span></div><a className="button secondary" href={documentUrl(pdf.id, dataset)} target="_blank" rel="noreferrer">Ver original <ArrowRight size={15} /></a><details><summary>Ver extracción original y observaciones</summary>{documentWarnings(pdf).length > 0 && <ul>{documentWarnings(pdf).map((warning, i) => <li key={i}>{warning}</li>)}</ul>}<pre className="detail-extracted-text">{pdf.text || 'No se reconoció texto en este documento.'}</pre></details></div>)}</section><section className="card"><div className="section-heading"><div><span className="eyebrow">AUDITORÍA</span><h3>Historial de ajustes</h3><p className="muted">Cada cambio queda registrado con su valor anterior y posterior.</p></div><History size={22} /></div>{draft.history.length === 0 ? <p className="muted">Todavía no hay modificaciones registradas.</p> : <div className="history-list">{[...draft.history].reverse().map(entry => <details className="detail-history-item" key={entry.id}><summary><strong>{entry.field}</strong><time>{new Date(entry.date).toLocaleString('es-PE')}</time></summary><div className="form-grid"><div><span className="eyebrow">ANTES</span><pre>{entry.before || 'Sin valor'}</pre></div><div><span className="eyebrow">DESPUÉS</span><pre>{entry.after || 'Sin valor'}</pre></div></div></details>)}</div>}</section></div>}
       </main>
       <aside className="detail-sidebar"><section className="card detail-results"><div className="eyebrow">RESULTADOS EN VIVO</div><h3>Una mirada integral</h3><div className="detail-score-row"><span><b className="dimension-letter a">A</b> Académico</span><strong>{fmt(result.a)}</strong></div><div className="detail-score-row"><span><b className="dimension-letter b">B</b> Desempeño</span><strong>{fmt(result.b)}</strong></div><div className="detail-score-row"><span><b className="dimension-letter c">C</b> Compromiso</span><strong>{fmt(result.c)}</strong></div><div className="detail-total"><span>Promedio general</span><strong>{fmt(result.total)}</strong><small>(A + B + C) ÷ 3</small><span className={`badge ${result.eligible ? 'success' : 'warning'}`}>{!reportApproved ? 'Pendiente de confirmación' : result.eligible ? 'Validado para ranking' : 'Resultado provisional'}</span></div><p className="muted detail-score-note">Cada ámbito tiene el mismo peso: ⅓. Ningún dato faltante se reemplaza por cero.</p></section><section className="card"><span className="eyebrow">AVANCE DEL EXPEDIENTE</span><MiniProgress label="Académico · PA" value={result.pa} className="academic" /><MiniProgress label="Desempeño · PB" value={result.pb} className="performance" /><MiniProgress label="Compromiso · PC" value={result.pc} className="commitment" /><MiniProgress label="Avance total" value={result.progress} className="total" /><p className="muted detail-score-note">Mide completitud del expediente, no rendimiento.</p></section><section className="card detail-pending"><h3>{result.pending.length ? 'Por completar' : 'Revisión completada'}</h3>{result.pending.length ? <ul>{result.pending.map((pending, i) => <li key={i}><Clock3 size={14} /><span>{pending}</span></li>)}</ul> : <p className="muted"><CheckCircle2 size={16} /> Los registros están completos y revisados.</p>}</section><button className="button primary detail-save-button" disabled={readOnly || !reportApproved || status === 'saving' || status === 'saved'} onClick={() => void flush()}><Save size={17} />{status === 'saving' ? 'Guardando…' : 'Guardar ahora'}</button></aside>
     </div>

@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import type { AppState } from '../shared/types.js';
 import { calculateStudent, rankStudents } from '../shared/calculations.js';
 import { ACTIVE_BIMESTERS, normalizeCohort } from '../shared/policy.js';
+import { CONTEST_SCOPE_OPTIONS } from '../shared/contests.js';
 
 export async function buildWorkbook(state: AppState, filters: {grade?:string;section?:string} = {}) {
   const workbook=new ExcelJS.Workbook();
@@ -14,7 +15,7 @@ export async function buildWorkbook(state: AppState, filters: {grade?:string;sec
   ranking.addRow(['Puesto','Código','Estudiante','Grado','Sección','Académico A','Desempeño B','Compromiso C','Promedio TOTAL','Avance (%)','Estado','Cohorte']);
   for (const {student:s,result:r,position,cohort} of ranked) ranking.addRow([position,s.code,s.name,s.grade,s.section,r.a,r.b,r.c,r.total,r.progress,r.status,cohort]);
   const detail=workbook.addWorksheet('DETALLE');
-  detail.addRow(['Código','Estudiante','G','R','P','Ciencias (1–4)','Letras (1–4)','Promedio I–II','Promedio III','Asistencia (%)','Puntualidad (%)','AP','Disciplina','Participación PI','Familia CF','Peso G','Peso R','Peso P','Peso AP','Peso D','Peso PI','Peso CF','Origen académico','Asistencia registrada','Incidencias verificadas','Participación registrada','Familia registrada','Historial de ajustes',...ACTIVE_BIMESTERS.map(period=>`Calificaciones ${period}`),'Puesto en concursos','Representación del colegio']);
+  detail.addRow(['Código','Estudiante','G','R','P','Ciencias (1–4)','Letras (1–4)','Promedio I–II','Promedio III','Asistencia (%)','Puntualidad (%)','AP','Disciplina','Participación PI','Familia CF','Peso G','Peso R','Peso P','Peso AP','Peso D','Peso PI','Peso CF','Origen académico','Asistencia registrada','Incidencias verificadas','Participación registrada','Familia registrada','Historial de ajustes',...ACTIVE_BIMESTERS.map(period=>`Calificaciones ${period}`),'Puesto en concursos','Representación del colegio','Notas adicionales de la libreta']);
   for (const s of students) {
     const r=calculateStudent(s,state.settings);
     const pdfs=state.pdfs.filter(p=>s.pdfIds.includes(p.id));
@@ -25,7 +26,7 @@ export async function buildWorkbook(state: AppState, filters: {grade?:string;sec
       JSON.stringify(s.attendance),JSON.stringify(s.discipline),JSON.stringify(s.institutional),JSON.stringify(s.family),JSON.stringify(s.history),
       ...ACTIVE_BIMESTERS.map((_,period)=>JSON.stringify(s.academic.map(area=>({areaId:area.areaId,grades:area.grades.map(row=>row[period]??'')})))),
       JSON.stringify(s.institutional.map(record=>({id:record.id,name:record.name,placement:record.placement??''}))),
-      JSON.stringify(s.institutional.map(record=>({id:record.id,name:record.name,representingSchool:record.representingSchool??null})))]);
+      JSON.stringify(s.institutional.map(record=>({id:record.id,name:record.name,representingSchool:record.representingSchool??null}))),JSON.stringify(pdfs.flatMap(pdf=>pdf.supplementalAreas??[]))]);
   }
   const pending=workbook.addWorksheet('PENDIENTES');
   pending.addRow(['Código','Estudiante','Grado','Sección','Avance (%)','PA (%)','PB (%)','PC (%)','Estado','Dimensiones y validaciones pendientes']);
@@ -50,7 +51,7 @@ export async function buildWorkbook(state: AppState, filters: {grade?:string;sec
     ['Peso participación',state.settings.commitmentWeights.participation],['Peso familiar',state.settings.commitmentWeights.family],
     ['Regla No aplica',state.settings.naPolicy],['Regla No aplica aprobada',state.settings.naPolicyApproved?'Sí':'No'],
     ['Catálogo de áreas y competencias',JSON.stringify(state.settings.areas)],['Categorías y descuentos disciplinarios',JSON.stringify(state.settings.disciplineTypes)],
-    ['Catálogo de convocatorias',JSON.stringify(state.settings.activityTypes)],['Catálogo familiar',JSON.stringify(state.settings.familyTypes)],
+    ['Participación institucional','CONCURSOS ACADÉMICOS'],['Puntajes por alcance',JSON.stringify(CONTEST_SCOPE_OPTIONS)],['Cálculo PI','Mejor resultado registrado: Local40, Regional70, Nacional100; el ranking requiere validación.'],['Datos obligatorios del concurso','Tipo de evento (alcance), fecha y ubicación/puesto. Los demás campos son opcionales.'],['Catálogo de convocatorias',JSON.stringify(state.settings.activityTypes)],['Catálogo familiar',JSON.stringify(state.settings.familyTypes)],
     ['Criterios comunes por cohorte',JSON.stringify(state.settings.cohortRecords??[])],
     ['Estudiantes incluidos',ranked.length],['Expedientes pendientes',students.length-ranked.length],
     ['Decisión institucional','Los resultados no constituyen una decisión automática de exclusión.'],

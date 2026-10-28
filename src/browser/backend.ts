@@ -7,7 +7,8 @@ import { calculateStudent, cohortRecordApplies, validateSettings } from '../../s
 import { isReportApproved, normalizeCohort } from '../../shared/policy';
 import { migrateState } from '../../shared/migrations';
 import { resolveReportIdentity } from '../../shared/filename-identity';
-import { confirmReport, identifyReport, applyReprocessedReport, deleteReportAndStudent, linkAcademic, registerImportedReport, ReportWorkflowError } from '../../shared/report-workflow';
+import { confirmReport, identifyReport, applyReprocessedReport, applyRescannedGrades, deleteReportAndStudent, linkAcademic, registerImportedReport, ReportWorkflowError } from '../../shared/report-workflow';
+import { ACADEMIC_CONTEST_LABEL, isAcademicContest } from '../../shared/contests';
 import { buildWorkbook } from '../../server/export';
 import { backupSchema, newStudentSchema, semanticStudentErrors, settingsSchema, stateReferenceErrors, stateSchema, studentSchema } from '../../server/validation';
 import { setBrowserRuntime } from '../runtime';
@@ -44,6 +45,7 @@ function syncCohortRecords(student: Student, settings: Settings) {
   for (const kind of ['institutional', 'family'] as const) {
     const records = student[kind];
     for (const record of records) {
+      if (kind === 'institutional' && isAcademicContest(record)) continue;
       if (!record.catalogId) continue;
       const criterion = criteria.find(value => value.id === record.catalogId && value.kind === kind && cohortRecordApplies(value, student));
       if (!criterion) { delete record.catalogId; record.validated = false; continue; }
@@ -244,7 +246,7 @@ async function install(): Promise<void> {
       if (attendanceChanged) { student.attendance.validated = false; student.validated.performance = false; }
       if (!same(current.discipline, student.discipline)) student.validated.performance = false;
       if (!same(current.institutional, student.institutional) || !same(current.family, student.family)) student.validated.commitment = false;
-      for (const record of [...student.institutional, ...student.family]) if (record.catalogId) {
+      for (const record of [...student.institutional, ...student.family]) if (record.catalogId && !(student.institutional.includes(record) && isAcademicContest(record))) {
         const criterion = state.settings.cohortRecords?.find(value => value.id === record.catalogId);
         if (!criterion || record.name.trim() !== criterion.name.trim() || record.date !== criterion.date || record.required !== criterion.required) throw new HttpError(409, 'El nombre, fecha y condición exigible de los criterios comunes se editan en Parámetros. Recargue la ficha para mantener la pauta de la cohorte.');
       }
@@ -268,6 +270,7 @@ async function install(): Promise<void> {
     }
     if (method === 'PUT' && path === '/api/settings') {
       const body = await bodyJson(input, init), settings = settingsSchema.parse(body);
+      settings.activityTypes = [ACADEMIC_CONTEST_LABEL];
       if (state.settings.closed && ((body as { confirmReopen?: unknown }).confirmReopen !== true || settings.closed)) throw new HttpError(423, 'Confirme explícitamente la reapertura de la evaluación antes de modificar los parámetros.');
       checkErrors(validateSettings(settings));
       const criteriaChanged = !same({ ...state.settings, closed: false }, { ...settings, closed: false });
@@ -350,11 +353,28 @@ async function install(): Promise<void> {
       const body = raw as Record<string, unknown>, pdf = state.pdfs.find(value => value.id === decodeURIComponent(pdfMatch[1]));
       if (!pdf) throw new HttpError(404, 'PDF no encontrado.');
       const action = body.action;
-      if (!['link', 'replace', 'validate', 'confirm', 'identify', 'reprocess'].includes(String(action))) throw new HttpError(400, 'Acción de PDF no válida.');
+      if (!['link', 'replace', 'validate', 'confirm', 'identify', 'reprocess', 'rescan-grades'].includes(String(action))) throw new HttpError(400, 'Acción de PDF no válida.');
       if (action === 'identify') {
         if (typeof body.name !== 'string') throw new HttpError(400, 'Indique los apellidos y nombres del estudiante.');
         const updated = identifyReport(state, pdf.id, { name: body.name });
         await save(dataset, state, expected); return json(updated);
+      }
+      if (action === 'rescan-grades') {
+        if (!['review', 'validated'].includes(pdf.status)) throw new HttpError(409, 'Solo una libreta activa en revisión o validada permite actualizar sus notas.');
+        const original = (await readFiles(db, dataset)).get(pdf.id);
+        if (!original) throw new HttpError(404, 'No está disponible el PDF original para actualizar sus notas.');
+        const header = new TextDecoder('latin1').decode(await original.slice(0, 1024).arrayBuffer());
+        if (!header.includes('%PDF-') || await sha256(original) !== pdf.hash) throw new HttpError(400, 'El archivo original no es un PDF válido o no coincide con la libreta conservada.');
+        const reading = await extractBrowserPdf(original, structuredClone(state.settings), { identityFromFilename: true, forceGrades: true });
+        // OCR runs outside the storage transaction. Apply its A reading to the
+        // latest snapshot so another tab's manual B/C edits remain intact.
+        const latest = await readState(db, dataset), latestExpected = JSON.stringify(latest);
+        unlocked(latest);
+        const current = latest.pdfs.find(record => record.id === pdf.id);
+        if (!current || !same(current, pdf) || !same(state.settings, latest.settings)) throw new HttpError(409, 'El documento o sus parámetros cambiaron durante la lectura. Vuelva a actualizar sus notas.');
+        const updated = applyRescannedGrades(latest, pdf.id, reading);
+        await save(dataset, latest, latestExpected);
+        return json(updated);
       }
       if (action === 'reprocess') {
         if (!['pending', 'review', 'failed'].includes(pdf.status)) throw new HttpError(409, 'Esta versión ya está confirmada, duplicada o reemplazada.');

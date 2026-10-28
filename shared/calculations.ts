@@ -1,5 +1,6 @@
 import type { CohortRecord, Commitment, Settings, Student } from './types';
 import { ACTIVE_BIMESTERS, cohortKey, isReportApproved, normalizeCohort } from './policy';
+import { ACADEMIC_CONTEST_LABEL, contestPoints, contestRequiredFields, isAcademicContest } from './contests';
 
 export interface StudentResult {
   a: number | null; b: number | null; c: number | null; total: number | null;
@@ -88,6 +89,36 @@ function commitmentResult(records: Commitment[], label: string, pending: string[
   const required = records.filter(r => r.required && r.status !== 'justified' && r.status !== 'na');
   const na = complete && required.length === 0;
   return { value: complete && !na ? percent(required.filter(r => r.status === 'fulfilled').length, required.length) : null, na, complete, validated: valid, expected: records.length + missing };
+}
+
+function institutionalResult(records: Commitment[], pending: string[], templates: CohortRecord[]) {
+  const contests = records.filter(isAcademicContest);
+  if (!contests.length) return commitmentResult(records, 'Participación institucional', pending, templates);
+
+  const historical = records.filter(record => !isAcademicContest(record));
+  let complete = true;
+  let validated = 0;
+  for (const record of contests) {
+    const missing = contestRequiredFields(record);
+    const label = record.name.trim() || ACADEMIC_CONTEST_LABEL;
+    if (missing.length) {
+      complete = false;
+      pending.push(`Participación institucional: completar ${label} (${missing.join('; ')}).`);
+    } else if (!record.validated) pending.push(`Participación institucional: validar ${label}.`);
+    if (!missing.length && record.validated) validated++;
+  }
+  if (historical.length) {
+    const legacy = commitmentResult(historical, 'Participación institucional', pending, templates.filter(template => historical.some(record => record.catalogId === template.id)));
+    pending.push('Participación institucional: clasificar expresamente los registros históricos como concursos académicos antes de combinarlos con la escala local, regional y nacional.');
+    return { value: null, na: false, complete: false, validated: validated + legacy.validated, expected: contests.length + legacy.expected };
+  }
+
+  // Explicit missed entries score zero; justified and N/A entries keep the common N/A policy.
+  // Other optional status values do not add a fourth required field to a contest.
+  const counted = contests.filter(record => !['justified', 'na'].includes(record.status));
+  const na = complete && counted.length === 0;
+  const value = complete && !na ? Math.max(...counted.map(record => record.status === 'missed' ? 0 : contestPoints(record)!)) : null;
+  return { value, na, complete, validated, expected: contests.length };
 }
 
 export function calculateStudent(student: Student, settings: Settings): StudentResult {
@@ -198,7 +229,7 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
   const b = ap !== null && discipline !== null ? settings.performanceWeights.attendance * ap + settings.performanceWeights.discipline * discipline : null;
 
   const cohortRecords = (settings.cohortRecords ?? []).filter(record => cohortRecordApplies(record, student));
-  const pi = commitmentResult(student.institutional, 'Participación institucional', pending, cohortRecords.filter(record => record.kind === 'institutional' && student.institutional.some(input => input.catalogId === record.id)));
+  const pi = institutionalResult(student.institutional, pending, cohortRecords.filter(record => record.kind === 'institutional' && student.institutional.some(input => input.catalogId === record.id)));
   const cf = commitmentResult(student.family, 'Compromiso familiar', pending, cohortRecords.filter(record => record.kind === 'family' && student.family.some(input => input.catalogId === record.id)));
   let c: number | null = pi.value !== null && cf.value !== null ? settings.commitmentWeights.participation * pi.value + settings.commitmentWeights.family * cf.value : null;
   if ((pi.na || cf.na) && pi.complete && cf.complete) {

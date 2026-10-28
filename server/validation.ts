@@ -2,20 +2,23 @@ import { z } from 'zod';
 import type { Student, Settings, AppState } from '../shared/types.js';
 import { normalizeCohort } from '../shared/policy.js';
 import { resolveReportIdentity } from '../shared/filename-identity.js';
+import { contestRequiredFields, isAcademicContest } from '../shared/contests.js';
 
 const text = z.string().max(2000);
 const id = z.string().min(1).max(150);
 const count = z.number().int().min(0).max(10000).nullable();
 const grade = z.enum(['AD', 'A', 'B', 'C', '']);
+const areaDefinition = z.object({ id, name: z.string().min(1).max(200), group: z.enum(['math','science','communication','social','dpcc','other']), competencies: z.array(z.string().min(1).max(500)).min(1).max(100), eligible: z.boolean() });
 const academic = z.object({ areaId: id, grades: z.array(z.array(grade).min(3).max(4)).max(100), validated: z.boolean() });
 const attendance = z.object({ required: count, attended: count, punctual: count, exempted: count, validated: z.boolean() });
 const incident = z.object({ id, typeId: z.string().max(150), date: text, description: text, measure: text, evidence: text, verified: z.boolean() });
-const commitment = z.object({ id, catalogId: id.optional(), name: text, date: text, required: z.boolean(), status: z.enum(['pending','fulfilled','missed','justified','na']), justification: text, evidence: text, validated: z.boolean(), placement: text.optional(), representingSchool: z.boolean().optional() });
+const commitment = z.object({ id, catalogId: id.optional(), name: text, date: text, required: z.boolean(), status: z.enum(['pending','fulfilled','missed','justified','na']), justification: text, evidence: text, validated: z.boolean(), placement: text.optional(), representingSchool: z.boolean().optional(), eventType: z.literal('academic_contest').optional(), scope: z.enum(['local','regional','national']).optional() });
+const contestCommitment = commitment.extend({ eventType: z.literal('academic_contest'), name: text.default(''), required: z.boolean().default(false), status: z.enum(['pending','fulfilled','missed','justified','na']).default('pending'), justification: text.default(''), evidence: text.default('') });
 const history = z.object({ id, date: text, field: text, before: z.string().max(100000), after: z.string().max(100000) });
 export const studentSchema = z.object({
   id, code: z.string().trim().min(1).max(100), name: z.string().trim().min(1).max(200), grade: z.string().trim().min(1).max(60), section: z.string().trim().min(1).max(20),
   academic: z.array(academic).max(100), attendance, discipline: z.object({ confirmed: z.boolean(), incidents: z.array(incident).max(1000) }),
-  institutional: z.array(commitment).max(2000), family: z.array(commitment).max(2000),
+  institutional: z.array(z.union([contestCommitment, commitment])).max(2000), family: z.array(commitment).max(2000),
   validated: z.object({ academic: z.boolean(), performance: z.boolean(), commitment: z.boolean() }),
   history: z.array(history).max(100000), pdfIds: z.array(id).max(1000), createdAt: text, updatedAt: text,
   reportApproval: z.object({ pdfId: id, approvedAt: z.string().datetime() }).optional(),
@@ -24,7 +27,7 @@ export const newStudentSchema = studentSchema.pick({ code: true, name: true, gra
 const weight = z.number().min(0).max(1);
 export const settingsSchema = z.object({
   year: z.number().int().min(2000).max(2200), version: z.string().min(1).max(100),
-  areas: z.array(z.object({ id, name: z.string().min(1).max(200), group: z.enum(['math','science','communication','social','dpcc','other']), competencies: z.array(z.string().min(1).max(500)).min(1).max(100), eligible: z.boolean() })).min(1).max(100),
+  areas: z.array(areaDefinition).min(1).max(100),
   academicWeights: z.object({general:weight,specialized:weight,progress:weight}), scienceWeight: weight,
   performanceWeights: z.object({attendance:weight,discipline:weight}), commitmentWeights:z.object({participation:weight,family:weight}),
   criteriaApproved:z.boolean(),naPolicy:z.enum(['pending','other_component']),naPolicyApproved:z.boolean(),
@@ -38,6 +41,7 @@ const pdfSchema = z.object({
   status:z.enum(['pending','review','validated','failed','duplicate','replaced']),studentId:id.nullable(),
   extractedCode:text,extractedName:text,extractedGrade:text,extractedSection:text,period:text,text:z.string().max(4_194_304),ocr:z.boolean(),
   warnings:z.array(text).max(1000),areas:z.array(academic).max(100),replacesId:id.optional(),
+  supplementalAreas:z.array(z.object({definition:areaDefinition,grades:z.array(z.array(grade).min(3).max(4)).max(100)}).refine(area=>area.grades.length===area.definition.competencies.length,'Las competencias adicionales deben corresponder a sus notas.')).max(100).optional(),
   manualName:z.string().max(200).optional(),
   confirmedIdentity:z.object({code:z.string().trim().min(1).max(100),name:z.string().trim().min(1).max(200),grade:z.string().trim().min(1).max(60),section:z.string().trim().min(1).max(20)}).optional(),
 });
@@ -67,9 +71,15 @@ export function semanticStudentErrors(student: Student, settings: Settings): str
     if (incident.verified && (!/^\d{4}-\d{2}-\d{2}$/.test(incident.date) || !incident.description.trim() || !incident.measure.trim() || !incident.evidence.trim())) errors.push('Una incidencia verificada necesita fecha, descripción, medida y evidencia.');
   }
   for (const record of [...student.institutional,...student.family]) {
-    if (record.validated && (record.status==='pending' || !record.name.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(record.date) || !record.evidence.trim())) errors.push('Un compromiso validado necesita nombre, fecha, estado y evidencia documental.');
-    if (record.validated && (!record.required || ['missed','justified','na'].includes(record.status)) && !record.justification.trim()) errors.push('Los registros no cumplidos, justificados, no exigibles o No aplica requieren una observación o justificación.');
-    if(record.catalogId){
+    const contest = student.institutional.includes(record) && isAcademicContest(record);
+    if (contest) {
+      const missing = contestRequiredFields(record);
+      if (record.validated && missing.length) errors.push(`Un concurso académico validado necesita ${missing.join(', ')}.`);
+    } else {
+      if (record.validated && (record.status==='pending' || !record.name.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(record.date) || !record.evidence.trim())) errors.push('Un compromiso validado necesita nombre, fecha, estado y evidencia documental.');
+      if (record.validated && (!record.required || ['missed','justified','na'].includes(record.status)) && !record.justification.trim()) errors.push('Los registros no cumplidos, justificados, no exigibles o No aplica requieren una observación o justificación.');
+    }
+    if(record.catalogId && !contest){
       const criterion=settings.cohortRecords?.find(c=>c.id===record.catalogId);
       if(!criterion)errors.push('El registro está vinculado a un criterio de cohorte inexistente.');
       else {

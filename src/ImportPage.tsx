@@ -50,6 +50,7 @@ export default function ImportPage({ pdfs, students, settings, dataset, onRefres
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
   const selected = pdfs.find(p => p.id === selectedId);
   const identity = selected ? reportIdentity(selected) : null;
+  const previewAreas = selected ? [...selected.areas.map(area => ({ ...area, definition: settings.areas.find(item => item.id === area.areaId) })), ...(selected.supplementalAreas || []).map(area => ({ ...area, areaId: area.definition.id }))] : [];
   const draftName = selected ? nameDrafts[selected.id] ?? identity?.name ?? '' : '';
   const cohort = identity && normalizeCohort(identity.grade, identity.section);
   const identityComplete = Boolean(recognizedValue(draftName) && cohort);
@@ -192,7 +193,7 @@ export default function ImportPage({ pdfs, students, settings, dataset, onRefres
       {selected.status === 'validated' && <p className="notice success">Libreta confirmada y evaluación habilitada.</p>}
       {selectedWarnings.length > 0 && <div className="notice warning"><div><strong>Observaciones de lectura</strong><ul>{selectedWarnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></div></div>}
       <div className="notice">La confirmación habilita las tres áreas de evaluación. Las notas A se completan automáticamente; B y C quedan pendientes para tu evaluación. Las casillas ilegibles permanecen vacías.</div>
-      {selected.areas.length > 0 && <details className="import-grade-preview"><summary>Calificaciones reconocidas · I a III bimestre</summary><div className="table-wrap"><table><thead><tr><th>Área / competencia</th>{ACTIVE_BIMESTERS.map(bimester => <th key={bimester}>{bimester}</th>)}</tr></thead><tbody>{selected.areas.flatMap(area => { const definition = settings.areas.find(item => item.id === area.areaId); return area.grades.map((grades, index) => <tr key={`${area.areaId}-${index}`}><td><strong>{definition?.name || area.areaId}</strong><small className="muted">{definition?.competencies[index] || `Competencia ${index + 1}`}</small></td>{ACTIVE_BIMESTERS.map((_, bimester) => <td key={bimester}><span className={`badge ${grades[bimester] ? '' : 'warning'}`}>{grades[bimester] || '—'}</span></td>)}</tr>); })}</tbody></table></div></details>}
+      {previewAreas.length > 0 && <details className="import-grade-preview"><summary>Calificaciones reconocidas · I a III bimestre</summary><div className="table-wrap"><table><thead><tr><th>Área / competencia</th>{ACTIVE_BIMESTERS.map(bimester => <th key={bimester}>{bimester}</th>)}</tr></thead><tbody>{previewAreas.flatMap(area => { const definition = area.definition; return area.grades.map((grades, index) => <tr key={`${area.areaId}-${index}`}><td><strong>{definition?.name || area.areaId}</strong><small className="muted">{definition?.competencies[index] || `Competencia ${index + 1}`}</small></td>{ACTIVE_BIMESTERS.map((_, bimester) => <td key={bimester}><span className={`badge ${grades[bimester] ? '' : 'warning'}`}>{grades[bimester] || '—'}</span></td>)}</tr>); })}</tbody></table></div></details>}
       <details><summary>Texto original extraído</summary><pre className="extracted-text">{selected.text || 'No se pudo reconocer texto en este documento.'}</pre></details>
       </div></div>
     </section>}

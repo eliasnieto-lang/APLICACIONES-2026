@@ -5,7 +5,7 @@ import ocrWorkerSource from 'tesseract.js/dist/worker.min.js?raw';
 import ocrCoreSource from 'tesseract.js-core/tesseract-core-lstm.wasm.js?raw';
 import spanishModelUrl from '../../.tools/tessdata/spa.traineddata?url&inline';
 import { parseReportText, type ExtractedReport } from '../../shared/pdf-parser';
-import { mergePdfReadings, needsPdfRecovery } from '../../shared/pdf-recovery';
+import { layoutPdfText, mergePdfReadings, needsPdfRecovery, needsRenderedGradeRecovery } from '../../shared/pdf-recovery';
 import type { Settings } from '../../shared/types';
 
 const MAX_BYTES = 20 * 1024 * 1024;
@@ -34,30 +34,8 @@ function layoutText(items: unknown[], viewportTransform: number[]): string {
     .map(item => {
       const transform = Util.transform(viewportTransform, item.transform);
       return { text: item.str, x: transform[4], y: transform[5], width: item.width, height: Math.max(4, item.height || Math.abs(transform[3])) };
-    }).sort((a, b) => a.y - b.y || a.x - b.x);
-  const rows: { y: number; height: number; words: typeof words }[] = [];
-  for (const word of words) {
-    const previous = rows.at(-1);
-    if (previous && Math.abs(previous.y - word.y) <= Math.max(2, Math.min(previous.height, word.height) * .3)) previous.words.push(word);
-    else rows.push({ y: word.y, height: word.height, words: [word] });
-  }
-  const left = words.reduce((value, word) => Math.min(value, word.x), Infinity);
-  // Retain relative columns, including a missing first value below a table header.
-  const widths = words.map(word => word.width / Math.max(1, word.text.length)).filter(width => width > 1 && width < 20).sort((a, b) => a - b);
-  const characterWidth = widths[Math.floor(widths.length / 2)] || 5;
-  const spaces = (gap: number) => ' '.repeat(Math.min(220, Math.max(1, Math.round(gap / characterWidth))));
-  return rows.map(row => {
-    row.words.sort((a, b) => a.x - b.x);
-    let line = row.words[0].x - left > characterWidth ? spaces(row.words[0].x - left) : '';
-    let end = -Infinity;
-    for (const word of row.words) {
-      const gap = word.x - end;
-      if (Number.isFinite(end) && gap > Math.max(.5, word.height * .12)) line += spaces(gap);
-      line += word.text;
-      end = Math.max(end, word.x + word.width);
-    }
-    return line.trimEnd();
-  }).join('\n');
+    });
+  return layoutPdfText(words);
 }
 
 /** Ignore small logos; a wide header or a page/table scan can contain missing fields. */
@@ -114,7 +92,7 @@ function makeOcrWorkerSource(): string {
 }
 
 /** Browser-only PDF and Spanish OCR. All document processing stays on this device. */
-export async function extractBrowserPdf(file: Blob, settings: Settings, options: { identityFromFilename?: boolean } = {}): Promise<ExtractedReport> {
+export async function extractBrowserPdf(file: Blob, settings: Settings, options: { identityFromFilename?: boolean; forceGrades?: boolean } = {}): Promise<ExtractedReport> {
   if (file.size > MAX_BYTES) throw new Error('El PDF debe ser un archivo de hasta 20 MB.');
   const data = new Uint8Array(await file.arrayBuffer());
   const header = new TextDecoder('latin1').decode(data.subarray(0, 1024));
@@ -156,7 +134,8 @@ export async function extractBrowserPdf(file: Blob, settings: Settings, options:
         rasterPresent = hasReadableRaster(operators);
       }
     }
-    if (!rasterPresent) return nativeReading;
+    const renderGrades = needsRenderedGradeRecovery(nativeReading, settings, options.forceGrades);
+    if (!rasterPresent && !renderGrades) return nativeReading;
     if (documentPdf.numPages > MAX_OCR_PAGES) throw new Error(`El PDF escaneado supera ${MAX_OCR_PAGES} páginas. Divídalo para realizar el reconocimiento automático.`);
 
     ocrWorkerUrl = URL.createObjectURL(new Blob([makeOcrWorkerSource()], { type: 'text/javascript' }));
@@ -193,7 +172,7 @@ export async function extractBrowserPdf(file: Blob, settings: Settings, options:
       recognized.push(result.data.text);
     }
     const result = mergePdfReadings(nativeReading, parseReportText(recognized.join('\n\f\n'), settings), settings);
-    result.warnings.unshift('Documento escaneado o mixto: OCR local en español aplicado. Todas las celdas requieren confirmación visual.');
+    result.warnings.unshift('PDF renderizado: OCR local en español aplicado para completar la lectura automática. Compare las celdas reconocidas con el PDF original.');
     return result;
   } catch (error) {
     if (error instanceof Error && error.name === 'PasswordException') throw new Error('El PDF está protegido con contraseña. Cargue una copia sin protección.');

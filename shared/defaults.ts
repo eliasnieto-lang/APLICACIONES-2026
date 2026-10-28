@@ -1,5 +1,6 @@
 import type { AppState, Grade, Settings, Student } from './types';
 import { ACTIVE_BIMESTERS, ALLOWED_COHORTS, normalizeCohort } from './policy';
+import { ACADEMIC_CONTEST_LABEL } from './contests';
 
 export const defaultSettings: Settings = {
   year: 2027,
@@ -26,7 +27,7 @@ export const defaultSettings: Settings = {
     { id: 'muy-grave', name: 'Incidencia muy grave', discount: null, punctuality: false },
     { id: 'tardanza', name: 'Tardanza (solo puntualidad)', discount: 0, punctuality: true },
   ],
-  activityTypes: ['Concurso académico', 'Actividad institucional', 'Proyecto del Círculo'],
+  activityTypes: [ACADEMIC_CONTEST_LABEL],
   familyTypes: ['Reunión de familias', 'Citación', 'Acuerdo formalizado'],
   cohortRecords: [],
   closed: false,

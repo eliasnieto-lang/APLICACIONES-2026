@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Settings } from '../shared/types.js';
 import { parseReportText, type ExtractedReport } from '../shared/pdf-parser.js';
-import { mergePdfReadings, needsPdfRecovery } from '../shared/pdf-recovery.js';
+import { mergePdfReadings, needsPdfRecovery, needsRenderedGradeRecovery } from '../shared/pdf-recovery.js';
 export { parseReportText } from '../shared/pdf-parser.js';
 export type { ExtractedReport } from '../shared/pdf-parser.js';
 
@@ -17,7 +17,7 @@ const MAX_OCR_PAGES = 8;
 const LOCAL_TESSDATA = fileURLToPath(new URL('../.tools/tessdata/', import.meta.url));
 
 /** Local extraction; documents never leave this machine. */
-export async function extractPdf(filePath: string, settings: Settings, identityOptions: { identityFromFilename?: boolean } = {}): Promise<ExtractedReport> {
+export async function extractPdf(filePath: string, settings: Settings, identityOptions: { identityFromFilename?: boolean; forceGrades?: boolean } = {}): Promise<ExtractedReport> {
   const info = await stat(filePath);
   if (!info.isFile() || info.size > MAX_BYTES) throw new Error('El PDF debe ser un archivo de hasta 20 MB.');
   const header = (await readFile(filePath)).subarray(0, 1024).toString('latin1');
@@ -66,7 +66,7 @@ export async function extractPdf(filePath: string, settings: Settings, identityO
           && ((drawnWidth >= 120 && drawnHeight >= 20) || drawnWidth * drawnHeight >= 16_000);
       });
     }
-    if (rasterTextPossible) {
+    if (rasterTextPossible || needsRenderedGradeRecovery(nativeReading, settings, identityOptions.forceGrades)) {
       if (pages > MAX_OCR_PAGES) throw new Error(`El PDF escaneado supera ${MAX_OCR_PAGES} páginas. Divídalo para realizar el reconocimiento automático.`);
       const localSpanishAvailable = await access(path.join(LOCAL_TESSDATA, 'spa.traineddata')).then(() => true, () => false);
       const tessdataArgs = localSpanishAvailable ? ['--tessdata-dir', LOCAL_TESSDATA] : [];
@@ -85,7 +85,7 @@ export async function extractPdf(filePath: string, settings: Settings, identityO
       const ocrText = results.join('\n\f\n');
       result = mergePdfReadings(nativeReading, parseReportText(ocrText, settings), settings);
     }
-    if (result.ocr) result.warnings.unshift('Documento escaneado o mixto: OCR aplicado. Todas las celdas requieren confirmación visual.');
+    if (result.ocr) result.warnings.unshift('PDF renderizado: OCR aplicado para completar la lectura automática. Compare las celdas reconocidas con el PDF original.');
     if (languageWarning) result.warnings.push(languageWarning);
     if (!result.text.trim()) result.warnings.push('No se reconoció texto legible. Vuelva a procesar una copia más legible del PDF original.');
     return result;

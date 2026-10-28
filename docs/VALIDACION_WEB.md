@@ -1,5 +1,15 @@
 # Validación de la edición web
 
+## Concursos académicos y notas escaneadas
+
+La versión vigente valida participación institucional con solo tipo de evento, fecha y ubicación/puesto. Ofrece únicamente concursos académicos locales (40), regionales (70) y nacionales (100); PI toma el mejor resultado. Los demás datos son opcionales.
+
+Validación: `npm test` aprobó **141 pruebas**; construcción portátil y aceptación de navegador aprobadas. El navegador verificó PDF compactos genuinos con **45 notas de las áreas evaluables** y **78 notas de diez cursos**, lectura antes de confirmar, tablas de notas de solo lectura, los tres campos mínimos, cada omisión obligatoria, puntajes 40/70/100, reescaneo explícito y automático sin bucles, persistencia de asignaturas adicionales, protección de B/C y conservación del hash/identidad/aprobación del original. El ranking de prueba exportó A58,75, B95,50, C100 y total84,75. No hubo solicitudes HTTP durante las operaciones, errores de página ni errores de consola; se comprobaron cuatro descargas y reinicio del navegador.
+
+Las pruebas automáticas incluyen lectura de tablas con área y primera competencia en una misma fila, áreas y etiquetas partidas, celdas dibujadas separadamente, vacíos sin desplazamiento y PDF vectoriales cuyo mapa de fuentes no permite obtener las notas. Esos últimos se renderizan para OCR local. Las notas inciertas siguen pendientes y no se inventan. El lector distingue textos de Inglés y Religión para no atribuirlos por alias a Comunicación o DPCC.
+
+El PDF original de las capturas no ha sido adjuntado a este chat, de modo que aún falta verificar esa libreta específica. Los resultados anteriores corresponden a PDF de prueba generados y documentos OCR de integración.
+
 ## Nombre de archivo, código opcional y nombre editable
 
 El ajuste vigente usa prioritariamente el nombre del archivo PDF para la identidad. La captura del usuario se reproduce con `BOLETA_2do año F_Secundaria_SEGURA_CAMONES_ANDRES ADRIAN.pdf`: aparece **SEGURA CAMONES ANDRES ADRIAN**, aula **2.º F**, antes de confirmar, aun sin código ni año extraídos. El casillero de nombre permite corregir o completar la identidad.

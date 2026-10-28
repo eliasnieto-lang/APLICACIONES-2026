@@ -8,14 +8,17 @@ import ExcelJS from 'exceljs';
 import { createApp } from '../server/index.js';
 import type { AppState, Student } from '../shared/types.js';
 import { createStudent, defaultSettings } from '../shared/defaults.js';
+import { SUPPLEMENTAL_REPORT_AREAS } from '../shared/report-catalog.js';
+import { applyRescannedGrades } from '../shared/report-workflow.js';
+import type { ExtractedReport } from '../shared/pdf-parser.js';
 
-function reportPdf(code:string,name:string,omitArea='',grade='3',section='F',identityLayout:'inline'|'stacked'|'none'|'classroom'='inline') {
+function reportPdf(code:string,name:string,omitArea='',grade='3',section='F',identityLayout:'inline'|'stacked'|'none'|'classroom'='inline',includeSupplemental=false) {
   const normalize=(text:string)=>text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[()\\]/g,'\\$&');
   const lines=identityLayout==='none' ? ['BIMESTRES I II III'] : identityLayout==='classroom' ? [`Grado: ${grade}`,`Seccion: ${section}`,'BIMESTRES I II III'] : identityLayout==='stacked'
     ? ['INFORME DE PROGRESO DEL ESTUDIANTE','Codigo modular: 1234567','Codigo del estudiante',code,'Apellidos y nombres del estudiante',name,'Grado',grade,'Seccion',section,'Periodo: 2026']
     : [`Codigo estudiante: ${code}`,`Estudiante: ${name}`,`Grado: ${grade}`,`Seccion: ${section}`,'Periodo: 2026'];
-  for(const area of defaultSettings.areas.filter(area=>area.id!==omitArea)){lines.push(area.name,...area.competencies.map(c=>`${c} A A A`));}
-  const stream=`BT /F1 9 Tf 40 790 Td 12 TL ${lines.map((s,i)=>`${i?'T* ':''}(${normalize(s)}) Tj`).join('\n')} ET`;
+  for(const area of [...defaultSettings.areas,...(includeSupplemental?SUPPLEMENTAL_REPORT_AREAS:[])].filter(area=>area.id!==omitArea)){lines.push(area.name,...area.competencies.map(c=>`${c} A A A`));}
+  const stream=`BT /F1 ${includeSupplemental?5:9} Tf 40 790 Td 12 TL ${lines.map((s,i)=>`${i?'T* ':''}(${normalize(s)}) Tj`).join('\n')} ET`;
   const objects=[
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
@@ -201,6 +204,109 @@ test('Reprocesar una libreta enlazada conserva el expediente y B/C manuales hast
     await confirm(h,pdf.id);state=await readState(h);const confirmed=state.students[0];
     assert.equal(confirmed.id,student.id);assert.equal(confirmed.reportApproval?.pdfId,pdf.id);assert.equal(confirmed.validated.academic,true);
     assert.deepEqual({attendance:confirmed.attendance,discipline:confirmed.discipline,institutional:confirmed.institutional,family:confirmed.family},manual);
+  }finally{await h.close();}
+});
+
+test('Un concurso académico se valida con tipo, fecha y ubicación y conserva opcionales vacíos',async()=>{
+  const h=await harness();try{
+    const pdf=await upload(h,reportPdf('CONCURSO-3','Estudiante Concursos'));await confirm(h,pdf.id);
+    let student=(await readState(h)).students[0];
+    for(const scope of ['local','regional','national'] as const){
+      const record={id:`contest-${scope}`,eventType:'academic_contest',scope,date:'2026-10-18',placement:'Segundo puesto',validated:true};
+      const response=await h.request(`/api/students/${student.id}`,'PUT',{...student,institutional:[record]});
+      assert.equal(response.status,200,await response.clone().text());student=await response.json() as Student;
+      const saved=student.institutional[0];
+      assert.equal(saved.eventType,'academic_contest');assert.equal(saved.scope,scope);assert.equal(saved.validated,true);
+      assert.equal(saved.name,'');assert.equal(saved.evidence,'');assert.equal(saved.justification,'');assert.equal(saved.required,false);assert.equal(saved.status,'pending');
+    }
+    assert.deepEqual((await readState(h)).settings.activityTypes,['CONCURSOS ACADÉMICOS']);
+    const valid=student.institutional[0];
+    for(const invalid of [{...valid,scope:undefined},{...valid,scope:'international'},{...valid,eventType:'sports'},{...valid,date:''},{...valid,date:'2026-02-30'},{...valid,placement:'   '},{...valid,placement:'x'.repeat(2001)}]){
+      const response=await h.request(`/api/students/${student.id}`,'PUT',{...student,institutional:[invalid]});
+      assert.equal(response.status,400,`Debe impedir el concurso inválido: ${JSON.stringify(invalid)}`);
+    }
+    const family={...valid,id:'family',name:'',evidence:'',justification:'',required:false,status:'pending'};
+    assert.equal((await h.request(`/api/students/${student.id}`,'PUT',{...student,family:[family]})).status,400,'Las obligaciones familiares conservan nombre, estado, evidencia y observación.');
+    const legacy={...family,id:'legacy',eventType:undefined,scope:undefined};
+    assert.equal((await h.request(`/api/students/${student.id}`,'PUT',{...student,institutional:[legacy]})).status,400,'Los registros antiguos conservan sus reglas hasta su clasificación.');
+    const settings=(await readState(h)).settings;
+    settings.cohortRecords=[{id:'old-common',kind:'institutional',name:'Convocatoria anterior',date:'2026-10-10',grade:'3.º de secundaria',section:'F',required:true}];
+    assert.equal((await h.request('/api/settings','PUT',settings)).status,200);student=(await readState(h)).students[0];
+    const classified={...valid,catalogId:'old-common',name:'',date:'2026-10-19',required:false};
+    const response=await h.request(`/api/students/${student.id}`,'PUT',{...student,institutional:[classified]});
+    assert.equal(response.status,200,await response.clone().text());
+    const saved=await response.json() as Student;assert.equal(saved.institutional[0].date,'2026-10-19');assert.equal(saved.institutional[0].name,'');assert.equal(saved.institutional[0].catalogId,'old-common');
+  }finally{await h.close();}
+});
+
+test('Actualizar las notas de una libreta confirmada rescata A y conserva identidad, aprobación, B/C e historial',async()=>{
+  const h=await harness();try{
+    const bytes=reportPdf('RESCAN-1','Nombre Dentro Del Documento');
+    const pdf=await upload(h,bytes,'BOLETA_3ro año F_Secundaria_NOMBRE_DEL_ARCHIVO.pdf');
+    await confirm(h,pdf.id,{name:'APELLIDOS CORREGIDOS MANUALMENTE'});
+    let state=await readState(h),student=state.students[0];
+    student.attendance={required:200,exempted:10,attended:180,punctual:170,validated:true};student.discipline={confirmed:true,incidents:[]};
+    student.institutional=[{id:'contest',eventType:'academic_contest',scope:'regional',name:'',date:'2026-10-10',required:false,status:'pending',justification:'',evidence:'',validated:true,placement:'Segundo puesto'}];
+    student.family=[{id:'meeting',name:'Reunión',date:'2026-10-10',required:true,status:'fulfilled',justification:'',evidence:'Firma',validated:true}];
+    student.validated.performance=true;student.validated.commitment=true;
+    student.academic.forEach(area=>{area.validated=false;area.grades.forEach(row=>row.fill(''));});
+    student.academic[0].grades[0][0]='AD';student.validated.academic=false;
+    state.pdfs[0].areas.forEach(area=>{area.validated=false;area.grades.forEach(row=>row.fill(''));});
+    h.app.locals.store.save('real',state);
+    const preserved=structuredClone({id:student.id,code:student.code,name:student.name,grade:student.grade,section:student.section,attendance:student.attendance,discipline:student.discipline,institutional:student.institutional,family:student.family,reportApproval:student.reportApproval,performance:student.validated.performance,commitment:student.validated.commitment,history:student.history});
+    const beforePdf=structuredClone(state.pdfs[0]);
+    const store=h.app.locals.store,originalRead=store.read.bind(store);let reads=0;
+    const concurrentHistory={id:'other-tab-edit',date:new Date().toISOString(),field:'attendance',before:'170',after:'168'};
+    store.read=(dataset:'real'|'demo')=>{
+      const latest=originalRead(dataset) as AppState;
+      if(dataset==='real'&&++reads===2){latest.students[0].attendance.punctual=168;latest.students[0].history.push(concurrentHistory);store.save(dataset,latest);}
+      return latest;
+    };
+    let response:Response;
+    try{response=await h.request(`/api/pdfs/${pdf.id}`,'PUT',{action:'rescan-grades'});}finally{store.read=originalRead;}
+    preserved.attendance.punctual=168;preserved.history.push(concurrentHistory);
+    assert.equal(response.status,200,await response.clone().text());
+    const updated=await response.json() as AppState['pdfs'][number];state=await readState(h);student=state.students[0];
+    assert.equal(updated.id,pdf.id);assert.equal(updated.hash,pdf.hash);assert.equal(updated.size,pdf.size);assert.equal(updated.uploadedAt,pdf.uploadedAt);assert.equal(updated.status,'validated');
+    assert.equal(updated.manualName,beforePdf.manualName);assert.deepEqual(updated.confirmedIdentity,beforePdf.confirmedIdentity);assert.equal(updated.studentId,student.id);
+    assert.deepEqual({id:student.id,code:student.code,name:student.name,grade:student.grade,section:student.section,attendance:student.attendance,discipline:student.discipline,institutional:student.institutional,family:student.family,reportApproval:student.reportApproval,performance:student.validated.performance,commitment:student.validated.commitment,history:student.history.slice(0,preserved.history.length)},preserved);
+    assert.equal(student.validated.academic,true);assert(student.academic.every(area=>area.validated&&area.grades.every(row=>row.length===3&&row.every(value=>value==='A'))));
+    assert.equal(student.history.at(-1)?.field,'Actualización automática de notas desde el PDF original');
+    assert.deepEqual(Buffer.from(await(await h.request(`/api/pdfs/${pdf.id}/file`)).arrayBuffer()),bytes);
+    for(const status of ['duplicate','replaced','failed'] as const){
+      state=await readState(h);state.pdfs[0].status=status;delete state.students[0].reportApproval;h.app.locals.store.save('real',state);
+      assert.equal((await h.request(`/api/pdfs/${pdf.id}`,'PUT',{action:'rescan-grades'})).status,409);
+    }
+  }finally{await h.close();}
+});
+
+test('Las asignaturas adicionales sobreviven a actualizar notas y restaurar sin cambiar las cinco áreas evaluables',async()=>{
+  const h=await harness();try{
+    const bytes=reportPdf('ALL-NOTES-1','Estudiante Todas Las Notas','','3','F','inline',true),pdf=await upload(h,bytes);await confirm(h,pdf.id);
+    const first=await readState(h),scoringAreas=structuredClone(first.settings.areas);
+    assert.equal(first.pdfs[0].supplementalAreas?.length,5);
+    assert.equal(first.pdfs[0].supplementalAreas?.flatMap(area=>area.grades).flat().length,33);
+    assert(first.pdfs[0].supplementalAreas?.every(area=>area.grades.every(row=>row.every(value=>value==='A'))));
+    assert.equal(first.students[0].academic.length,5);assert.equal(first.students[0].validated.academic,true);
+    const response=await h.request(`/api/pdfs/${pdf.id}`,'PUT',{action:'rescan-grades'});assert.equal(response.status,200,await response.clone().text());
+    const updated=await response.json() as AppState['pdfs'][number];assert.deepEqual(updated.supplementalAreas,first.pdfs[0].supplementalAreas);
+    const backup=await(await h.request('/api/backup')).json();assert.equal(backup.state.pdfs[0].supplementalAreas.length,5);
+    assert.equal((await h.request('/api/restore','POST',backup)).status,200);
+    const restored=await readState(h);assert.deepEqual(restored.pdfs[0].supplementalAreas,updated.supplementalAreas);assert.deepEqual(restored.settings.areas,scoringAreas);assert.equal(restored.students[0].academic.length,5);
+  }finally{await h.close();}
+});
+
+test('Una nueva lectura parcial conserva notas del mismo original y descarta ajustes manuales de A',async()=>{
+  const h=await harness();try{
+    const uploaded=await upload(h,reportPdf('PARTIAL-1','Estudiante Lectura Parcial','','3','F','inline',true));await confirm(h,uploaded.id);
+    const state=await readState(h),pdf=state.pdfs[0],student=state.students[0],scoringAreas=structuredClone(state.settings.areas);
+    const reading:ExtractedReport={extractedCode:pdf.extractedCode,extractedName:pdf.extractedName,extractedGrade:pdf.extractedGrade,extractedSection:pdf.extractedSection,period:pdf.period,text:pdf.text,ocr:false,warnings:[],areas:structuredClone(pdf.areas),supplementalAreas:structuredClone(pdf.supplementalAreas)};
+    student.academic[0].grades[0][0]='AD';reading.areas[0].grades[0][0]='';reading.areas[0].grades[0][1]='B';pdf.ocr=true;
+    const extra=reading.supplementalAreas![0];extra.definition.competencies.reverse();extra.grades=extra.definition.competencies.map(()=>['','','']);extra.grades[0][1]='B';
+    applyRescannedGrades(state,pdf.id,reading);
+    assert.deepEqual(student.academic[0].grades[0],['A','B','A']);assert.equal(student.validated.academic,true);assert.equal(pdf.ocr,true);
+    assert.deepEqual(pdf.supplementalAreas![0].grades[0],['A','B','A']);assert(pdf.supplementalAreas!.every(area=>area.grades.every(row=>row.every(Boolean))),JSON.stringify(pdf.supplementalAreas));
+    assert.deepEqual(state.settings.areas,scoringAreas);assert.equal(student.academic.length,5);
   }finally{await h.close();}
 });
 

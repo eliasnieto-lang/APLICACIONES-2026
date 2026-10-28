@@ -1,5 +1,6 @@
-import type { AcademicArea, Grade, Settings } from './types.js';
+import type { AcademicArea, Grade, Settings, SupplementalArea } from './types.js';
 import { ACTIVE_BIMESTERS, normalizeCohort } from './policy.js';
+import { SUPPLEMENTAL_REPORT_AREAS } from './report-catalog.js';
 
 export interface ExtractedReport {
   extractedCode: string;
@@ -11,6 +12,7 @@ export interface ExtractedReport {
   ocr: boolean;
   warnings: string[];
   areas: AcademicArea[];
+  supplementalAreas?: SupplementalArea[];
 }
 
 function normalize(value: string): string {
@@ -26,6 +28,7 @@ const areaAliases: Record<string, string[]> = {
 };
 
 export const REPORT_REVIEW_WARNING = 'Lectura provisional: confirme identidad, áreas, competencias y orden I–III comparando con el PDF original.';
+export const PDF_GRADE_PARSER_VERSION = 3;
 
 type IdentityField = 'code' | 'name' | 'surnames' | 'paternal' | 'maternal' | 'given' | 'grade' | 'section' | 'cohort' | 'period' | 'ignore';
 interface IdentityLabel { field: IdentityField; start: number; end: number; line: number; lastLine: number; column: number }
@@ -152,7 +155,7 @@ function readIdentity(source: string): { extractedCode: string; extractedName: s
 }
 
 /** Summary warnings can be regenerated after independent native/OCR readings are merged. */
-export function reportWarnings(report: Pick<ExtractedReport, 'extractedCode' | 'extractedName' | 'extractedGrade' | 'extractedSection' | 'period' | 'areas'>, settings: Settings): string[] {
+export function reportWarnings(report: Pick<ExtractedReport, 'extractedCode' | 'extractedName' | 'extractedGrade' | 'extractedSection' | 'period' | 'areas' | 'supplementalAreas'>, settings: Settings): string[] {
   const warnings: string[] = [];
   if (!report.extractedCode) warnings.push('Código de estudiante no reconocido automáticamente; se necesita una lectura legible del PDF original.');
   if (!report.extractedName) warnings.push('Apellidos y nombres completos no reconocidos automáticamente; se necesita una lectura legible del PDF original.');
@@ -160,17 +163,92 @@ export function reportWarnings(report: Pick<ExtractedReport, 'extractedCode' | '
   else if (!normalizeCohort(report.extractedGrade, report.extractedSection)) warnings.push('El aula reconocida no corresponde a 2.º F, 3.º F o 4.º F. Revise el PDF original antes de confirmar.');
   if (!report.period) warnings.push('Año de la libreta no reconocido; confirme que corresponde al periodo de evaluación.');
   else if (Number(report.period) !== settings.year - 1) warnings.push(`La libreta indica ${report.period}; se esperaba ${settings.year - 1}. Revise el periodo.`);
-  const expected = settings.areas.reduce((sum, area) => sum + area.competencies.length * ACTIVE_BIMESTERS.length, 0);
-  const recognized = report.areas.reduce((sum, area) => sum + area.grades.reduce((total, row) => total + row.filter(Boolean).length, 0), 0);
-  if (recognized < expected) warnings.push(`Se reconocieron ${recognized} de ${expected} casillas del catálogo. Las restantes requieren transcripción o revisión manual.`);
+  const expected = settings.areas.reduce((sum, area) => sum + area.competencies.length * ACTIVE_BIMESTERS.length, 0)
+    + (report.supplementalAreas || []).reduce((sum, area) => sum + area.definition.competencies.length * ACTIVE_BIMESTERS.length, 0);
+  const recognized = [...report.areas, ...(report.supplementalAreas || [])].reduce((sum, area) => sum + area.grades.reduce((total, row) => total + row.filter(Boolean).length, 0), 0);
+  if (recognized < expected) warnings.push(`Se reconocieron ${recognized} de ${expected} casillas del catálogo. Reintente el escaneo con una copia legible del PDF.`);
   return warnings;
 }
 
+// Explicit curriculum names cover the abbreviated labels used in compact SIAGIE
+// reports. A short phrase is accepted only for its own configured competency.
+const competencyLabels = [
+  ['resuelve problemas de cantidad'],
+  ['resuelve problemas de regularidad', 'resuelve problemas de regularidad equivalencia y cambio'],
+  ['resuelve problemas de forma', 'resuelve problemas de forma movimiento y localizacion'],
+  ['resuelve problemas de gestion de datos', 'resuelve problemas de gestion de datos e incertidumbre'],
+  ['indaga mediante metodos cientificos', 'indaga mediante metodos cientificos para construir sus conocimientos'],
+  ['explica el mundo fisico', 'explica el mundo fisico basandose en conocimientos sobre los seres vivos materia y energia biodiversidad tierra y universo'],
+  ['disena y construye soluciones tecnologicas', 'disena y construye soluciones tecnologicas para resolver problemas de su entorno'],
+  ['se comunica oralmente', 'se comunica oralmente en su lengua materna'],
+  ['lee diversos tipos de textos', 'lee diversos tipos de textos escritos en su lengua materna', 'lee diversos tipos de textos en su lengua materna'],
+  ['escribe diversos tipos de textos', 'escribe diversos tipos de textos en su lengua materna'],
+  ['construye interpretaciones historicas'],
+  ['gestiona responsablemente el espacio y el ambiente'],
+  ['gestiona responsablemente los recursos economicos'],
+  ['construye su identidad'],
+  ['convive y participa democraticamente', 'convive y participa democraticamente en la busqueda del bien comun'],
+  ['se desenvuelve de manera autonoma', 'se desenvuelve de manera autonoma a traves de su motricidad'],
+  ['asume una vida saludable'],
+  ['interactua a traves de sus habilidades sociomotrices'],
+  ['aprecia de manera critica manifestaciones', 'aprecia de manera critica manifestaciones artistico culturales'],
+  ['crea proyectos desde los lenguajes artisticos'],
+  ['asume la experiencia del encuentro personal', 'asume la experiencia del encuentro personal y comunitario con dios en su proyecto de vida en coherencia con su creencia religiosa'],
+  ['gestiona proyectos de emprendimiento', 'gestiona proyectos de emprendimiento economico o social'],
+];
+
+function normalizedLabel(value: string): string {
+  return normalize(value).replace(/^(?:competencia\s*)?(?:c\s*)?\d+\s+/, '');
+}
+
+function labelsFor(competency: string): string[] {
+  const label = normalizedLabel(competency);
+  const known = competencyLabels.find(labels => labels.some(candidate => label === candidate || label.startsWith(`${candidate} `)));
+  return [...new Set([label, ...(known || [])])];
+}
+
 function matchesLabel(line: string, label: string): boolean {
-  const a = normalize(line).replace(/^(?:competencia )?\d+ /, '');
-  const b = normalize(label);
-  if (!b) return false;
-  return a === b || a.startsWith(`${b} `) || (b.length > 22 && a.includes(b));
+  const candidate = normalizedLabel(line);
+  const compact = candidate.replace(/ /g, '');
+  // OCR may insert or omit a word space. Removing only whitespace cannot change
+  // letters or turn a different competency into a plausible fuzzy match.
+  return labelsFor(label).some(known => {
+    if (candidate === known || candidate.startsWith(`${known} `)) return true;
+    const joined = known.replace(/ /g, '');
+    if (compact === joined) return true;
+    if (!compact.startsWith(joined)) return false;
+    let end = 0, characters = 0;
+    while (end < candidate.length && characters < joined.length) { if (candidate[end] !== ' ') characters++; end++; }
+    return candidate[end] === ' ';
+  });
+}
+
+const otherAreaLabels = ['ingles', 'ingles como lengua extranjera', 'educacion fisica', 'arte y cultura', 'educacion religiosa', 'educacion para el trabajo', 'castellano como segunda lengua', 'tutoria', 'tutoria y orientacion educativa'];
+const gradeToken = '(?:AD|A|B|C|[-–—?]|S\\/D)';
+const gradeSuffix = new RegExp(`(?:^|[\\s|;,])(${gradeToken}(?:[\\s|;,]+${gradeToken})*[\\s|;,]*)$`, 'i');
+const gradeTokens = /AD|S\/D|A|B|C|[-–—?]/gi;
+interface PrintedGrade { value: string; column: number }
+interface PrintedRow { label: string; tokens: PrintedGrade[]; explicitCells?: string[] }
+
+function readPrintedRow(line: string): PrintedRow | undefined {
+  // Explicit cell delimiters preserve empty cells without needing text coordinates.
+  if ((line.match(/\|/g)?.length || 0) >= 3) {
+    const cells = line.split('|');
+    if (!cells[0].trim()) cells.shift();
+    if (!cells.at(-1)?.trim()) cells.pop(); // remove the outside table border once
+    const lastLabel = cells.findLastIndex(cell => cell.trim() && !new RegExp(`^${gradeToken}$`, 'i').test(cell.trim()));
+    const grades = cells.slice(lastLabel + 1).map(cell => cell.trim().toUpperCase());
+    if (lastLabel >= 0 && grades.length && grades.some(Boolean) && grades.every(cell => !cell || new RegExp(`^${gradeToken}$`, 'i').test(cell))) {
+      return { label: cells.slice(0, lastLabel + 1).join(' '), tokens: [], explicitCells: grades };
+    }
+  }
+  const match = line.match(gradeSuffix);
+  if (!match) return undefined;
+  const offset = (match.index || 0) + match[0].indexOf(match[1]);
+  return {
+    label: line.slice(0, match.index).trim(),
+    tokens: [...match[1].matchAll(gradeTokens)].map(token => ({ value: token[0].toUpperCase(), column: offset + token.index })),
+  };
 }
 
 /** Parse only identifiable rows; uncertain cells remain empty until a person reviews the source. */
@@ -179,91 +257,156 @@ export function parseReportText(text: string, settings: Settings): ExtractedRepo
   const warnings: string[] = [REPORT_REVIEW_WARNING];
   const identity = readIdentity(text);
   const emptyGrades = (): Grade[] => ACTIVE_BIMESTERS.map(() => '');
-  const areas: AcademicArea[] = settings.areas.map(area => ({ areaId: area.id, grades: area.competencies.map(emptyGrades), validated: false }));
+  const definitions = [...settings.areas, ...SUPPLEMENTAL_REPORT_AREAS.filter(extra => !settings.areas.some(area => area.id === extra.id || normalize(area.name) === normalize(extra.name)))];
+  const areas: AcademicArea[] = definitions.map(area => ({ areaId: area.id, grades: area.competencies.map(emptyGrades), validated: false }));
+  const aliases = definitions.map(area => [...new Set([area.name, ...(areaAliases[area.group] || []), ...(area.id === 'ingles' ? ['ingles como lengua extranjera'] : [])].map(normalize))]);
   let currentArea = -1;
   let wrappedLabel = '';
   let areaLabelBuffer = '';
   let gradeColumns: { label: string; column: number }[] = [];
   let ambiguous = 0;
   const seen = new Set<string>();
-  // Native reports have three or four bimesters. Keep only I–III; explicit blanks preserve positions.
-  const suffix = /(?:^|[\s|;,])((?:AD|A|B|C|[-–—?]|S\/D)(?:[\s|;,]+(?:AD|A|B|C|[-–—?]|S\/D)){2,})\s*$/i;
-  for (const line of lines) {
-    const headings = [...line.matchAll(/\b(IV|III|II|I)\b/g)].map(match => ({ label: match[1], column: match.index }));
-    if ((headings.length === 3 || headings.length === 4) && headings.every((heading, index) => heading.label === ['I', 'II', 'III', 'IV'][index]) && /competenc|bimestre|calificaci|^\s*[IV|\s]+$/i.test(line)) {
-      gradeColumns = headings;
-      wrappedLabel = '';
-      continue;
+  const conflicted = new Set<string>();
+  const detectedAreas = new Set<number>();
+  let pendingCells: PrintedRow | undefined;
+  const asGrade = (value: string): Grade => ['AD', 'A', 'B', 'C'].includes(value) ? value as Grade : '';
+  const areaFragment = (value: string, areaIndex: number, continuation = false): boolean => aliases[areaIndex].some(alias => {
+    if (!value) return false;
+    if (alias === value || alias.startsWith(`${value} `)) return true;
+    return continuation && (` ${alias} `).includes(` ${value} `);
+  });
+  const stripAreaFragment = (value: string, areaIndex: number): string => {
+    const words = value.split(' ');
+    for (let end = words.length; end > 0; end--) {
+      const fragment = words.slice(0, end).join(' ');
+      if (fragment.length >= 4 && areaFragment(fragment, areaIndex, true)) return words.slice(end).join(' ');
     }
-    const gradeMatch = line.match(suffix);
-    const label = gradeMatch ? line.slice(0, gradeMatch.index).trim() : line;
-    const normalizedLabel = normalize(label).replace(/^(?:areas?(?: curriculares?)?(?: de)? |\d+ )/, '');
-    const areaCandidates = [normalizedLabel, `${areaLabelBuffer} ${normalizedLabel}`.trim()];
-    const areaIndex = settings.areas.findIndex(area => {
-      const aliases = [area.name, ...(areaAliases[area.group] || [])];
-      return aliases.some(alias => areaCandidates.some(candidate => candidate === normalize(alias) || candidate === `${normalize(alias)} ${area.group}` || candidate.startsWith(`${normalize(alias)} competencia `)));
+    return value;
+  };
+  const locate = (raw: string): { area: number; competency: number; label: string } | undefined => {
+    const value = normalizedLabel(raw).replace(/^areas?(?: curriculares?)?(?: de)? /, '');
+    const matches: { area: number; competency: number; label: string }[] = [];
+    for (let area = 0; area < definitions.length; area++) {
+      const words = value.split(' ');
+      for (let start = 0; start < words.length; start++) {
+        const prefix = words.slice(0, start).join(' ');
+        if (prefix ? !areaFragment(prefix, area, area === currentArea) && !areaFragment(`${areaLabelBuffer} ${prefix}`.trim(), area) : area !== currentArea) continue;
+        const label = words.slice(start).join(' ');
+        const joined = label.replace(/ /g, '');
+        // Shared opening words do not erase explicit language/religion evidence
+        // when the transition to another subject was unreadable.
+        if (definitions[area].group === 'communication' && joined.includes('ingles')) continue;
+        if (definitions[area].group === 'dpcc' && /(?:comopersonahumana|dios|religion|creenciareligiosa)/.test(joined)) continue;
+        if (definitions[area].id === 'ingles' && joined.includes('lenguamaterna')) continue;
+        const competencies = definitions[area].competencies.flatMap((competency, index) => matchesLabel(label, competency) ? [index] : []);
+        if (competencies.length === 1) matches.push({ area, competency: competencies[0], label });
+      }
+    }
+    const unique = matches.filter((match, index) => matches.findIndex(other => match.area === other.area && match.competency === other.competency) === index);
+    return unique.length === 1 ? unique[0] : undefined;
+  };
+  const cellsFor = (row: PrintedRow): Grade[] | undefined => {
+    const source = row.explicitCells || row.tokens.map(token => token.value);
+    if (source.length > 4 || !source.length) return undefined;
+    if (row.explicitCells) return source.length === 3 || source.length === 4 ? source.slice(0, ACTIVE_BIMESTERS.length).map(asGrade) : undefined;
+    if (source.length === 4 || source.length === 3 && gradeColumns.length !== 4) return source.slice(0, ACTIVE_BIMESTERS.length).map(asGrade);
+    if (gradeColumns.length < 3) return undefined;
+    // Missing native cells have no token. Assign each remaining value only when
+    // its printed column identifies one bimester; never slide values to the left.
+    const positions = row.tokens.map(token => {
+      const distances = gradeColumns.map(heading => Math.abs(heading.column - token.column));
+      const closest = distances.indexOf(Math.min(...distances));
+      const gap = closest ? gradeColumns[closest].column - gradeColumns[closest - 1].column : gradeColumns[1].column - gradeColumns[0].column;
+      return distances[closest] <= Math.max(1, gap / 3) ? closest : -1;
     });
-    if (areaIndex >= 0) {
-      currentArea = areaIndex;
-      wrappedLabel = '';
-      areaLabelBuffer = '';
-      if (!gradeMatch) continue;
-    } else if (!gradeMatch) {
-      const partial = areaCandidates.find(candidate => candidate && settings.areas.some(area => [area.name, ...(areaAliases[area.group] || [])].some(alias => normalize(alias).startsWith(`${candidate} `))));
-      areaLabelBuffer = partial || '';
-      if (partial) { currentArea = -1; wrappedLabel = ''; continue; }
-      // A recognized heading outside the configured catalog ends the previous area.
-      if (Object.values(areaAliases).flat().some(alias => normalize(alias) === normalizedLabel) || /^(?:ingles(?: como lengua extranjera)?|educacion fisica|arte y cultura|educacion religiosa|educacion para el trabajo|castellano como segunda lengua|tutoria(?: y orientacion educativa)?)$/.test(normalizedLabel) || /^areas? curriculares?\b/.test(normalize(label))) {
-        currentArea = -1; wrappedLabel = ''; continue;
-      }
-    }
-    if (currentArea < 0) continue;
-    const definition = settings.areas[currentArea];
-    if (!gradeMatch) {
-      // pdftotext can wrap a long competency over two or three lines.
-      if (!/^\s*(?:(?:I|II|III|IV)\b|BIMESTRE|CALIFICACI|NIVEL|COMPETENCIAS?\b)/i.test(line)) {
-        wrappedLabel = `${wrappedLabel} ${line}`.trim().slice(-700);
-      }
-      continue;
-    }
-    const sourceCells = gradeMatch[1].split(/[\s|;,]+/).map(cell => cell.toUpperCase());
-    if (sourceCells.length !== 3 && sourceCells.length !== 4) { ambiguous++; wrappedLabel = ''; continue; }
-    const candidates = [label, `${wrappedLabel} ${label}`.trim()];
-    const competencyIndex = definition.competencies.findIndex(competency => candidates.some(candidate => matchesLabel(candidate, competency)));
+    if (positions.some(position => position < 0) || new Set(positions).size !== positions.length) return undefined;
+    const cells = emptyGrades();
+    row.tokens.forEach((token, index) => { if (positions[index] < ACTIVE_BIMESTERS.length) cells[positions[index]] = asGrade(token.value); });
+    return cells;
+  };
+  const consume = (row: PrintedRow): void => {
+    const candidates = [row.label, `${wrappedLabel} ${row.label}`.trim()];
+    const match = candidates.map(locate).find(Boolean);
     wrappedLabel = '';
-    if (competencyIndex < 0) {
-      ambiguous++;
-      continue;
-    }
-    const key = `${currentArea}:${competencyIndex}`;
-    let cells = sourceCells.slice(0, ACTIVE_BIMESTERS.length).map(cell => ['AD', 'A', 'B', 'C'].includes(cell) ? cell as Grade : '');
-    if (gradeColumns.length === 4 && sourceCells.length === 3) {
-      // An empty native column has no token. Map it by the printed header positions;
-      // treating the three remaining tokens as I–III would shift the student's grades.
-      const cellsOffset = (gradeMatch.index || 0) + gradeMatch[0].indexOf(gradeMatch[1]);
-      const tokens = [...gradeMatch[1].matchAll(/AD|S\/D|A|B|C|[-–—?]/gi)].map(match => ({ value: match[0].toUpperCase(), column: cellsOffset + match.index }));
-      const positions = tokens.map(token => {
-        const distances = gradeColumns.map(heading => Math.abs(heading.column - token.column));
-        const closest = distances.indexOf(Math.min(...distances));
-        const gap = closest ? gradeColumns[closest].column - gradeColumns[closest - 1].column : gradeColumns[1].column - gradeColumns[0].column;
-        return distances[closest] <= Math.max(1, gap / 3) ? closest : -1;
-      });
-      if (positions.some(position => position < 0) || new Set(positions).size !== positions.length) { ambiguous++; continue; }
-      cells = emptyGrades();
-      tokens.forEach((token, index) => { if (positions[index] < ACTIVE_BIMESTERS.length) cells[positions[index]] = ['AD', 'A', 'B', 'C'].includes(token.value) ? token.value as Grade : ''; });
-    }
+    if (!match) { ambiguous++; return; }
+    currentArea = match.area;
+    detectedAreas.add(match.area);
+    areaLabelBuffer = '';
+    const cells = cellsFor(row);
+    if (!cells) { ambiguous++; return; }
+    const key = `${match.area}:${match.competency}`;
+    if (conflicted.has(key)) return;
     if (seen.has(key)) {
-      if (areas[currentArea].grades[competencyIndex].every((cell, index) => cell === cells[index])) continue;
-      // Repeated differing versions cannot safely overwrite the first reading.
-      areas[currentArea].grades[competencyIndex] = emptyGrades();
-      warnings.push(`Competencia repetida en ${definition.name}: ${definition.competencies[competencyIndex]}. Revise la versión aplicable.`);
-      continue;
+      if (areas[match.area].grades[match.competency].every((cell, index) => cell === cells[index])) return;
+      areas[match.area].grades[match.competency] = emptyGrades();
+      conflicted.add(key);
+      const definition = definitions[match.area];
+      warnings.push(`Competencia repetida en ${definition.name}: ${definition.competencies[match.competency]}. Revise la versión aplicable.`);
+      return;
     }
     seen.add(key);
-    areas[currentArea].grades[competencyIndex] = cells;
+    areas[match.area].grades[match.competency] = cells;
+  };
+  for (const line of lines) {
+    let row = readPrintedRow(line);
+    // Some PDF drawing orders put all grade cells after the competency text.
+    // Keep their original columns until the next labelled row ends the group.
+    if (row && !row.label.trim() && !row.explicitCells && wrappedLabel) {
+      if (pendingCells) pendingCells.tokens.push(...row.tokens);
+      else pendingCells = { label: wrappedLabel, tokens: [...row.tokens] };
+      continue;
+    }
+    if (pendingCells) { consume(pendingCells); pendingCells = undefined; }
+    const headings = [...line.matchAll(/\b(IV|III|II|I)\b/g)].map(match => ({ label: match[1], column: match.index }));
+    if ((headings.length === 3 || headings.length === 4) && headings.every((heading, index) => heading.label === ['I', 'II', 'III', 'IV'][index]) && /competenc|bimestre|calificaci|^\s*[IV|\s]+$/i.test(line)) {
+      gradeColumns = headings; wrappedLabel = ''; continue;
+    }
+    let label = normalizedLabel(row?.label || line).replace(/^areas?(?: curriculares?)?(?: de)? /, '');
+    // A left-hand area cell and its competency can both wrap. Preserve the
+    // competency fragment even before it is long enough to identify the row.
+    const columns = (row?.label || line).match(/^\s*(\S.*?) {2,}(\S.*)$/);
+    if (columns) {
+      const fragment = normalize(columns[1]);
+      const candidates = definitions.flatMap((_, area) => areaFragment(fragment, area, area === currentArea)
+        || areaLabelBuffer && areaFragment(`${areaLabelBuffer} ${fragment}`, area) ? [area] : []);
+      if (candidates.length === 1) {
+        if (currentArea !== candidates[0]) wrappedLabel = '';
+        currentArea = candidates[0]; detectedAreas.add(currentArea); areaLabelBuffer = '';
+        label = normalizedLabel(columns[2]);
+        if (row) row = { ...row, label };
+      }
+    }
+    // Full area labels can share the first competency's row.
+    const complete = aliases.flatMap((names, area) => names.flatMap(name => label === name || label.startsWith(`${name} `) ? [{ area, name }] : [])).sort((a, b) => b.name.length - a.name.length)[0];
+    if (complete) {
+      currentArea = complete.area; wrappedLabel = ''; areaLabelBuffer = '';
+      detectedAreas.add(complete.area);
+      label = label.slice(complete.name.length).trim();
+      if (!row && !label) continue;
+    } else {
+      const outside = [...Object.values(areaAliases).flat(), ...otherAreaLabels].map(normalize).some(alias => label === alias || label.startsWith(`${alias} `));
+      if (outside && !locate(label)) { currentArea = -1; wrappedLabel = ''; areaLabelBuffer = ''; if (row) ambiguous++; continue; }
+    }
+    if (row) {
+      // Retain the original prefix for locate(), including a wrapped area fragment.
+      consume({ ...row, label: complete ? label : row.label });
+      continue;
+    }
+    const match = locate(label);
+    if (match) { currentArea = match.area; detectedAreas.add(match.area); areaLabelBuffer = ''; wrappedLabel = match.label; continue; }
+    const combined = `${areaLabelBuffer} ${label}`.trim();
+    const areaIndex = aliases.findIndex(names => names.includes(combined));
+    if (areaIndex >= 0) { currentArea = areaIndex; detectedAreas.add(areaIndex); areaLabelBuffer = ''; wrappedLabel = ''; continue; }
+    const partial = [combined, label].find(candidate => candidate && aliases.some(names => names.some(alias => alias.startsWith(`${candidate} `))));
+    if (partial) { areaLabelBuffer = partial; currentArea = -1; wrappedLabel = ''; continue; }
+    if (currentArea < 0 || /^\s*(?:(?:I|II|III|IV)\b|BIMESTRE|CALIFICACI|NIVEL|COMPETENCIAS?\b|AREA\b)/i.test(line)) continue;
+    label = stripAreaFragment(label, currentArea);
+    if (label) wrappedLabel = `${wrappedLabel} ${label}`.trim().slice(-700);
   }
-  warnings.push(...reportWarnings({ ...identity, areas }, settings));
+  if (pendingCells) consume(pendingCells);
+  const configuredAreas = areas.slice(0, settings.areas.length);
+  const supplementalAreas = areas.flatMap((area, index) => index >= settings.areas.length && detectedAreas.has(index) ? [{ definition: structuredClone(definitions[index]), grades: area.grades }] : []);
+  warnings.push(...reportWarnings({ ...identity, areas: configuredAreas, supplementalAreas }, settings));
   if (ambiguous) warnings.push(`${ambiguous} fila(s) con notas no pudieron vincularse con seguridad a una competencia del catálogo.`);
-  return { ...identity, text, ocr: false, warnings, areas };
+  return { ...identity, text, ocr: false, warnings, areas: configuredAreas, ...(supplementalAreas.length ? { supplementalAreas } : {}) };
 }
-
