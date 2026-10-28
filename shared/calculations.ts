@@ -1,8 +1,10 @@
-import type { CohortRecord, Commitment, Settings, Student } from './types';
+import type { CohortRecord, Commitment, DimensionWeights, Settings, Student } from './types';
 import { ACTIVE_BIMESTERS, cohortKey, isReportApproved, normalizeCohort } from './policy';
 import { ACADEMIC_CONTEST_LABEL, contestPoints, contestRequiredFields, isAcademicContest } from './contests';
 import { activeAreas, hasActiveGrades, omittedCompetencyIndexes } from './academic-policy';
 import { commitmentRequiredFields, incidentRequiredFields, isValidRecordDate } from './record-validation';
+import { DEFAULT_DIMENSION_WEIGHTS, getDimensionWeights, getEffectiveDimensionWeights, isCommitmentEnabled } from './evaluation-policy';
+export { DEFAULT_DIMENSION_WEIGHTS, getDimensionWeights, getEffectiveDimensionWeights, isCommitmentEnabled } from './evaluation-policy';
 
 export interface StudentResult {
   a: number | null; b: number | null; c: number | null; total: number | null;
@@ -12,6 +14,7 @@ export interface StudentResult {
   participation: number | null; family: number | null; participationNA: boolean; familyNA: boolean;
   pa: number; pb: number; pc: number; progress: number;
   academicComplete: boolean; performanceComplete: boolean; commitmentComplete: boolean;
+  commitmentExcluded: boolean;
   eligible: boolean; status: string; pending: string[]; areaAverages: Record<string, number | null>;
 }
 export interface RankedStudent { student: Student; result: StudentResult; position: number; cohort: string }
@@ -30,7 +33,13 @@ export const cohortRecordApplies = (record: CohortRecord, student: Pick<Student,
 };
 export const fmt = (value: number | null): string => value === null || !Number.isFinite(value) ? 'Pendiente' : value.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 export const calculateProgression = (s1: number, s2: number): number => 25 * Math.min(4, Math.max(1, s2 + .5 * (s2 - s1)));
-export const calculateTotal = (a: number | null, b: number | null, c: number | null): number | null => a !== null && b !== null && c !== null ? (a + b + c) / 3 : null;
+export function calculateTotal(a: number | null, b: number | null, c: number | null, weights: DimensionWeights = DEFAULT_DIMENSION_WEIGHTS, commitmentEnabled = true): number | null {
+  if (!present(a) || !present(b) || commitmentEnabled && !present(c)) return null;
+  const values = [weights.academic, weights.performance, weights.commitment];
+  if (values.some(value => !present(value) || value <= 0 || value > 1) || Math.abs(values.reduce((sum, value) => sum + value, 0) - 1) > 1e-9) return null;
+  const effective = getEffectiveDimensionWeights({ dimensionWeights: weights }, { commitmentEnabled });
+  return effective.academic * a + effective.performance * b + (commitmentEnabled ? effective.commitment * c! : 0);
+}
 
 export function validateSettings(settings: Settings): string[] {
   const errors: string[] = [];
@@ -40,6 +49,10 @@ export function validateSettings(settings: Settings): string[] {
   weights('Académico', Object.values(settings.academicWeights));
   weights('Desempeño', Object.values(settings.performanceWeights));
   weights('Compromiso', Object.values(settings.commitmentWeights));
+  const dimensionWeights = getDimensionWeights(settings);
+  weights('Promedio general', [dimensionWeights.academic, dimensionWeights.performance, dimensionWeights.commitment]);
+  if ([dimensionWeights.academic, dimensionWeights.performance, dimensionWeights.commitment].some(value => !present(value) || value <= 0)) errors.push('Promedio general: cada ámbito debe tener un peso mayor que cero; excluya Compromiso en la ficha cuando no se evalúe.');
+  if (dimensionWeights.academic <= dimensionWeights.performance || dimensionWeights.academic <= dimensionWeights.commitment) errors.push('Promedio general: Académico debe tener el mayor peso.');
   if (!present(settings.scienceWeight) || settings.scienceWeight < 0 || settings.scienceWeight > 1) errors.push('El peso de Ciencias debe estar entre 0 y 100 %.');
   if (!Number.isInteger(settings.year) || settings.year < 2020 || settings.year > 2100) errors.push('El año de evaluación no es válido.');
   if (!settings.version?.trim()) errors.push('La versión del cálculo es obligatoria.');
@@ -122,19 +135,20 @@ function institutionalResult(records: Commitment[], pending: string[], templates
 
 export function calculateStudent(student: Student, settings: Settings): StudentResult {
   const pending: string[] = [];
+  const commitmentExcluded = !isCommitmentEnabled(student);
   const configErrors = validateSettings(settings);
   pending.push(...configErrors);
   const reportApproved = isReportApproved(student);
   if (!reportApproved) {
-    const noData = student.academic.every(area => !hasActiveGrades(area)) && Object.values(student.attendance).every(value => value === null || value === false) && !student.discipline.confirmed && !student.discipline.incidents.length && !student.institutional.length && !student.family.length;
-    pending.push('Confirmar la identidad y la lectura de una libreta PDF antes de evaluar Académico, Desempeño y Compromiso.');
+    const noData = student.academic.every(area => !hasActiveGrades(area)) && Object.values(student.attendance).every(value => value === null || value === false) && !student.discipline.confirmed && !student.discipline.incidents.length && (commitmentExcluded || !student.institutional.length && !student.family.length);
+    pending.push(`Confirmar la identidad y la lectura de una libreta PDF antes de evaluar ${commitmentExcluded ? 'Académico y Desempeño' : 'Académico, Desempeño y Compromiso'}.`);
     return {
       a: null, b: null, c: null, total: null, g: null, r: null, p: null,
       science: null, letters: null, s1: null, s2: null, delta: null,
       attendance: null, punctuality: null, ap: null, discipline: null,
       participation: null, family: null, participationNA: false, familyNA: false,
       pa: 0, pb: 0, pc: 0, progress: 0,
-      academicComplete: false, performanceComplete: false, commitmentComplete: false,
+      academicComplete: false, performanceComplete: false, commitmentComplete: false, commitmentExcluded,
       eligible: false, status: noData ? 'SIN INICIAR' : 'PENDIENTE DE LIBRETA', pending,
       areaAverages: Object.fromEntries(activeAreas(student, settings).map(area => [area.id, null])),
     };
@@ -235,33 +249,35 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
   const b = ap !== null && discipline !== null ? settings.performanceWeights.attendance * ap + settings.performanceWeights.discipline * discipline : null;
 
   const cohortRecords = (settings.cohortRecords ?? []).filter(record => cohortRecordApplies(record, student));
-  const pi = institutionalResult(student.institutional, pending, cohortRecords.filter(record => record.kind === 'institutional' && student.institutional.some(input => input.catalogId === record.id)));
-  const cf = commitmentResult(student.family, 'Compromiso familiar', pending, cohortRecords.filter(record => record.kind === 'family' && student.family.some(input => input.catalogId === record.id)));
+  const excludedCommitment = { value: null, na: false, complete: false, validated: 0, expected: 0 };
+  const pi = commitmentExcluded ? excludedCommitment : institutionalResult(student.institutional, pending, cohortRecords.filter(record => record.kind === 'institutional' && student.institutional.some(input => input.catalogId === record.id)));
+  const cf = commitmentExcluded ? excludedCommitment : commitmentResult(student.family, 'Compromiso familiar', pending, cohortRecords.filter(record => record.kind === 'family' && student.family.some(input => input.catalogId === record.id)));
   let c: number | null = pi.value !== null && cf.value !== null ? settings.commitmentWeights.participation * pi.value + settings.commitmentWeights.family * cf.value : null;
   if ((pi.na || cf.na) && pi.complete && cf.complete) {
     if (settings.naPolicy === 'other_component' && settings.naPolicyApproved && !(pi.na && cf.na)) c = pi.na ? cf.value : pi.value;
     else pending.push(pi.na && cf.na ? 'Ambos componentes de Compromiso son No aplica: se requiere resolución institucional; no hay puntaje C.' : 'Resolver y aprobar regla común de No aplica antes de calcular C.');
   }
-  const commitmentComplete = pi.complete && cf.complete && c !== null;
+  const commitmentComplete = !commitmentExcluded && pi.complete && cf.complete && c !== null;
   const pa = percent(validatedGrades, expectedGrades);
   const pb = (attendanceValid && at.validated ? 80 : 0) + (disciplineValid ? 20 : 0);
   const pc = percent(pi.validated + cf.validated, pi.expected + cf.expected);
-  const progress = (pa + pb + pc) / 3;
+  const progress = commitmentExcluded ? (pa + pb) / 2 : (pa + pb + pc) / 3;
   const unresolvedIdentity = (value: string) => !value.trim() || /^(?:por revisar|por definir|sin grado|sin secci[oó]n|desconocido|[-—–])$/i.test(value.trim());
   const identityValid = ![student.code, student.name, student.grade, student.section].some(unresolvedIdentity);
   if (!identityValid) pending.push('Completar código, nombre, grado y sección del estudiante.');
   const cohortValid = Boolean(normalizeCohort(student.grade, student.section));
-  if (!cohortValid) pending.push('El grado y sección deben corresponder a 2.º F, 3.º F, 4.º F o 5.º F de secundaria.');
+  if (!cohortValid) pending.push('El grado y sección deben corresponder a un aula válida de secundaria.');
   if (!student.validated.academic) pending.push('Confirmar validación final de Académico.');
   if (!student.validated.performance) pending.push('Confirmar validación final de Desempeño.');
-  if (!student.validated.commitment) pending.push('Confirmar validación final de Compromiso.');
+  if (!commitmentExcluded && !student.validated.commitment) pending.push('Confirmar validación final de Compromiso.');
   if (!settings.criteriaApproved) pending.push('Confirmar aprobación institucional de los criterios y ponderaciones.');
-  const total = calculateTotal(a, b, c);
-  const eligible = total !== null && academicComplete && performanceComplete && commitmentComplete && progress === 100 && Object.values(student.validated).every(Boolean) && settings.criteriaApproved && configErrors.length === 0 && identityValid && cohortValid;
-  const untouchedCommitments = [...student.institutional, ...student.family].every(record => record.status === 'pending' && !record.validated && !record.justification && !record.evidence);
+  const total = calculateTotal(a, b, c, getDimensionWeights(settings), !commitmentExcluded);
+  const validationsComplete = student.validated.academic && student.validated.performance && (commitmentExcluded || student.validated.commitment);
+  const eligible = total !== null && academicComplete && performanceComplete && (commitmentExcluded || commitmentComplete) && progress === 100 && validationsComplete && settings.criteriaApproved && configErrors.length === 0 && identityValid && cohortValid;
+  const untouchedCommitments = commitmentExcluded || [...student.institutional, ...student.family].every(record => record.status === 'pending' && !record.validated && !record.justification && !record.evidence);
   const noData = enteredGrades === 0 && attendanceFields.every(v => v === null) && !student.discipline.confirmed && !student.discipline.incidents.length && untouchedCommitments;
   const status = eligible ? 'VALIDADO' : noData ? 'SIN INICIAR' : configErrors.length || attendanceInvalid ? 'CON OBSERVACIONES' : total !== null && progress === 100 ? 'COMPLETO SIN VALIDAR' : 'EN PROCESO';
-  return { a, b, c, total, g, r, p, science, letters, s1, s2, delta, attendance, punctuality, ap, discipline, participation: pi.value, family: cf.value, participationNA: pi.na, familyNA: cf.na, pa, pb, pc, progress, academicComplete, performanceComplete, commitmentComplete, eligible, status, pending, areaAverages };
+  return { a, b, c, total, g, r, p, science, letters, s1, s2, delta, attendance, punctuality, ap, discipline, participation: pi.value, family: cf.value, participationNA: pi.na, familyNA: cf.na, pa, pb, pc, progress, academicComplete, performanceComplete, commitmentComplete, commitmentExcluded, eligible, status, pending, areaAverages };
 }
 
 /** Competition ranking inside each comparable grade/section; ties use displayed precision. */

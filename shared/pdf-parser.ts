@@ -161,7 +161,7 @@ export function reportWarnings(report: Pick<ExtractedReport, 'extractedCode' | '
   if (!report.extractedCode) warnings.push('Código de estudiante no reconocido automáticamente; se necesita una lectura legible del PDF original.');
   if (!report.extractedName) warnings.push('Apellidos y nombres completos no reconocidos automáticamente; se necesita una lectura legible del PDF original.');
   if (!report.extractedGrade || !report.extractedSection) warnings.push('Grado o sección no reconocidos automáticamente; se necesita una lectura legible del PDF original.');
-  else if (!normalizeCohort(report.extractedGrade, report.extractedSection)) warnings.push('El aula reconocida no corresponde a 2.º F, 3.º F, 4.º F o 5.º F. Revise el PDF original antes de confirmar.');
+  else if (!normalizeCohort(report.extractedGrade, report.extractedSection)) warnings.push('El aula reconocida debe indicar un grado de 1.º a 5.º de secundaria y una sección de A a Z. Revise el PDF original antes de confirmar.');
   if (!report.period) warnings.push('Año de la libreta no reconocido; confirme que corresponde al periodo de evaluación.');
   else if (Number(report.period) !== settings.year - 1) warnings.push(`La libreta indica ${report.period}; se esperaba ${settings.year - 1}. Revise el periodo.`);
   const courses = [

@@ -1,26 +1,28 @@
 import type { Student } from './types';
 
 export const ACTIVE_BIMESTERS = ['I', 'II', 'III'] as const;
-export const ALLOWED_COHORTS = [
-  { grade: '2.º de secundaria', section: 'F', label: '2.º F' },
-  { grade: '3.º de secundaria', section: 'F', label: '3.º F' },
-  { grade: '4.º de secundaria', section: 'F', label: '4.º F' },
-  { grade: '5.º de secundaria', section: 'F', label: '5.º F' },
-] as const;
-export type AllowedCohort = typeof ALLOWED_COHORTS[number];
+export interface AllowedCohort { grade: string; section: string; label: string }
+export const ALLOWED_COHORTS: readonly AllowedCohort[] = [1, 2, 3, 4, 5].flatMap(grade =>
+  Array.from({ length: 26 }, (_, index) => {
+    const section = String.fromCharCode(65 + index);
+    return { grade: `${grade}.º de secundaria`, section, label: `${grade}.º ${section}` };
+  }));
 
 /** Whole grade expressions only: a 2 inside 12 or 25 is never a match. */
 export function normalizeCohort(grade: string, section: string): AllowedCohort | null {
-  if (typeof grade !== 'string' || typeof section !== 'string' || section.trim().toUpperCase() !== 'F') return null;
+  if (typeof grade !== 'string' || typeof section !== 'string' || !/^[A-Z]$/.test(section.trim().toUpperCase())) return null;
+  const normalizedSection = section.trim().toUpperCase();
   const value = grade.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase().replace(/\s+/g, ' ');
-  const suffix = '(?:\\s+grado)?(?:\\s+(?:de\\s+)?(?:educacion\\s+)?secundaria)?';
+  const suffix = '(?:\\s+(?:grado|ano))?(?:\\s+(?:de\\s+)?(?:educacion\\s+)?secundaria)?';
   const forms = [
+    new RegExp(`^(?:1(?:\\s*\\.?(?:º|°|o|ro|ero|er))?|primero|primer)${suffix}$`),
     new RegExp(`^(?:2(?:\\s*\\.?(?:º|°|o|do))?|segundo)${suffix}$`),
     new RegExp(`^(?:3(?:\\s*\\.?(?:º|°|o|ro|ero|er))?|tercero|tercer)${suffix}$`),
     new RegExp(`^(?:4(?:\\s*\\.?(?:º|°|o|to))?|cuarto)${suffix}$`),
     new RegExp(`^(?:5(?:\\s*\\.?(?:º|°|o|to))?|quinto)${suffix}$`),
   ];
-  return ALLOWED_COHORTS.find((_, index) => forms[index].test(value)) ?? null;
+  const index = forms.findIndex(form => form.test(value));
+  return index < 0 ? null : ALLOWED_COHORTS.find(cohort => cohort.grade === `${index + 1}.º de secundaria` && cohort.section === normalizedSection) ?? null;
 }
 
 export const cohortKey = (grade: string, section: string): string => normalizeCohort(grade, section)?.label ?? '';

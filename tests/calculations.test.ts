@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateProgression, calculateStudent, calculateTotal, cohortRecordApplies, fmt, rankStudents, validateSettings } from '../shared/calculations';
+import { calculateProgression, calculateStudent, calculateTotal, cohortRecordApplies, DEFAULT_DIMENSION_WEIGHTS, fmt, getDimensionWeights, getEffectiveDimensionWeights, rankStudents, validateSettings } from '../shared/calculations';
 import { createDemoState, createStudent, defaultSettings } from '../shared/defaults';
 import type { AppState, CohortRecord, Commitment, PdfRecord, Settings, Student } from '../shared/types';
 import { ACTIVE_BIMESTERS, ALLOWED_COHORTS, cohortKey, isReportApproved, normalizeCohort } from '../shared/policy';
@@ -69,11 +69,89 @@ test('Cartilla: participación80 y familia90 produce C=83', () => {
   assert.equal(result.family, 90);
   assert.equal(result.c, 83);
 });
-test('Cartilla: promedio simple 78,76,89,50,83 = 83,75 a precisión de presentación', () => {
+test('El promedio general pondera Académico 50 %, Desempeño 25 % y Compromiso 25 %', () => {
   const total = calculateTotal(78.76, 89.5, 83)!;
-  assert.ok(Math.abs(total - 83.75333333333333) < 1e-12);
-  assert.equal(fmt(total), (83.75).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+  assert.ok(Math.abs(total - 82.505) < 1e-12);
+  assert.equal(fmt(total), (82.51).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
   assert.equal(calculateTotal(75, 80, null), null);
+  assert.equal(calculateTotal(null, 80, 100), null);
+  assert.equal(calculateTotal(75, null, 100), null);
+  assert.ok(Math.abs(calculateTotal(75, 80, null, { academic: .7, performance: .2, commitment: .1 }, false)! - (75 * 7 + 80 * 2) / 9) < 1e-12);
+});
+test('Los pesos configurables mantienen Académico como mayor componente y se aplican sin redondeo intermedio', () => {
+  const settings = approved(), student = complete(settings);
+  assert.deepEqual(getDimensionWeights(settings), { academic: .5, performance: .25, commitment: .25 });
+  assert.deepEqual(getDimensionWeights({}), DEFAULT_DIMENSION_WEIGHTS);
+  settings.dimensionWeights = { academic: .7, performance: .2, commitment: .1 };
+  assert.deepEqual(validateSettings(settings), []);
+  const result = calculateStudent(student, settings);
+  assert.ok(Math.abs(result.total! - (75 * .7 + 89.5 * .2 + 83 * .1)) < 1e-12);
+  for (const weights of [
+    { academic: .3, performance: .5, commitment: .2 },
+    { academic: .4, performance: .4, commitment: .2 },
+    { academic: .6, performance: .4, commitment: 0 },
+    { academic: .7, performance: .3, commitment: .2 },
+    { academic: Number.NaN, performance: .25, commitment: .15 },
+  ]) {
+    settings.dimensionWeights = weights;
+    assert.ok(validateSettings(settings).length);
+    assert.equal(calculateStudent(student, settings).eligible, false);
+  }
+});
+test('Excluir Compromiso normaliza A:B, no exige C ni sus confirmaciones y conserva todos sus datos', () => {
+  const settings = approved(), student = complete(settings);
+  student.commitmentEnabled = false;
+  student.validated.commitment = false;
+  // An unfinished old C entry must remain available if the operator enables C again.
+  student.family[0].date = ''; student.family[0].validated = false;
+  student.institutional = [];
+  const before = structuredClone(student);
+  const effective = getEffectiveDimensionWeights(settings, student);
+  assert.equal(effective.academic, 2 / 3);
+  assert.equal(effective.performance, 1 / 3);
+  assert.equal(effective.commitment, 0);
+  const result = calculateStudent(student, settings);
+  assert.equal(result.commitmentExcluded, true);
+  assert.equal(result.c, null);
+  assert.equal(result.pc, 0);
+  assert.equal(result.progress, 100);
+  assert.equal(result.eligible, true);
+  assert.ok(Math.abs(result.total! - (75 * 50 + 89.5 * 25) / 75) < 1e-12);
+  assert.deepEqual(result.pending, []);
+  assert.deepEqual(semanticStudentErrors(student, settings), []);
+  assert.equal(rankStudents([student], settings).length, 1);
+  assert.deepEqual(student, before);
+  student.commitmentEnabled = true;
+  assert.equal(calculateStudent(student, settings).eligible, false);
+  assert.equal(calculateStudent(student, settings).total, null);
+});
+test('Excluir Compromiso no omite datos ni confirmaciones obligatorios de Académico y Desempeño', () => {
+  for (const invalidate of [
+    (student: Student) => { student.academic[0].grades[0][2] = ''; },
+    (student: Student) => { student.attendance.attended = null; },
+    (student: Student) => { student.validated.academic = false; },
+    (student: Student) => { student.validated.performance = false; },
+    (student: Student) => { student.attendance.validated = false; },
+    (student: Student) => { student.discipline.confirmed = false; },
+  ]) {
+    const settings = approved(), student = complete(settings);
+    student.commitmentEnabled = false; student.institutional = []; student.family = [];
+    invalidate(student);
+    const result = calculateStudent(student, settings);
+    assert.equal(result.eligible, false);
+    assert.deepEqual(rankStudents([student], settings), []);
+    assert.ok(result.pending.length);
+    assert.ok(result.pending.every(message => !/Compromiso|Participación|familia/i.test(message)));
+  }
+});
+test('La permanencia es una decisión manual independiente del puntaje y la clasificación', () => {
+  const settings = approved(), student = complete(settings);
+  const result = calculateStudent(student, settings);
+  for (const circleStatus of ['pending', 'remains', 'does_not_remain'] as const) {
+    student.circleStatus = circleStatus;
+    assert.deepEqual(calculateStudent(student, settings), result);
+    assert.equal(student.circleStatus, circleStatus);
+  }
 });
 test('Cartilla: falta III bimestre, avance menor100, total pendiente y fuera de ranking', () => {
   const settings = approved();
@@ -141,10 +219,10 @@ test('Un curso parcialmente cargado sigue exigiendo todas sus competencias I–I
   math.grades[0][2] = 'A';
   assert.equal(isAreaComplete(settings.areas[0], math), true);
 });
-test('4.º F y 5.º F promedian solo las dos competencias cursadas de Ciencia y exigen su revisión manual', () => {
-  for (const grade of ['4', '5']) {
+test('Las aulas de secundaria promedian Ciencia con las competencias cursadas y exigen revisión manual', () => {
+  for (const [grade, section] of [['1', 'A'], ['2', 'B'], ['3', 'F'], ['4', 'F'], ['5', 'Z']]) {
     const settings = approved(), student = complete(settings);
-    student.grade = grade;
+    student.grade = grade; student.section = section;
     const science = student.academic.find(area => area.areaId === 'ciencia')!;
     science.grades[0] = ['', '', '', 'AD'];
     science.validated = false; student.validated.academic = false;
@@ -183,7 +261,7 @@ test('Una Indaga parcial u otra competencia incompleta sigue pendiente y no se p
   for (const grade of ['2', '3', '4', '5']) {
     const settings = approved(), student = complete(settings); student.grade = grade;
     const science = student.academic.find(area => area.areaId === 'ciencia')!;
-    science.grades[0] = grade === '2' || grade === '3' ? ['', '', ''] : ['', 'A', ''];
+    science.grades[0] = ['', 'A', ''];
     assert.equal(calculateStudent(student, settings).a, null);
     assert.equal(calculateStudent(student, settings).eligible, false);
     assert.ok(semanticStudentErrors(student, settings).some(error => error.includes('calificaciones vacías')));
@@ -373,6 +451,22 @@ test('Ranking descendente agrupado por cohorte, empates compartidos a dos decima
   assert.equal(rows[3].cohort, '4.º F');
   assert.ok(rows[0].result.total! >= rows[2].result.total!);
 });
+test('Los listados de 1.º A y 1.º B mantienen puestos independientes con el promedio ponderado', () => {
+  const settings = approved();
+  const students = ['A', 'B'].flatMap(section => [false, true].map(highAcademic => {
+    const student = complete(settings);
+    student.id = `${section}-${highAcademic ? 'alto' : 'base'}`;
+    student.grade = 'primero'; student.section = section;
+    if (highAcademic) student.academic.forEach(area => area.grades.forEach(row => row.fill('AD')));
+    return student;
+  }));
+  const ranking = rankStudents(students, settings);
+  assert.deepEqual(ranking.map(row => [row.cohort, row.position, row.student.id]), [
+    ['1.º A', 1, 'A-alto'], ['1.º A', 2, 'A-base'], ['1.º B', 1, 'B-alto'], ['1.º B', 2, 'B-base'],
+  ]);
+  assert.equal(ranking[0].result.total, 93.125);
+  assert.equal(ranking[1].result.total, 80.625);
+});
 test('Configuración inválida impide ranking y configuración de base exige aprobación explícita', () => {
   const settings = approved();
   assert.deepEqual(validateSettings(defaultSettings), []);
@@ -397,7 +491,8 @@ test('Un estudiante nuevo no contiene datos ni valores sustitutos y demo es inde
   assert.ok(demo.students.every(s => !calculateStudent(s, demo.settings).eligible));
   assert.ok(demo.students.every(s => !isReportApproved(s) && !s.pdfIds.length));
   assert.ok(demo.students.every(s => !s.institutional.length && !s.family.length));
-  assert.deepEqual(new Set(demo.students.map(s => cohortKey(s.grade, s.section))), new Set(ALLOWED_COHORTS.map(c => c.label)));
+  assert.ok(demo.students.every(student => ALLOWED_COHORTS.some(cohort => cohort.label === cohortKey(student.grade, student.section))));
+  assert.ok(new Set(demo.students.map(student => cohortKey(student.grade, student.section))).size > 1);
   assert.ok(demo.students.every(s => s.code.startsWith('DEMO-')));
   assert.equal(defaultSettings.criteriaApproved, false);
 });
@@ -569,14 +664,16 @@ test('Nombre, fecha real y estado siguen siendo obligatorios en compromisos fami
   }
 });
 
-test('Solo se normalizan los grados completos habilitados de secundaria F', () => {
+test('Se normalizan los cinco grados y las secciones A–Z de secundaria con expresiones completas', () => {
   assert.deepEqual(ACTIVE_BIMESTERS, ['I', 'II', 'III']);
   for (const [grade, canonical] of [
-    ['2', '2.º de secundaria'], [' 2.° de Secundaria ', '2.º de secundaria'], ['segundo grado de secundaria', '2.º de secundaria'],
+    ['1ro AÑO de secundaria', '1.º de secundaria'], ['primero', '1.º de secundaria'], ['2', '2.º de secundaria'], [' 2.° de Secundaria ', '2.º de secundaria'], ['segundo grado de secundaria', '2.º de secundaria'],
     ['3ro secundaria', '3.º de secundaria'], ['TERCERO', '3.º de secundaria'], ['tercer grado de educación secundaria', '3.º de secundaria'], ['3.er de secundaria', '3.º de secundaria'], ['4to grado', '4.º de secundaria'], ['cuarto de secundaria', '4.º de secundaria'], ['5to grado', '5.º de secundaria'], ['quinto de secundaria', '5.º de secundaria'],
   ]) assert.equal(normalizeCohort(grade, ' f ')?.grade, canonical);
-  for (const grade of ['12', '25', '23', '2do primaria', '2.º F', 'pre 3', '3.º de secundaria extra', '2to', '4ro', '3do', '1', '6']) assert.equal(normalizeCohort(grade, 'F'), null, grade);
-  for (const section of ['A', 'FF', '2F', '']) assert.equal(normalizeCohort('3', section), null, section);
+  for (const grade of ['12', '25', '23', '2do primaria', '2.º F', 'pre 3', '3.º de secundaria extra', '2to', '4ro', '3do', '0', '6']) assert.equal(normalizeCohort(grade, 'F'), null, grade);
+  for (const section of ['FF', '2F', '', 'Ñ', '1']) assert.equal(normalizeCohort('3', section), null, section);
+  for (const section of ['A', 'B', 'F', 'Z']) assert.equal(normalizeCohort('3', section.toLowerCase())?.label, `3.º ${section}`);
+  assert.equal(ALLOWED_COHORTS.length, 130);
 });
 
 test('El promedio I–II se compara con III y los datos heredados IV no afectan ningún cálculo', () => {
@@ -626,7 +723,7 @@ test('Sin aprobación de PDF no se evalúan A/B/C ni se alteran los registros ma
 
 test('Una cohorte no admitida nunca participa del ranking aunque mantenga su expediente', () => {
   const settings = approved();
-  for (const [grade, section] of [['6', 'F'], ['3', 'A'], ['12', 'F']]) {
+  for (const [grade, section] of [['6', 'F'], ['3', 'AA'], ['12', 'F']]) {
     const student = complete(settings);
     student.grade = grade; student.section = section;
     assert.equal(calculateStudent(student, settings).eligible, false);
@@ -648,6 +745,27 @@ const legacyState = (): AppState => {
   student.academic.forEach(area => area.grades.forEach(row => row.push('C')));
   return { settings, students: [student], pdfs: [report(student)] };
 };
+
+test('La migración del promedio ponderado conserva datos y cierre, requiere aprobación una vez y respeta pesos explícitos', () => {
+  const settings = approved(), student = complete(settings);
+  delete settings.dimensionWeights; settings.closed = true;
+  delete student.commitmentEnabled; delete student.circleStatus;
+  const source: AppState = { settings, students: [student], pdfs: [report(student)] };
+  const before = structuredClone(source);
+  const migrated = migrateState(source);
+  assert.deepEqual(migrated.settings.dimensionWeights, DEFAULT_DIMENSION_WEIGHTS);
+  assert.equal(migrated.settings.criteriaApproved, false);
+  assert.equal(migrated.settings.closed, true);
+  assert.equal(migrated.students[0].commitmentEnabled, true);
+  assert.equal(migrated.students[0].circleStatus, 'pending');
+  for (const field of ['academic', 'attendance', 'discipline', 'institutional', 'family', 'validated', 'history'] as const) assert.deepEqual(migrated.students[0][field], before.students[0][field]);
+  assert.deepEqual(source, before);
+  migrated.settings.dimensionWeights = { academic: .7, performance: .2, commitment: .1 };
+  migrated.settings.criteriaApproved = true;
+  migrated.students[0].commitmentEnabled = false;
+  migrated.students[0].circleStatus = 'does_not_remain';
+  assert.deepEqual(migrateState(migrated), migrated);
+});
 
 test('La migración actualiza el flujo una vez, recupera PDF confirmado y conserva IV y B/C manuales', () => {
   const source = legacyState();

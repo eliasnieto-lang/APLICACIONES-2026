@@ -1,6 +1,7 @@
 import type { AppState, Grade, Settings, Student } from './types';
 import { ACTIVE_BIMESTERS, ALLOWED_COHORTS, normalizeCohort } from './policy';
 import { ACADEMIC_CONTEST_LABEL } from './contests';
+import { DEFAULT_DIMENSION_WEIGHTS } from './evaluation-policy';
 
 export const defaultSettings: Settings = {
   year: 2027,
@@ -15,6 +16,7 @@ export const defaultSettings: Settings = {
     { id: 'dpcc', name: 'Desarrollo Personal, Ciudadanía y Cívica', group: 'dpcc', eligible: true, competencies: ['Construye su identidad', 'Convive y participa democráticamente'] },
   ],
   academicWeights: { general: .4, specialized: .4, progress: .2 },
+  dimensionWeights: { ...DEFAULT_DIMENSION_WEIGHTS },
   scienceWeight: .6,
   performanceWeights: { attendance: .6, discipline: .4 },
   commitmentWeights: { participation: .7, family: .3 },
@@ -44,6 +46,8 @@ export function createStudent(input: Partial<Student>, settings: Settings): Stud
     discipline: input.discipline ?? { confirmed: false, incidents: [] },
     institutional: [...(input.institutional ?? [])], family: [...(input.family ?? [])],
     validated: input.validated ?? { academic: false, performance: false, commitment: false },
+    commitmentEnabled: input.commitmentEnabled ?? true,
+    circleStatus: input.circleStatus ?? 'pending',
     history: input.history ?? [], pdfIds: input.pdfIds ?? [], createdAt: input.createdAt ?? now, updatedAt: input.updatedAt ?? now,
     ...(input.reportApproval ? { reportApproval: input.reportApproval } : {}),
   };
@@ -55,9 +59,10 @@ export function createDemoState(): AppState {
   settings.disciplineTypes[0].discount = 5;
   settings.disciplineTypes[1].discount = 15;
   settings.disciplineTypes[2].discount = 30;
+  const demoCohorts = ALLOWED_COHORTS.filter(cohort => cohort.section === 'F' && ['2.º de secundaria', '3.º de secundaria', '4.º de secundaria', '5.º de secundaria'].includes(cohort.grade));
   const names = ['Valentina Mendoza Torres', 'Mateo Salazar Ríos', 'Luciana Flores Vega', 'Sebastián Quispe León', 'Camila Paredes Soto', 'Nicolás Herrera Díaz', 'Alessia Romero Cruz', 'Gabriel Castro Silva'];
   const students = names.map((name, i) => {
-    const cohort = ALLOWED_COHORTS[i % ALLOWED_COHORTS.length];
+    const cohort = demoCohorts[i % demoCohorts.length];
     const s = createStudent({ code: `DEMO-${String(i + 1).padStart(3, '0')}`, name, grade: cohort.grade, section: cohort.section }, settings);
     s.academic.forEach((area, a) => {
       area.grades = area.grades.map((_, c) => ACTIVE_BIMESTERS.map((__, b) => i === 0 ? ((a + c + b) % 3 === 0 ? 'AD' : 'A') : i === 1 ? (b > 1 ? 'AD' : 'A') : i === 2 ? 'A' : ((a + c + i + b) % 6 === 0 ? 'B' : 'A')));

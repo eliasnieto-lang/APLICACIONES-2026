@@ -63,6 +63,23 @@ test('a fifth F filename registers, confirms and retains its classroom after mig
   assert.deepEqual(stateReferenceErrors(migrated), []);
 });
 
+test('other secondary classrooms create separate students and survive confirmation and migration', () => {
+  for (const [grade, section] of [['1ro', 'A'], ['1ro', 'B'], ['3ro', 'C'], ['5to', 'Z']]) {
+    const app = state(), pdf = report({ name: `BOLETA_${grade}_${section}_Secundaria_PEREZ_GARCIA_ANA.pdf` });
+    app.pdfs.push(pdf);
+    const student = registerImportedReport(app, pdf)!;
+    assert.ok(student);
+    assert.equal(student.section, section);
+    assert.equal(student.grade, `${grade[0]}.º de secundaria`);
+    confirmReport(app, pdf.id);
+    const restored = migrateState(app);
+    assert.equal(restored.students[0].id, student.id);
+    assert.equal(restored.students[0].section, section);
+    assert.deepEqual(restored.students[0].reportApproval, student.reportApproval);
+    assert.deepEqual(stateReferenceErrors(restored), []);
+  }
+});
+
 test('filename name and classroom take precedence over conflicting text extraction', () => {
   const app = state(), pdf = report({ extractedCode: 'KNOWN-1', extractedName: 'Nombre equivocado', extractedGrade: '4', extractedSection: 'F' }); app.pdfs.push(pdf);
   const student = registerImportedReport(app, pdf)!;
@@ -167,7 +184,7 @@ test('a recognized existing code resolves homonyms and unsupported classrooms re
   const invalid = report({ name: 'libreta.pdf', extractedName: 'Nombre Completo', extractedGrade: '6', extractedSection: 'F' }); app.pdfs.push(invalid);
   assert.equal(registerImportedReport(app, invalid), null);
   assert.throws(() => confirmReport(app, invalid.id, { name: 'Nombre Corregido' }), (error: unknown) => error instanceof ReportWorkflowError && error.status === 400);
-  assert.throws(() => identifyReport(app, invalid.id, { name: 'Nombre Corregido', grade: '2', section: 'A' }), (error: unknown) => error instanceof ReportWorkflowError && error.status === 400);
+  assert.throws(() => identifyReport(app, invalid.id, { name: 'Nombre Corregido', grade: '2', section: 'AA' }), (error: unknown) => error instanceof ReportWorkflowError && error.status === 400);
 });
 
 

@@ -9,6 +9,8 @@ export type RecordStatus = 'pending' | 'fulfilled' | 'missed' | 'justified' | 'n
 export interface Commitment { id: string; catalogId?: string; name: string; date: string; required: boolean; status: RecordStatus; justification: string; evidence: string; validated: boolean; placement?: string; representingSchool?: boolean; eventType?: 'academic_contest'; scope?: 'local' | 'regional' | 'national' }
 export interface CohortRecord { id: string; kind: 'institutional' | 'family'; name: string; date: string; grade: string; section: string; required: boolean }
 export interface HistoryEntry { id: string; date: string; field: string; before: string; after: string }
+export interface DimensionWeights { academic: number; performance: number; commitment: number }
+export type CircleStatus = 'pending' | 'remains' | 'does_not_remain';
 export interface Student {
   id: string; code: string; name: string; grade: string; section: string;
   academic: AcademicArea[]; attendance: Attendance;
@@ -17,11 +19,14 @@ export interface Student {
   validated: { academic: boolean; performance: boolean; commitment: boolean };
   history: HistoryEntry[]; pdfIds: string[]; createdAt: string; updatedAt: string;
   reportApproval?: { pdfId: string; approvedAt: string };
+  commitmentEnabled?: boolean;
+  circleStatus?: CircleStatus;
 }
 export interface DisciplineType { id: string; name: string; discount: number | null; punctuality: boolean }
 export interface Settings {
   year: number; version: string; areas: AreaDefinition[];
   academicWeights: { general: number; specialized: number; progress: number };
+  dimensionWeights?: DimensionWeights;
   scienceWeight: number;
   performanceWeights: { attendance: number; discipline: number };
   commitmentWeights: { participation: number; family: number };

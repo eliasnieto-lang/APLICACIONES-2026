@@ -38,6 +38,7 @@ const unlocked=(state:AppState)=>{if(state.settings.closed) throw new HttpError(
 const checkErrors=(errors:string[])=>{if(errors.length) throw new HttpError(400,errors[0],errors);};
 const findStudent=(state:AppState,id:string)=>{const student=state.students.find(s=>s.id===id);if(!student) throw new HttpError(404,'Estudiante no encontrado.');return student;};
 function syncExistingCohortRecords(student:Student,settings:AppState['settings']) {
+  if(student.commitmentEnabled===false)return;
   const before={institutional:structuredClone(student.institutional),family:structuredClone(student.family)};
   for(const kind of ['institutional','family'] as const)for(const record of student[kind]){
     if(kind==='institutional'&&isAcademicContest(record))continue;
@@ -64,7 +65,7 @@ export function createApp(options: {dataDir?: string} = {}) {
     const ds=dataset(req),state=store.read(ds);unlocked(state);
     const input=newStudentSchema.parse(req.body);
     const cohort=normalizeCohort(input.grade,input.section);
-    if(!cohort)throw new HttpError(400,'Solo se admiten los salones 2.º F, 3.º F, 4.º F y 5.º F.');
+    if(!cohort)throw new HttpError(400,'Seleccione un grado de 1.º a 5.º de secundaria y una sección de A a Z.');
     if(state.students.some(s=>s.code.toLocaleLowerCase()===input.code.toLocaleLowerCase()))throw new HttpError(409,'Ya existe un estudiante con ese código.');
     const student=createStudent({...input,grade:cohort.grade,section:cohort.section},state.settings);student.history=[audit('Creación de expediente','',input)];
     state.students.push(student);store.save(ds,state);res.status(201).json(student);
@@ -72,16 +73,16 @@ export function createApp(options: {dataDir?: string} = {}) {
   app.put('/api/students/:id',(req,res)=>{
     const ds=dataset(req),state=store.read(ds);unlocked(state);
     const current=findStudent(state,String(req.params.id));
-    const student=studentSchema.parse({...req.body,reportApproval:current.reportApproval}) as Student;
+    const student=studentSchema.parse({...req.body,reportApproval:current.reportApproval,commitmentEnabled:req.body.commitmentEnabled===undefined?current.commitmentEnabled??true:req.body.commitmentEnabled,circleStatus:req.body.circleStatus===undefined?current.circleStatus??'pending':req.body.circleStatus}) as Student;
     if(student.id!==current.id)throw new HttpError(400,'El identificador del estudiante no se puede modificar.');
     if(student.updatedAt!==current.updatedAt)throw new HttpError(409,'El expediente cambió en otra pestaña. Recargue antes de guardar.');
     const cohort=normalizeCohort(student.grade,student.section);
-    if(!cohort)throw new HttpError(400,'Solo se admiten los salones 2.º F, 3.º F, 4.º F y 5.º F.');
+    if(!cohort)throw new HttpError(400,'Seleccione un grado de 1.º a 5.º de secundaria y una sección de A a Z.');
     student.grade=cohort.grade;student.section=cohort.section;
     if(['code','name','grade','section'].some(field=>student[field as keyof Student]!==current[field as keyof Student]))throw new HttpError(409,'Los datos del estudiante se obtienen automáticamente del PDF y no se editan en la ficha.');
     student.reportApproval=current.reportApproval;
     student.pdfIds=[...current.pdfIds];
-    const evaluationFields=['academic','attendance','discipline','institutional','family','validated'] as const;
+    const evaluationFields=['academic','attendance','discipline','institutional','family','validated','commitmentEnabled'] as const;
     if(!isReportApproved(current)&&evaluationFields.some(field=>!same(current[field],student[field])))throw new HttpError(409,'Revise y confirme la libreta PDF antes de editar los tres ámbitos de evaluación.');
     for(const area of student.academic)if(!hasActiveGrades(area))area.validated=false;
     student.history=[...current.history];
@@ -101,8 +102,8 @@ export function createApp(options: {dataDir?: string} = {}) {
     const result=calculateStudent(student,state.settings);
     if(student.validated.academic&&result.a===null)throw new HttpError(400,'Complete y valide las calificaciones I–III de los cursos estudiados antes de validar el ámbito académico.');
     if(student.validated.performance&&result.b===null)throw new HttpError(400,'Complete asistencia y disciplina antes de validar desempeño.');
-    if(student.validated.commitment&&result.c===null)throw new HttpError(400,'Complete y revise los compromisos antes de validar el ámbito C.');
-    for(const field of ['code','name','grade','section','academic','attendance','discipline','institutional','family','validated'] as const){if(!same(current[field],student[field]))student.history.push(audit(field,current[field],student[field]));}
+    if(student.commitmentEnabled!==false&&student.validated.commitment&&result.c===null)throw new HttpError(400,'Complete y revise los compromisos antes de validar el ámbito C.');
+    for(const field of ['code','name','grade','section','academic','attendance','discipline','institutional','family','validated','commitmentEnabled','circleStatus'] as const){if(!same(current[field],student[field]))student.history.push(audit(field,current[field],student[field]));}
     student.pdfIds=current.pdfIds;student.createdAt=current.createdAt;student.updatedAt=stamp();
     state.students[state.students.findIndex(s=>s.id===student.id)]=student;
     store.save(ds,state);res.json(student);
@@ -131,7 +132,7 @@ export function createApp(options: {dataDir?: string} = {}) {
     res.json({deleted:true,...counts});
   });
   app.put('/api/settings',(req,res)=>{
-    const ds=dataset(req),state=store.read(ds),settings=settingsSchema.parse(req.body);
+    const ds=dataset(req),state=store.read(ds),settings=settingsSchema.parse({...req.body,dimensionWeights:req.body.dimensionWeights===undefined?state.settings.dimensionWeights:req.body.dimensionWeights});
     settings.activityTypes=[ACADEMIC_CONTEST_LABEL];
     if(state.settings.closed&&(req.body.confirmReopen!==true||settings.closed))throw new HttpError(423,'Confirme explícitamente la reapertura de la evaluación antes de modificar los parámetros.');
     checkErrors(validateSettings(settings));
@@ -214,7 +215,8 @@ export function createApp(options: {dataDir?: string} = {}) {
     if(!['link','replace','validate','identify','reprocess','rescan-grades'].includes(action))throw new HttpError(400,'Acción de PDF no válida.');
     if(action==='identify'){
       if(typeof req.body.name!=='string')throw new HttpError(400,'Indique los apellidos y nombres del estudiante.');
-      const updated=identifyReport(state,pdf.id,{name:req.body.name});
+      if(req.body.grade!==undefined&&typeof req.body.grade!=='string'||req.body.section!==undefined&&typeof req.body.section!=='string')throw new HttpError(400,'El grado y sección deben ser texto.');
+      const updated=identifyReport(state,pdf.id,{name:req.body.name,...(req.body.grade!==undefined?{grade:req.body.grade}:{}),...(req.body.section!==undefined?{section:req.body.section}:{})});
       store.save(ds,state);res.json(updated);return;
     }
     if(action==='rescan-grades'){
@@ -257,11 +259,12 @@ export function createApp(options: {dataDir?: string} = {}) {
     if(pdf.status==='failed'||pdf.status==='duplicate')throw new HttpError(400,'Un PDF fallido o duplicado no puede aplicarse a un expediente.');
     if(action==='validate'){
       if(req.body.name!==undefined&&typeof req.body.name!=='string')throw new HttpError(400,'Los apellidos y nombres deben ser texto.');
-      const result=confirmReport(state,pdf.id,{identity:req.body.identity,...(req.body.name!==undefined?{name:req.body.name}:{}),confirmMismatch:req.body.confirmMismatch===true});
+      if(req.body.grade!==undefined&&typeof req.body.grade!=='string'||req.body.section!==undefined&&typeof req.body.section!=='string')throw new HttpError(400,'El grado y sección deben ser texto.');
+      const result=confirmReport(state,pdf.id,{identity:req.body.identity,...(req.body.name!==undefined?{name:req.body.name}:{}),...(req.body.grade!==undefined?{grade:req.body.grade}:{}),...(req.body.section!==undefined?{section:req.body.section}:{}),confirmMismatch:req.body.confirmMismatch===true});
       store.save(ds,state);res.json(result.pdf);return;
     }
     const student=findStudent(state,req.body.studentId||pdf.studentId);
-    if(!normalizeCohort(student.grade,student.section))throw new HttpError(400,'El estudiante debe pertenecer a 2.º F, 3.º F, 4.º F o 5.º F.');
+    if(!normalizeCohort(student.grade,student.section))throw new HttpError(400,'El estudiante debe tener un grado de 1.º a 5.º de secundaria y una sección de A a Z.');
     if(pdf.extractedCode&&pdf.extractedCode.toLocaleLowerCase()!==student.code.toLocaleLowerCase()&&req.body.confirmMismatch!==true)throw new HttpError(409,'El código extraído no coincide. Confirme la reasignación antes de unir los registros.');
     {
       const old=pdf.studentId?state.students.find(s=>s.id===pdf.studentId):null;

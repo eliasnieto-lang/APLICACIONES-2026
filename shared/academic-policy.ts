@@ -11,10 +11,10 @@ export function activeAreas(student: Pick<Student, 'academic'>, settings: Pick<S
   return settings.areas.filter(area => area.eligible && hasActiveGrades(student.academic.find(input => input.areaId === area.id)));
 }
 
-/** Indaga is not taught in 4.º F/5.º F only when every active-period cell is blank. */
+/** A wholly blank Indaga row is not evaluated for any admitted secondary classroom. */
 export function omittedCompetencyIndexes(definition: AreaDefinition, input?: Pick<AcademicArea, 'grades'>, cohort?: Pick<Student, 'grade' | 'section'>): number[] {
   const normalized = cohort && normalizeCohort(cohort.grade, cohort.section);
-  if (definition.group !== 'science' || !normalized || !['4.º de secundaria', '5.º de secundaria'].includes(normalized.grade)) return [];
+  if (definition.group !== 'science' || !normalized) return [];
   return definition.competencies.flatMap((competency, index) => {
     const label = competency.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
     const isIndaga = /^indaga mediante metodos cientificos(?:\s|$)/.test(label);

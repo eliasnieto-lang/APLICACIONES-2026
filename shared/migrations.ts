@@ -4,6 +4,7 @@ import { applyFilenameIdentity, parseReportFilename, resolveReportIdentity } fro
 import { registerImportedReport } from './report-workflow';
 import { ACADEMIC_CONTEST_LABEL, isAcademicContest } from './contests';
 import { hasActiveGrades } from './academic-policy';
+import { DEFAULT_DIMENSION_WEIGHTS } from './evaluation-policy';
 
 const identityKey = (value: string): string => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('es');
 const validTimestamp = (value: string | undefined): value is string => Boolean(value?.trim() && Number.isFinite(Date.parse(value)));
@@ -25,6 +26,10 @@ export function migrateState(state: AppState): AppState {
   result.settings.workflowVersion = 2;
   result.settings.progressionComparison = 'first_two_vs_third';
   result.settings.activityTypes = [ACADEMIC_CONTEST_LABEL];
+  if (!result.settings.dimensionWeights) {
+    result.settings.dimensionWeights = { ...DEFAULT_DIMENSION_WEIGHTS };
+    result.settings.criteriaApproved = false;
+  }
   // The changed academic comparison must be reviewed and closed again under I–III.
   if (upgrading) { result.settings.criteriaApproved = false; result.settings.closed = false; }
 
@@ -36,6 +41,8 @@ export function migrateState(state: AppState): AppState {
     }
   }
   for (const student of result.students) {
+    student.commitmentEnabled ??= true;
+    student.circleStatus ??= 'pending';
     const cohort = normalizeCohort(student.grade, student.section);
     if (cohort) { student.grade = cohort.grade; student.section = cohort.section; }
   }

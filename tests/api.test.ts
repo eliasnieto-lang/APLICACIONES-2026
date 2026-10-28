@@ -16,7 +16,7 @@ import type { ExtractedReport } from '../shared/pdf-parser.js';
 import { calculateStudent } from '../shared/calculations.js';
 import { hasActiveGrades } from '../shared/academic-policy.js';
 
-const { makeCompactPdf } = createRequire(import.meta.url)('./compact-report-fixture.cjs') as { makeCompactPdf: (settings: AppState['settings'], options: { code: string; name: string; grade: string; grades?: string[]; gradesByArea?: Record<string,string[][]> }) => Buffer };
+const { makeCompactPdf } = createRequire(import.meta.url)('./compact-report-fixture.cjs') as { makeCompactPdf: (settings: AppState['settings'], options: { code: string; name: string; grade: string; section?: string; grades?: string[]; gradesByArea?: Record<string,string[][]> }) => Buffer };
 
 function reportPdf(code:string,name:string,omitArea='',grade='3',section='F',identityLayout:'inline'|'stacked'|'none'|'classroom'='inline',includeSupplemental=false) {
   const normalize=(text:string)=>text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[()\\]/g,'\\$&');
@@ -199,13 +199,13 @@ test('Los cursos totalmente vacíos se ignoran al confirmar, guardar la validaci
   }finally{await h.close();}
 });
 
-test('Indaga vacía en 4.º F y 5.º F admite validación manual, conserva el blanco y calcula con las competencias cursadas',async()=>{
+test('Indaga vacía admite validación manual, conserva el blanco y calcula con las competencias cursadas de cualquier aula de secundaria',async()=>{
   const h=await harness();try{
     const science=defaultSettings.areas.find(area=>area.group==='science')!,indaga=science.competencies.findIndex(label=>/^Indaga\b/i.test(label));assert(indaga>=0);
-    for(const grade of ['4','5']){
+    for(const grade of ['1','2','3','4','5']){
       const code=`INDAGA-${grade}-F`,name=`ESTUDIANTE INDAGA ${grade==='4'?'CUARTO':'QUINTO'}`,rows=science.competencies.map((_,index)=>index===indaga?['','','']:['A','A','A']);
       const bytes=makeCompactPdf(defaultSettings,{code,name,grade,grades:['A','A','A'],gradesByArea:{[science.id]:rows}});
-      const pdf=await upload(h,bytes,`BOLETA_${grade}to año F_Secundaria_${name.replaceAll(' ','_')}.pdf`);
+      const pdf=await upload(h,bytes,`BOLETA_${grade}.º año F_Secundaria_${name.replaceAll(' ','_')}.pdf`);
       assert.deepEqual(pdf.areas.find(area=>area.areaId===science.id)!.grades[indaga],['','','']);
       await confirm(h,pdf.id);
       let state=await readState(h),student=state.students.find(value=>value.code===code)!;
@@ -223,7 +223,7 @@ test('Indaga vacía en 4.º F y 5.º F admite validación manual, conserva el bl
       assert.deepEqual(state.pdfs.find(value=>value.id===pdf.id)!.areas.find(area=>area.areaId===science.id)!.grades[indaga],['','','']);
       assert.deepEqual(Buffer.from(await(await h.request(`/api/pdfs/${pdf.id}/file`)).arrayBuffer()),bytes);
     }
-    for(const [grade,mode] of [['2','blank'],['3','blank'],['4','partial-indaga'],['5','missing-other']] as const){
+    for(const [grade,mode] of [['2','missing-other'],['3','partial-indaga'],['4','partial-indaga'],['5','missing-other']] as const){
       const rows=science.competencies.map((_,index)=>index===indaga?(mode==='partial-indaga'?['A','','']:['','','']):['A','A','A']);
       if(mode==='missing-other')rows[(indaga+1)%rows.length][1]='';
       const pdf=await upload(h,makeCompactPdf(defaultSettings,{code:`STRICT-${grade}`,name:'ESTUDIANTE ESTRICTO PRUEBA',grade,grades:['A','A','A'],gradesByArea:{[science.id]:rows}}));
@@ -234,6 +234,79 @@ test('Indaga vacía en 4.º F y 5.º F admite validación manual, conserva el bl
       const response=await h.request(`/api/students/${student.id}`,'PUT',student);
       assert.equal(response.status,400,`Se rechaza la validación con notas obligatorias faltantes: ${grade} ${mode}`);
     }
+  }finally{await h.close();}
+});
+
+test('Aulas 1.º A y 1.º B mantienen rankings separados, admiten excluir Compromiso y conservan la permanencia manual en respaldos',async()=>{
+  const h=await harness();try{
+    let state=await readState(h);
+    assert.deepEqual(state.settings.dimensionWeights,{academic:0.5,performance:0.25,commitment:0.25});
+    assert.equal((await h.request('/api/settings','PUT',{...state.settings,criteriaApproved:true})).status,200);
+    for(const section of ['A','B']){
+      const code=`POSTULANTE-1${section}`,name=`POSTULANTE PRIMERO ${section==='A'?'ALFA':'BETA'}`;
+      const pdf=await upload(h,makeCompactPdf(defaultSettings,{code,name,grade:'1',section,grades:['A','A','A']}),`BOLETA_1ro año ${section}_Secundaria_${name.replaceAll(' ','_')}.pdf`);
+      assert.equal(pdf.extractedGrade,'1.º de secundaria');assert.equal(pdf.extractedSection,section);
+      await confirm(h,pdf.id);
+      let student=(await readState(h)).students.find(value=>value.code===code)!;
+      assert.equal(student.commitmentEnabled,true);assert.equal(student.circleStatus,'pending');
+      student.attendance={required:200,exempted:0,attended:190,punctual:171,validated:false};
+      student.discipline={confirmed:true,incidents:[]};student.commitmentEnabled=false;
+      if(section==='B'){
+        student.institutional=[{id:'retained-contest',eventType:'academic_contest',scope:'regional',name:'Concurso ya registrado',date:'2026-10-10',required:false,status:'fulfilled',justification:'Registro conservado',evidence:'',validated:false,placement:'Segundo puesto'}];
+        student.family=[{id:'retained-family',name:'Reunión registrada',date:'2026-10-11',required:true,status:'fulfilled',justification:'Observación conservada',evidence:'',validated:false}];
+      }
+      let response=await h.request(`/api/students/${student.id}`,'PUT',student);assert.equal(response.status,200,await response.clone().text());student=await response.json() as Student;
+      student.attendance.validated=true;student.validated.performance=true;
+      response=await h.request(`/api/students/${student.id}`,'PUT',student);assert.equal(response.status,200,await response.clone().text());student=await response.json() as Student;
+      state=await readState(h);const result=calculateStudent(student,state.settings),weights=state.settings.dimensionWeights!;
+      assert.equal(result.a,75);assert.equal(result.b,95.5);assert.equal(result.c,null);assert.equal(result.progress,100);assert.equal(result.eligible,true);
+      assert.ok(Math.abs(result.total!-(75*weights.academic+95.5*weights.performance)/(weights.academic+weights.performance))<1e-10);
+      assert(!result.pending.some(message=>/Compromiso|participación|familia/i.test(message)),'Compromiso excluido no agrega pendientes ni exige confirmación C.');
+      assert.equal(student.validated.commitment,false,'Excluir un ámbito no lo marca ficticiamente como validado.');
+      const preserved={institutional:structuredClone(student.institutional),family:structuredClone(student.family)};
+      student.circleStatus=section==='A'?'remains':'does_not_remain';
+      response=await h.request(`/api/students/${student.id}`,'PUT',student);assert.equal(response.status,200,await response.clone().text());student=await response.json() as Student;
+      assert.equal(student.circleStatus,section==='A'?'remains':'does_not_remain');assert(student.history.some(entry=>entry.field==='circleStatus'));
+      assert.deepEqual({institutional:student.institutional,family:student.family},preserved);
+      student.commitmentEnabled=true;
+      response=await h.request(`/api/students/${student.id}`,'PUT',student);assert.equal(response.status,200,await response.clone().text());student=await response.json() as Student;
+      assert.equal(calculateStudent(student,state.settings).eligible,false,'Volver a incluir C recupera sus requisitos sin inventar registros.');
+      assert.deepEqual({institutional:student.institutional,family:student.family},preserved);
+      student.commitmentEnabled=false;
+      response=await h.request(`/api/students/${student.id}`,'PUT',student);assert.equal(response.status,200,await response.clone().text());
+    }
+    const workbook=new ExcelJS.Workbook();await workbook.xlsx.load(Buffer.from(await(await h.request('/api/export')).arrayBuffer()) as never);
+    const rows=workbook.getWorksheet('RANKING')!;assert.equal(rows.rowCount,3);
+    assert.equal(rows.getCell('A2').value,1);assert.equal(rows.getCell('A3').value,1,'Cada sección empieza su propia clasificación.');
+    for(const section of ['A','B']){
+      const filtered=new ExcelJS.Workbook();await filtered.xlsx.load(Buffer.from(await(await h.request(`/api/export?grade=${encodeURIComponent('1.º de secundaria')}&section=${section}`)).arrayBuffer()) as never);
+      const ranking=filtered.getWorksheet('RANKING')!;assert.equal(ranking.rowCount,2);assert.equal(ranking.getCell('B2').value,`POSTULANTE-1${section}`);
+    }
+    state=await readState(h);
+    const customWeights={academic:0.7,performance:0.2,commitment:0.1};
+    assert.equal((await h.request('/api/settings','PUT',{...state.settings,dimensionWeights:customWeights})).status,200);
+    const legacySettings={...(await readState(h)).settings};delete legacySettings.dimensionWeights;
+    assert.equal((await h.request('/api/settings','PUT',legacySettings)).status,200);
+    assert.deepEqual((await readState(h)).settings.dimensionWeights,customWeights,'Un cliente antiguo no restablece los pesos ya configurados.');
+    const legacyStudent=(await readState(h)).students[0],retainedDecision=legacyStudent.circleStatus;
+    delete legacyStudent.commitmentEnabled;delete legacyStudent.circleStatus;
+    const legacyResponse=await h.request(`/api/students/${legacyStudent.id}`,'PUT',legacyStudent);assert.equal(legacyResponse.status,200);
+    const legacySaved=await legacyResponse.json() as Student;assert.equal(legacySaved.commitmentEnabled,false);assert.equal(legacySaved.circleStatus,retainedDecision);
+    const before=await readState(h),backup=await(await h.request('/api/backup')).json();
+    const wrongSection=structuredClone(backup);wrongSection.state.students[0].section='Z';
+    assert.equal((await h.request('/api/restore','POST',wrongSection)).status,400,'La referencia de libreta no permite cambiar solo la sección de un estudiante.');
+    assert.equal((await h.request('/api/restore','POST',backup)).status,200);
+    assert.deepEqual(await readState(h),before,'Respaldo y restauración preservan pesos, exclusión C, decisiones y registros de todas las aulas.');
+  }finally{await h.close();}
+});
+
+test('La revisión permite confirmar un aula manual cuando el PDF y su nombre no la contienen',async()=>{
+  const h=await harness();try{
+    const pdf=await upload(h,reportPdf('','','','3','F','none'),'RIVERA_SOTO_ALBA.pdf');
+    assert.equal(pdf.studentId,null);assert.equal((await readState(h)).students.length,0);
+    await confirm(h,pdf.id,{name:'RIVERA SOTO ALBA',grade:'1ro de secundaria',section:'A'});
+    const student=(await readState(h)).students[0];assert.equal(student.grade,'1.º de secundaria');assert.equal(student.section,'A');assert.equal(student.name,'RIVERA SOTO ALBA');
+    assert.equal(student.reportApproval?.pdfId,pdf.id);assert.equal(student.validated.academic,true);
   }finally{await h.close();}
 });
 
@@ -432,15 +505,15 @@ test('Una nueva lectura parcial conserva notas del mismo original y descarta aju
 
 test('Las aulas ajenas permanecen en revisión; el código ausente no bloquea una identidad y aula reconocidas',async()=>{
   const h=await harness();try{
-    for(const [grade,section] of [['1','F'],['6','F'],['12','F'],['25','F'],['3xyz','F'],['3','A']]){
+    for(const [grade,section] of [['6','F'],['12','F'],['25','F'],['3xyz','F'],['3','AA'],['1','1']]){
       assert.equal((await h.request('/api/students','POST',{code:`BAD-${grade}-${section}`,name:'No permitido',grade,section})).status,400);
     }
-    const pdf=await upload(h,reportPdf('COR-1','Identidad Leida','','3','A'),'fuera_de_aula.pdf');
+    const pdf=await upload(h,reportPdf('COR-1','Identidad Leida','','6','F'),'fuera_de_aula.pdf');
     assert.equal(pdf.studentId,null);assert.equal((await readState(h)).students.length,0);
     assert.equal((await h.request(`/api/pdfs/${pdf.id}`,'PUT',{action:'validate'})).status,400);
     await confirm(h,pdf.id,{identity:{code:'COR-1',name:'Identidad Corregida',grade:'tercero de secundaria',section:'f'}});
     const state=await readState(h);assert.equal(state.students.length,1);assert.equal(state.students[0].name,'Identidad Corregida');
-    assert.equal(state.students[0].grade,'3.º de secundaria');assert.equal(state.pdfs[0].extractedName,'Identidad Leida');assert.equal(state.pdfs[0].extractedSection,'A');
+    assert.equal(state.students[0].grade,'3.º de secundaria');assert.equal(state.pdfs[0].extractedName,'Identidad Leida');assert.equal(state.pdfs[0].extractedGrade,'6');assert.equal(state.pdfs[0].extractedSection,'F');
     assert.equal(state.pdfs[0].confirmedIdentity?.section,'F');assert.equal(state.students[0].reportApproval?.pdfId,pdf.id);
     const missing=await upload(h,reportPdf('','Sin Codigo','','4','F'),'sin_codigo.pdf');
     assert(missing.studentId);assert.equal(missing.extractedCode,'');assert.equal((await readState(h)).students.length,2);
@@ -569,11 +642,13 @@ test('Respaldo: integridad, referencias, migración de cuatro periodos y persist
     assert.throws(()=>h.app.locals.store.save('real',malformed.state));assert.equal((await h.request('/api/restore','POST',malformed)).status,400);
     assert.equal((await h.request('/api/restore','POST',{...backup,dataset:'demo'})).status,400);
     assert.equal((await h.request('/api/restore','POST',backup)).status,200);
-    const legacy=structuredClone(backup);delete legacy.state.settings.workflowVersion;delete legacy.state.settings.progressionComparison;
+    const legacy=structuredClone(backup);delete legacy.state.settings.workflowVersion;delete legacy.state.settings.progressionComparison;delete legacy.state.settings.dimensionWeights;
+    delete legacy.state.students[0].commitmentEnabled;delete legacy.state.students[0].circleStatus;
     legacy.state.settings.criteriaApproved=true;legacy.state.settings.closed=true;delete legacy.state.students[0].reportApproval;
     for(const area of legacy.state.students[0].academic)for(const row of area.grades)row.push('C');
     assert.equal((await h.request('/api/restore','POST',legacy)).status,200);
     const migrated=await readState(h);assert.equal(migrated.settings.workflowVersion,2);assert.equal(migrated.settings.criteriaApproved,false);assert.equal(migrated.settings.closed,false);
+    assert.deepEqual(migrated.settings.dimensionWeights,defaultSettings.dimensionWeights);assert.equal(migrated.students[0].commitmentEnabled,true);assert.equal(migrated.students[0].circleStatus,'pending');
     assert.equal(migrated.students[0].validated.academic,false);assert.equal(migrated.students[0].reportApproval?.pdfId,pdf.id);
     assert.equal(migrated.students[0].academic[0].grades[0][3],'C','La cuarta nota histórica se conserva sin evaluarse');
     await h.close(false);closed=true;
@@ -582,7 +657,7 @@ test('Respaldo: integridad, referencias, migración de cuatro periodos y persist
   }finally{if(!closed)await h.close();}
 });
 
-test('Excel exporta solo F admitidos, tres periodos y los campos manuales del concurso; catálogo no crea registros',async()=>{
+test('Excel exporta todas las aulas admitidas, tres periodos y los campos manuales del concurso; catálogo no crea registros',async()=>{
   const h=await harness();try{
     const pdf=await upload(h,reportPdf('EXPORT-1','Estudiante Exportado'));await confirm(h,pdf.id);
     let state=await readState(h),student=state.students[0];
@@ -596,12 +671,12 @@ test('Excel exporta solo F admitidos, tres periodos y los campos manuales del co
     const exported=await h.request('/api/export');assert.equal(exported.status,200);
     const book=new ExcelJS.Workbook();await book.xlsx.load(Buffer.from(await exported.arrayBuffer()) as never);
     assert.deepEqual(book.worksheets.map(sheet=>sheet.name),['RANKING','DETALLE','PENDIENTES','CONFIGURACIÓN']);
-    const detail=book.getWorksheet('DETALLE')!;assert.equal(detail.rowCount,2);assert.equal(detail.getCell('A2').value,'EXPORT-1');
+    const detail=book.getWorksheet('DETALLE')!;assert.equal(detail.rowCount,3);assert.equal(detail.getCell('A2').value,'EXPORT-1');
     const headers=detail.getRow(1).values as string[];
     assert.deepEqual(headers.filter(value=>String(value).startsWith('Calificaciones ')),['Calificaciones I','Calificaciones II','Calificaciones III']);
     const placement=headers.indexOf('Puesto en concursos'),representation=headers.indexOf('Representación del colegio');
     assert.match(String(detail.getRow(2).getCell(placement).value),/Primer puesto/);assert.match(String(detail.getRow(2).getCell(representation).value),/true/);
-    assert.equal(book.getWorksheet('PENDIENTES')!.rowCount,2);
+    assert.equal(book.getWorksheet('PENDIENTES')!.rowCount,3);
     assert.equal((await h.request('/api/settings','PUT',{...settings,closed:true})).status,200);
     assert.equal((await h.request(`/api/pdfs/${pdf.id}`,'DELETE')).status,423);
     assert.equal((await h.request('/api/settings','PUT',{...settings,closed:false})).status,423);

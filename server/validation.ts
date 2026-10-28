@@ -5,6 +5,7 @@ import { resolveReportIdentity } from '../shared/filename-identity.js';
 import { contestRequiredFields, isAcademicContest } from '../shared/contests.js';
 import { hasActiveGrades, isAreaComplete } from '../shared/academic-policy.js';
 import { commitmentRequiredFields, incidentRequiredFields } from '../shared/record-validation.js';
+import { isCommitmentEnabled } from '../shared/evaluation-policy.js';
 
 const text = z.string().max(2000);
 const id = z.string().min(1).max(150);
@@ -24,6 +25,8 @@ export const studentSchema = z.object({
   validated: z.object({ academic: z.boolean(), performance: z.boolean(), commitment: z.boolean() }),
   history: z.array(history).max(100000), pdfIds: z.array(id).max(1000), createdAt: text, updatedAt: text,
   reportApproval: z.object({ pdfId: id, approvedAt: z.string().datetime() }).optional(),
+  commitmentEnabled: z.boolean().optional(),
+  circleStatus: z.enum(['pending','remains','does_not_remain']).optional(),
 });
 export const newStudentSchema = studentSchema.pick({ code: true, name: true, grade: true, section: true });
 const weight = z.number().min(0).max(1);
@@ -31,6 +34,7 @@ export const settingsSchema = z.object({
   year: z.number().int().min(2000).max(2200), version: z.string().min(1).max(100),
   areas: z.array(areaDefinition).min(1).max(100),
   academicWeights: z.object({general:weight,specialized:weight,progress:weight}), scienceWeight: weight,
+  dimensionWeights: z.object({academic:weight,performance:weight,commitment:weight}).optional(),
   performanceWeights: z.object({attendance:weight,discipline:weight}), commitmentWeights:z.object({participation:weight,family:weight}),
   criteriaApproved:z.boolean(),naPolicy:z.enum(['pending','other_component']),naPolicyApproved:z.boolean(),
   disciplineTypes:z.array(z.object({id,name:z.string().min(1).max(200),discount:z.number().min(0).max(100).nullable(),punctuality:z.boolean()})).max(100),
@@ -64,7 +68,7 @@ export function semanticStudentErrors(student: Student, settings: Settings): str
   for (const area of student.academic) {
     const def = settings.areas.find(v=>v.id===area.areaId);
     if (!def || def.competencies.length !== area.grades.length) errors.push('Las áreas y competencias deben corresponder al catálogo vigente.');
-    if (def && hasActiveGrades(area) && area.validated && !isAreaComplete(def, area, student)) errors.push('No se puede validar un área con calificaciones vacías en I, II o III, salvo Indaga no cursada en 4.º F o 5.º F.');
+    if (def && hasActiveGrades(area) && area.validated && !isAreaComplete(def, area, student)) errors.push('No se puede validar un área con calificaciones vacías en I, II o III, salvo Indaga completamente vacía y no cursada.');
   }
   if (new Set(student.discipline.incidents.map(v=>v.id)).size !== student.discipline.incidents.length) errors.push('Hay incidencias duplicadas.');
   for (const incident of student.discipline.incidents) {
@@ -73,7 +77,7 @@ export function semanticStudentErrors(student: Student, settings: Settings): str
     const missing = incidentRequiredFields(incident, settings.disciplineTypes);
     if (incident.verified && missing.length) errors.push(`Una incidencia verificada necesita ${missing.join(', ')}.`);
   }
-  for (const record of [...student.institutional,...student.family]) {
+  for (const record of isCommitmentEnabled(student) ? [...student.institutional,...student.family] : []) {
     const contest = student.institutional.includes(record) && isAcademicContest(record);
     if (contest) {
       const missing = contestRequiredFields(record);
@@ -95,7 +99,7 @@ export function semanticStudentErrors(student: Student, settings: Settings): str
       }
     }
   }
-  const linked=[...student.institutional,...student.family].map(r=>r.catalogId).filter(Boolean);
+  const linked=(isCommitmentEnabled(student) ? [...student.institutional,...student.family] : []).map(r=>r.catalogId).filter(Boolean);
   if(new Set(linked).size!==linked.length)errors.push('Hay registros duplicados para un mismo criterio de cohorte.');
   return [...new Set(errors)];
 }
@@ -121,7 +125,7 @@ export function stateReferenceErrors(state: AppState): string[] {
       const cohort=identity?normalizeCohort(identity.grade,identity.section):null;
       const studentCohort=normalizeCohort(student.grade,student.section);
       const normalize=(value:string)=>value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().replace(/\s+/g,' ').toLocaleLowerCase();
-      if(!pdf||pdf.status!=='validated'||pdf.studentId!==student.id||!student.pdfIds.includes(pdf.id)||!identity||!cohort||cohort.grade!==studentCohort?.grade||(Boolean(normalize(identity.code))&&normalize(identity.code)!==normalize(student.code))||normalize(identity.name)!==normalize(student.name))errors.push('La aprobación de libreta no corresponde a un PDF validado y a la identidad del estudiante.');
+      if(!pdf||pdf.status!=='validated'||pdf.studentId!==student.id||!student.pdfIds.includes(pdf.id)||!identity||!cohort||cohort.label!==studentCohort?.label||(Boolean(normalize(identity.code))&&normalize(identity.code)!==normalize(student.code))||normalize(identity.name)!==normalize(student.name))errors.push('La aprobación de libreta no corresponde a un PDF validado y a la identidad del estudiante.');
     }
     errors.push(...semanticStudentErrors(student,state.settings));
   }

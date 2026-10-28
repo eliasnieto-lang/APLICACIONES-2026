@@ -41,7 +41,7 @@ Producción sirve la aplicación y la API en el puerto **3001**. `PORT` cambia e
 
 ## Flujo de trabajo
 
-1. Revisa **Parámetros**: año, áreas y competencias, descuentos aprobados, pesos, tratamiento de “No aplica” y actividades de referencia. Están habilitadas 2.º F, 3.º F, 4.º F y 5.º F. Los cinco grupos necesarios para Ciencias y Letras son obligatorios. Agrega las demás áreas elegibles de la libreta para que G refleje el catálogo institucional completo.
+1. Revisa **Parámetros**: año, áreas y competencias, descuentos aprobados, pesos, tratamiento de “No aplica” y actividades de referencia. Se admiten 1.º a 5.º de secundaria, secciones A a Z. Los listados y rankings se filtran por grado y sección juntos. Los cinco grupos necesarios para Ciencias y Letras son obligatorios. Agrega las demás áreas elegibles de la libreta para que G refleje el catálogo institucional completo.
 2. Carga varios PDF a la vez en **Importar libretas**. Se procesan en lotes de diez y se conserva cada original. Los apellidos y nombres proceden prioritariamente del nombre del archivo PDF, junto con el aula cuando está indicada allí. La lista se genera antes de confirmar y no requiere código ni periodo. El casillero **Apellidos y nombres** permite corregir el resultado o completar un nombre que no pudo reconocerse. La revisión conserva **Confirmar libreta** y **Eliminar libreta**. Una libreta antigua con nombre de archivo reconocible se identifica sin volver a ejecutar OCR. Los duplicados se detectan por SHA-256 y los reemplazos mantienen trazabilidad.
 3. Contrasta identidad y notas con el PDF y pulsa **Confirmar libreta**. Se abren Académico, Desempeño y Compromiso; solo Académico se carga y calcula automáticamente, usando I, II y III. Las notas se leen del PDF y se muestran de solo lectura. Si faltan, el sistema reintenta el escaneo y permite usar **Volver a escanear notas**. El texto extraído se conserva. **Eliminar libreta** elimina el estudiante y todas sus versiones de PDF, previa confirmación.
 4. Completa asistencia, días formalmente eximidos, puntualidad y disciplina. “Sin incidencias” requiere confirmación expresa. Cada incidencia se verifica con categoría, fecha y descripción; medida y evidencia son opcionales.
@@ -60,13 +60,16 @@ El motor compartido está en [`shared/calculations.ts`](shared/calculations.ts),
 - `A = 0,40 G + 0,40 R + 0,20 P` inicialmente; sus pesos internos son configurables.
 - `B = 0,60 AP + 0,40 D` inicialmente. Una tardanza no se vuelve a descontar en disciplina.
 - `C = 0,70 PI + 0,30 CF` es una propuesta que requiere aprobación institucional.
-- `TOTAL = (A + B + C) / 3`, siempre con peso igual de las tres dimensiones.
+- `TOTAL = 0,50 A + 0,25 B + 0,25 C` inicialmente. Los pesos se ajustan en Parámetros, suman 100 % y Académico tiene el mayor peso.
+- Cada ficha permite excluir Compromiso si no se mide: `TOTAL = (0,50 A + 0,25 B) / 0,75`, equivalente a 66,67 % Académico y 33,33 % Desempeño. No exige registros ni validación de C; sus datos existentes se conservan.
 
 Solo se evalúan I, II y III: `S1 = promedio de I–II`, `S2 = III`. En R, Ciencias pesa 60 % y Letras 40 % inicialmente. Las notas históricas de IV en respaldos se conservan, pero no participan en el cálculo. Las tres dimensiones permanecen bloqueadas hasta confirmar la libreta.
 
 Las casillas vacías permanecen pendientes. Una dimensión incompleta impide calcular el total; un puntaje calculable pero sin revisión se presenta provisional y no clasifica. El avance mide casillas/registros validados, independientemente del puntaje. Un avance del 100 % todavía requiere las tres confirmaciones finales y criterios aprobados.
 
-Excepción solicitada para **4.º F y 5.º F**: cuando **Indaga mediante métodos científicos** de Ciencia y Tecnología está completamente vacía en I–III, se considera no cursada y no afecta los promedios ni agrega pendientes. Las otras competencias deben estar completas y el área requiere validación manual. Si Indaga tiene alguna nota de I–III, sus casillas faltantes siguen siendo obligatorias. Consulta [el ajuste de Indaga](docs/AJUSTE_07_INDAGA.md).
+Cuando **Indaga mediante métodos científicos** de Ciencia y Tecnología está completamente vacía en I–III, se considera no cursada en cualquier aula admitida y no afecta los promedios ni agrega pendientes. Las otras competencias deben estar completas y el área requiere validación manual. Si Indaga tiene alguna nota de I–III, sus casillas faltantes siguen siendo obligatorias.
+
+Los promedios de cada área se presentan sobre **100 puntos**. La escala interna AD=4, A=3, B=2 y C=1 expresa niveles de logro, no bimestres. Primero se promedian las competencias y los tres bimestres I–III, y luego se multiplica por 25. La ficha permite registrar manualmente **Pendiente**, **Permanece** o **No permanece**; el ranking no asigna esta decisión. Consulta [el ajuste de ponderaciones, aulas y permanencia](docs/AJUSTE_08_EVALUACION_Y_AULAS.md).
 
 Cuando PI o CF no tienen obligaciones exigibles, se muestra “No aplica”. Por defecto C permanece pendiente. La institución puede aprobar una regla común que use el otro subcomponente si solo uno no aplica. Si ambos no aplican, C permanece pendiente. Cero asistencias tampoco genera automáticamente una puntualidad artificial; requiere resolver esa excepción.
 

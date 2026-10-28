@@ -38,7 +38,7 @@ test('generic files and unexplained numeric suffixes cannot become student names
 });
 
 test('unsupported classrooms remain unsupported instead of borrowing a supported grade', () => {
-  for (const filename of ['BOLETA_6F_PEREZ_GARCIA_ANA.pdf', 'BOLETA_1F_PEREZ_GARCIA_ANA.pdf', 'BOLETA_25_F_PEREZ_GARCIA_ANA.pdf', 'BOLETA_5to_G_Secundaria_PEREZ_GARCIA_ANA.pdf', 'BOLETA_2do_A_Secundaria_PEREZ_GARCIA_ANA.pdf', 'BOLETA_2do_F_Primaria_PEREZ_GARCIA_ANA.pdf']) {
+  for (const filename of ['BOLETA_6F_PEREZ_GARCIA_ANA.pdf', 'BOLETA_25_F_PEREZ_GARCIA_ANA.pdf', 'BOLETA_2do_F_Primaria_PEREZ_GARCIA_ANA.pdf']) {
     const identity = parseReportFilename(filename);
     assert.equal(identity.name, 'PEREZ GARCIA ANA', filename);
     assert.equal(normalizeCohort(identity.grade, identity.section), null, filename);
@@ -55,9 +55,26 @@ test('fifth F is recognized precisely in filenames and grade normalization', () 
   ]) assert.deepEqual(parseReportFilename(filename), { name: 'PEREZ GARCIA ANA', grade: '5.º de secundaria', section: 'F' }, filename);
   for (const grade of ['5', '5.º', '5°', '5o', '5to', 'quinto', 'quinto grado de secundaria']) {
     assert.equal(normalizeCohort(grade, 'F')?.grade, '5.º de secundaria', grade);
-    assert.equal(normalizeCohort(grade, 'G'), null, grade);
+    assert.equal(normalizeCohort(grade, 'G')?.section, 'G', grade);
   }
   for (const grade of ['15', '25', '5ro', '5do', '5to primaria', 'pre 5', '5to de secundaria extra']) assert.equal(normalizeCohort(grade, 'F'), null, grade);
+});
+
+test('all five secondary grades and single-letter classrooms are recognized precisely', () => {
+  for (const [filename, grade, section] of [
+    ['BOLETA_1ro_A_Secundaria_PEREZ_GARCIA_ANA.pdf', '1.º de secundaria', 'A'],
+    ['LIBRETA_primer grado de secundaria_Sección B_PEREZ_GARCIA_ANA.pdf', '1.º de secundaria', 'B'],
+    ['BOLETA_2do_A_Secundaria_PEREZ_GARCIA_ANA.pdf', '2.º de secundaria', 'A'],
+    ['BOLETA_3ro_C_Secundaria_PEREZ_GARCIA_ANA.pdf', '3.º de secundaria', 'C'],
+    ['BOLETA_4to_Z_Secundaria_PEREZ_GARCIA_ANA.pdf', '4.º de secundaria', 'Z'],
+    ['BOLETA_5to_G_Secundaria_PEREZ_GARCIA_ANA.pdf', '5.º de secundaria', 'G'],
+  ]) assert.deepEqual(parseReportFilename(filename), { name: 'PEREZ GARCIA ANA', grade, section }, filename);
+  for (const grade of ['1', '1.º', '1°', '1o', '1ro', '1ero', '1er', 'primero', 'primer grado de secundaria', '1ro año de secundaria']) {
+    assert.equal(normalizeCohort(grade, ' a ')?.label, '1.º A', grade);
+  }
+  for (const [grade, section] of [['1', 'AA'], ['1', '1'], ['1', ''], ['6', 'B'], ['12', 'A'], ['1do', 'A'], ['1ro primaria', 'A']]) {
+    assert.equal(normalizeCohort(grade, section), null, `${grade} ${section}`);
+  }
 });
 
 test('filename values precede PDF text, while missing filename fields retain existing readings', () => {

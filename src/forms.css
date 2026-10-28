@@ -20,4 +20,5 @@
 .delete-confirmation-input{margin:16px 0}
 .delete-error{color:#ac253b;font-size:12px;line-height:1.6;margin:12px 0}
 .delete-actions{flex-wrap:wrap}
+.evaluation-options{padding:22px;margin:18px 0}.evaluation-options>.form-grid{margin:17px 0;align-items:start}.evaluation-options>.form-grid>.checkbox-label{padding-top:22px}.evaluation-options p{font-size:12px}.evaluation-options .field select{min-height:40px}.import-classroom-field{margin:17px 0}.detail-area .detail-area-confirm{line-height:1.6}
 @media(max-width:700px){.cleanup-card,.danger-zone{align-items:stretch;flex-direction:column}.cleanup-card>.button,.danger-zone>.button{white-space:normal}.delete-actions>.button{flex:1 1 100%;white-space:normal}}

@@ -1,5 +1,17 @@
 # Validación de la edición web
 
+## Evaluación ponderada, otras aulas y permanencia
+
+La versión vigente usa **50 % Académico, 25 % Desempeño y 25 % Compromiso**, siguiendo la última indicación del usuario. Permite excluir C por estudiante y redistribuir A/B a 66,67 %/33,33 %, conservar sus registros y registrar manualmente la permanencia. Admite secundaria 1.º–5.º, secciones A–Z, con filtros y posiciones por aula completa. Los promedios de las áreas se presentan sobre 100; Indaga completamente vacía se excluye en cualquier aula admitida.
+
+Validación: `npm test` aprobó **181/181 pruebas**, incluidas **30 pruebas API**; TypeScript, `npm run build:web` y la aceptación completa `npm run test:web` también aprobaron. HTML probado: **10 337 893 bytes**, SHA-256 `9df4b727fda642874a80d36e9deca30a267436a789dd127b5e85f21e01a6edc9`.
+
+El navegador comprobó A58,75/B95,50/C100 con total **78,25**, y **71,00** al excluir C sin perder sus registros; al incluirla de nuevo recuperó el resultado original. Dos libretas genuinas de **1.º A y 1.º B** produjeron listados, rankings y exportaciones separados, cada uno con su propio primer puesto. Con A75/B95,50 y C excluida, el total fue81,83. Las decisiones manuales Permanece/No permanece y la opción de C persistieron al recargar y en respaldos. Una libreta de 1.º B con Indaga vacía permitió revisión manual sin inventar notas; las áreas mostraron75/100. La API verificó también la corrección manual de aula, la conservación de campos nuevos ante guardados antiguos y el rechazo de un respaldo que mezcla la sección del alumno y la del PDF aprobado.
+
+Las pruebas de migración conservan datos y criterios personalizados, completan los campos antiguos una sola vez y mantienen la evaluación cerrada. Los pesos del total ausentes se incorporan con aprobación pendiente de la nueva fórmula. Se verificaron los casos incompletos de A/B, los pesos inválidos, la normalización exacta de aulas y los empates por cohorte.
+
+Se inspeccionaron los controles de evaluación/permanencia, los rankings de ambas aulas y la tabla académica con escala sobre100. Hubo **10 descargas**, sin errores de página/consola ni solicitudes HTTP durante las operaciones. Se conservaron los escenarios anteriores de OCR, restauración, eliminación individual/total, reimportación y reinicio. Todas las pruebas usaron documentos ficticios y almacenamiento temporal.
+
 ## Indaga no cursada en 4.º F y 5.º F
 
 Se incorpora 5.º F junto con 2.º F, 3.º F y 4.º F. En 4.º F y 5.º F, Indaga completamente vacía en I–III queda excluida de promedios, progresión, pendientes y denominadores de avance. La fila original permanece vacía y visible; Ciencia y Tecnología requiere revisión manual y las demás competencias completas. Una sola nota de Indaga devuelve sus vacíos restantes al estado pendiente. Las otras aulas conservan las reglas anteriores.

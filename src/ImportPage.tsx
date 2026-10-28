@@ -7,7 +7,7 @@ import { hasActiveGrades } from '../shared/academic-policy';
 import { reportWarnings } from '../shared/pdf-parser';
 import { resolveReportIdentity } from '../shared/filename-identity';
 
-const cohortLabels = ALLOWED_COHORTS.map(cohort => cohort.label).join(', ');
+const classroomDescription = '1.º a 5.º de secundaria, en todas sus secciones';
 
 interface Props {
   pdfs: PdfRecord[]; students: Student[]; settings: Settings; dataset: Dataset;
@@ -53,11 +53,13 @@ export default function ImportPage({ pdfs, students, settings, dataset, onRefres
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
+  const [classroomDraft, setClassroomDraft] = useState<string | null>(null);
   const selected = pdfs.find(p => p.id === selectedId);
   const identity = selected ? reportIdentity(selected) : null;
   const previewAreas = selected ? [...selected.areas.map(area => ({ ...area, definition: settings.areas.find(item => item.id === area.areaId) })), ...(selected.supplementalAreas || []).map(area => ({ ...area, areaId: area.definition.id }))].filter(area => hasActiveGrades(area)) : [];
   const draftName = selected ? nameDrafts[selected.id] ?? identity?.name ?? '' : '';
-  const cohort = identity && normalizeCohort(identity.grade, identity.section);
+  const cohort = classroomDraft !== null ? ALLOWED_COHORTS.find(item => item.label === classroomDraft) ?? null : identity && normalizeCohort(identity.grade, identity.section);
+  useEffect(() => { setClassroomDraft(null); }, [selected?.id, identity?.grade, identity?.section]);
   const identityComplete = Boolean(recognizedValue(draftName) && cohort);
   const selectedWarnings = selected ? reviewWarnings(selected, draftName, settings) : [];
   const reviewLocked = busy || uploading || settings.closed || !selected || !['pending', 'review'].includes(selected.status);
@@ -144,7 +146,7 @@ export default function ImportPage({ pdfs, students, settings, dataset, onRefres
       if (!mountedRef.current) return;
       const confirmed = await responseJson<PdfRecord>(await fetch(url(`/api/pdfs/${selected.id}`), {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'validate', name }),
+        body: JSON.stringify({ action: 'validate', name, grade: cohort!.grade, section: cohort!.section }),
       }));
       if (!mountedRef.current) return;
       await onRefresh();
@@ -175,7 +177,7 @@ export default function ImportPage({ pdfs, students, settings, dataset, onRefres
     finally { if (mountedRef.current) setBusy(false); }
   }
   return <div className="import-page">
-    <div className="page-heading"><div><p className="eyebrow">CARGA Y REVISIÓN DOCUMENTAL</p><h1>Importación masiva</h1><p className="muted">Importa las libretas de {cohortLabels}. Los estudiantes reconocidos aparecen automáticamente; confirma cada libreta para habilitar su evaluación.</p></div></div>
+    <div className="page-heading"><div><p className="eyebrow">CARGA Y REVISIÓN DOCUMENTAL</p><h1>Importación masiva</h1><p className="muted">Importa las libretas de {classroomDescription}. Los estudiantes reconocidos aparecen automáticamente; confirma cada libreta para habilitar su evaluación.</p></div></div>
     {settings.closed && <div className="notice warning">La evaluación está cerrada. Puedes consultar documentos; reabre desde Parámetros para importar o corregir.</div>}
     {error && <div className="notice error" role="alert"><CircleAlert size={18}/>{error}<button className="icon-button" onClick={() => setError('')} aria-label="Cerrar error"><X size={16}/></button></div>}
     <section className={`card import-dropzone ${dragging ? 'dragging' : ''}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); void uploadFiles(event.dataTransfer.files); }}>
@@ -192,9 +194,9 @@ export default function ImportPage({ pdfs, students, settings, dataset, onRefres
     </section>
     {selected && <section className="card import-review" aria-busy={busy}><div className="card-header"><div><p className="eyebrow">REVISIÓN DE LIBRETA</p><h2>{selected.name}</h2></div><span className={`badge ${selected.status === 'validated' ? 'success' : 'warning'}`}>{labels[selected.status]}</span></div>
       <div className="import-review-grid"><div className="import-original"><a className="button secondary small" href={documentUrl(selected.id, dataset)} target="_blank" rel="noreferrer"><ExternalLink size={15}/>Abrir PDF original</a><iframe title={`Documento original: ${selected.name}`} src={documentUrl(selected.id, dataset)}/></div>
-      <div className="import-extraction"><h3>Datos del estudiante</h3><label className="field"><span>Apellidos y nombres</span><input value={draftName} maxLength={200} autoComplete="off" disabled={reviewLocked} onChange={event => changeName(event.target.value)} onBlur={saveName} placeholder="Escribe los apellidos y nombres completos" /></label><p className="muted">El nombre se toma del archivo PDF. Puedes completarlo o corregirlo aquí.</p><dl className="detail-list import-identity"><div><dt>Grado y sección</dt><dd>{cohort?.label || [identity?.grade, identity?.section].filter(Boolean).join(' ') || 'No reconocido'}</dd></div></dl>
+      <div className="import-extraction"><h3>Datos del estudiante</h3><label className="field"><span>Apellidos y nombres</span><input value={draftName} maxLength={200} autoComplete="off" disabled={reviewLocked} onChange={event => changeName(event.target.value)} onBlur={saveName} placeholder="Escribe los apellidos y nombres completos" /></label><p className="muted">El nombre se toma del archivo PDF. Puedes completarlo o corregirlo aquí.</p><label className="field import-classroom-field"><span>Aula de la libreta</span><select aria-label="Aula de la libreta" value={cohort?.label ?? ''} disabled={reviewLocked} onChange={event => setClassroomDraft(event.target.value)}><option value="">Seleccionar aula reconocida en el PDF</option>{ALLOWED_COHORTS.map(item => <option key={item.label} value={item.label}>{item.label}</option>)}</select><small>Se reconoce desde el archivo o el PDF. Si falta, selecciónala después de revisar el original.</small></label><dl className="detail-list import-identity"><div><dt>Grado y sección</dt><dd>{cohort?.label || [identity?.grade, identity?.section].filter(Boolean).join(' ') || 'No reconocido'}</dd></div></dl>
       <div className="button-row import-review-actions"><button className="button primary" disabled={reviewLocked || !identityComplete} onClick={() => void confirmReport()}><CircleCheck size={16}/>Confirmar libreta</button><button className="button danger" disabled={busy || uploading || settings.closed} onClick={() => void deleteReport()}><Trash2 size={16}/>Eliminar libreta</button></div>
-      {!identityComplete && <p className="notice warning">{!cohort ? `El aula debe reconocerse como ${cohortLabels} en el archivo o en la libreta.` : 'Completa los apellidos y nombres para confirmar la libreta.'}</p>}
+      {!identityComplete && <p className="notice warning">{!cohort ? `Selecciona el aula de ${classroomDescription} después de revisar el PDF original.` : 'Completa los apellidos y nombres para confirmar la libreta.'}</p>}
       {selected.status === 'validated' && <p className="notice success">Libreta confirmada y evaluación habilitada.</p>}
       {selectedWarnings.length > 0 && <div className="notice warning"><div><strong>Observaciones de lectura</strong><ul>{selectedWarnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></div></div>}
       <div className="notice">La confirmación habilita las tres áreas de evaluación. Las notas A se completan automáticamente; B y C quedan pendientes para tu evaluación. Las casillas ilegibles permanecen vacías.</div>

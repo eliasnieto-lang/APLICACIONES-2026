@@ -41,6 +41,7 @@ const json = (data: unknown, status = 200) => new Response(JSON.stringify(data),
 const attachment = (body: BodyInit, type: string, name: string) => new Response(body, { headers: { 'Content-Type': type, 'Cache-Control': 'no-store', 'Content-Disposition': `attachment; filename="${name.replace(/[^\w.-]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}` } });
 
 function syncCohortRecords(student: Student, settings: Settings) {
+  if (student.commitmentEnabled === false) return;
   const before = { institutional: structuredClone(student.institutional), family: structuredClone(student.family) };
   const criteria = settings.cohortRecords ?? [];
   for (const kind of ['institutional', 'family'] as const) {
@@ -235,7 +236,7 @@ async function install(): Promise<void> {
       unlocked(state);
       const newInput = newStudentSchema.parse(await bodyJson(input, init));
       const cohort = normalizeCohort(newInput.grade, newInput.section);
-      if (!cohort) throw new HttpError(400, 'Solo se admiten estudiantes de 2.º F, 3.º F, 4.º F y 5.º F de secundaria.');
+      if (!cohort) throw new HttpError(400, 'Seleccione un grado de 1.º a 5.º de secundaria y una sección de A a Z.');
       newInput.grade = cohort.grade; newInput.section = cohort.section;
       if (state.students.some(student => student.code.toLocaleLowerCase() === newInput.code.toLocaleLowerCase())) throw new HttpError(409, 'Ya existe un estudiante con ese código.');
       const student = createStudent(newInput, state.settings); student.history = [audit('Creación de expediente', '', newInput)];
@@ -246,14 +247,14 @@ async function install(): Promise<void> {
       unlocked(state);
       const current = findStudent(state, decodeURIComponent(studentMatch[1]));
       const rawStudent = await bodyJson(input, init);
-      const student = studentSchema.parse(rawStudent && typeof rawStudent === 'object' && !Array.isArray(rawStudent) ? { ...rawStudent, reportApproval: current.reportApproval } : rawStudent) as Student;
+      const student = studentSchema.parse(rawStudent && typeof rawStudent === 'object' && !Array.isArray(rawStudent) ? { ...rawStudent, reportApproval: current.reportApproval, commitmentEnabled: (rawStudent as Partial<Student>).commitmentEnabled === undefined ? current.commitmentEnabled ?? true : (rawStudent as Partial<Student>).commitmentEnabled, circleStatus: (rawStudent as Partial<Student>).circleStatus === undefined ? current.circleStatus ?? 'pending' : (rawStudent as Partial<Student>).circleStatus } : rawStudent) as Student;
       if (student.id !== current.id) throw new HttpError(400, 'El identificador del estudiante no se puede modificar.');
       if (student.updatedAt !== current.updatedAt) throw new HttpError(409, 'El expediente cambió en otra pestaña. Recargue antes de guardar.');
       if ((['code', 'name', 'grade', 'section'] as const).some(field => student[field] !== current[field])) throw new HttpError(400, 'Los datos del estudiante se obtienen automáticamente del PDF y no se editan en la ficha.');
       student.reportApproval = current.reportApproval ? structuredClone(current.reportApproval) : undefined;
       student.pdfIds = [...current.pdfIds]; student.createdAt = current.createdAt;
       student.history = [...current.history];
-      if (!isReportApproved(current) && (['academic', 'attendance', 'discipline', 'institutional', 'family', 'validated'] as const).some(field => !same(current[field], student[field]))) throw new HttpError(409, 'Confirme primero la libreta PDF para habilitar los ámbitos A, B y C.');
+      if (!isReportApproved(current) && (['academic', 'attendance', 'discipline', 'institutional', 'family', 'validated', 'commitmentEnabled'] as const).some(field => !same(current[field], student[field]))) throw new HttpError(409, 'Confirme primero la libreta PDF para habilitar los ámbitos A, B y C.');
       for (const area of student.academic) if (!hasActiveGrades(area)) area.validated = false;
       if (state.students.some(value => value.id !== student.id && value.code.toLocaleLowerCase() === student.code.toLocaleLowerCase())) throw new HttpError(409, 'Ya existe un estudiante con ese código.');
       const academicChanged = !same(current.academic.map(area => ({ areaId: area.areaId, grades: area.grades })), student.academic.map(area => ({ areaId: area.areaId, grades: area.grades })));
@@ -262,7 +263,7 @@ async function install(): Promise<void> {
       if (attendanceChanged) { student.attendance.validated = false; student.validated.performance = false; }
       if (!same(current.discipline, student.discipline)) student.validated.performance = false;
       if (!same(current.institutional, student.institutional) || !same(current.family, student.family)) student.validated.commitment = false;
-      for (const record of [...student.institutional, ...student.family]) if (record.catalogId && !(student.institutional.includes(record) && isAcademicContest(record))) {
+      for (const record of student.commitmentEnabled === false ? [] : [...student.institutional, ...student.family]) if (record.catalogId && !(student.institutional.includes(record) && isAcademicContest(record))) {
         const criterion = state.settings.cohortRecords?.find(value => value.id === record.catalogId);
         if (!criterion || record.name.trim() !== criterion.name.trim() || record.date !== criterion.date || record.required !== criterion.required) throw new HttpError(409, 'El nombre, fecha y condición exigible de los criterios comunes se editan en Parámetros. Recargue la ficha para mantener la pauta de la cohorte.');
       }
@@ -271,8 +272,8 @@ async function install(): Promise<void> {
       const result = calculateStudent(student, state.settings);
       if (student.validated.academic && result.a === null) throw new HttpError(400, 'Complete y valide las calificaciones I–III de los cursos estudiados antes de validar el ámbito académico.');
       if (student.validated.performance && result.b === null) throw new HttpError(400, 'Complete asistencia y disciplina antes de validar desempeño.');
-      if (student.validated.commitment && result.c === null) throw new HttpError(400, 'Complete y revise los compromisos antes de validar el ámbito C.');
-      for (const field of ['code', 'name', 'grade', 'section', 'academic', 'attendance', 'discipline', 'institutional', 'family', 'validated'] as const) if (!same(current[field], student[field])) student.history.push(audit(field, current[field], student[field]));
+      if (student.commitmentEnabled !== false && student.validated.commitment && result.c === null) throw new HttpError(400, 'Complete y revise los compromisos antes de validar el ámbito C.');
+      for (const field of ['code', 'name', 'grade', 'section', 'academic', 'attendance', 'discipline', 'institutional', 'family', 'validated', 'commitmentEnabled', 'circleStatus'] as const) if (!same(current[field], student[field])) student.history.push(audit(field, current[field], student[field]));
       student.pdfIds = current.pdfIds; student.createdAt = current.createdAt; student.updatedAt = stamp();
       state.students[state.students.findIndex(value => value.id === student.id)] = student;
       await save(dataset, state, expected); return json(student);
@@ -301,7 +302,7 @@ async function install(): Promise<void> {
       return json({ deleted: true, ...removed, files: saved.removedFiles });
     }
     if (method === 'PUT' && path === '/api/settings') {
-      const body = await bodyJson(input, init), settings = settingsSchema.parse(body);
+      const body = await bodyJson(input, init), settings = settingsSchema.parse(body && typeof body === 'object' && !Array.isArray(body) ? { ...body, dimensionWeights: (body as Partial<Settings>).dimensionWeights === undefined ? state.settings.dimensionWeights : (body as Partial<Settings>).dimensionWeights } : body);
       settings.activityTypes = [ACADEMIC_CONTEST_LABEL];
       if (state.settings.closed && ((body as { confirmReopen?: unknown }).confirmReopen !== true || settings.closed)) throw new HttpError(423, 'Confirme explícitamente la reapertura de la evaluación antes de modificar los parámetros.');
       checkErrors(validateSettings(settings));
@@ -388,7 +389,8 @@ async function install(): Promise<void> {
       if (!['link', 'replace', 'validate', 'confirm', 'identify', 'reprocess', 'rescan-grades'].includes(String(action))) throw new HttpError(400, 'Acción de PDF no válida.');
       if (action === 'identify') {
         if (typeof body.name !== 'string') throw new HttpError(400, 'Indique los apellidos y nombres del estudiante.');
-        const updated = identifyReport(state, pdf.id, { name: body.name });
+        if (body.grade !== undefined && typeof body.grade !== 'string' || body.section !== undefined && typeof body.section !== 'string') throw new HttpError(400, 'El grado y sección deben ser texto.');
+        const updated = identifyReport(state, pdf.id, { name: body.name, ...(body.grade !== undefined ? { grade: body.grade as string } : {}), ...(body.section !== undefined ? { section: body.section as string } : {}) });
         await save(dataset, state, expected); return json(updated);
       }
       if (action === 'rescan-grades') {
@@ -428,11 +430,12 @@ async function install(): Promise<void> {
           identity = { code: value.code as string, name: value.name as string, grade: value.grade as string, section: value.section as string };
         }
         if (body.name !== undefined && typeof body.name !== 'string') throw new HttpError(400, 'Los apellidos y nombres deben ser texto.');
-        const confirmed = confirmReport(state, pdf.id, { identity, ...(body.name !== undefined ? { name: body.name as string } : {}), confirmMismatch: body.confirmMismatch === true });
+        if (body.grade !== undefined && typeof body.grade !== 'string' || body.section !== undefined && typeof body.section !== 'string') throw new HttpError(400, 'El grado y sección deben ser texto.');
+        const confirmed = confirmReport(state, pdf.id, { identity, ...(body.name !== undefined ? { name: body.name as string } : {}), ...(body.grade !== undefined ? { grade: body.grade as string } : {}), ...(body.section !== undefined ? { section: body.section as string } : {}), confirmMismatch: body.confirmMismatch === true });
         await save(dataset, state, expected); return json(confirmed.pdf);
       }
       const student = findStudent(state, typeof body.studentId === 'string' && body.studentId ? body.studentId : pdf.studentId ?? '');
-      if (!normalizeCohort(student.grade, student.section)) throw new HttpError(400, 'La libreta debe corresponder a 2.º F, 3.º F, 4.º F o 5.º F de secundaria.');
+      if (!normalizeCohort(student.grade, student.section)) throw new HttpError(400, 'La libreta debe indicar un grado de 1.º a 5.º de secundaria y una sección de A a Z.');
       if (pdf.extractedCode && pdf.extractedCode.toLocaleLowerCase() !== student.code.toLocaleLowerCase() && body.confirmMismatch !== true) throw new HttpError(409, 'El código extraído no coincide. Confirme la reasignación antes de unir los registros.');
       if (action === 'link' || action === 'replace') {
         const old = pdf.studentId ? state.students.find(value => value.id === pdf.studentId) : undefined;
