@@ -14,7 +14,8 @@ import { createStudent, createDemoState } from '../shared/defaults.js';
 import { calculateStudent, validateSettings, cohortRecordApplies } from '../shared/calculations.js';
 import { normalizeCohort, isReportApproved } from '../shared/policy.js';
 import { migrateState } from '../shared/migrations.js';
-import { registerImportedReport, applyReprocessedReport, confirmReport, deleteReportAndStudent, linkAcademic, ReportWorkflowError } from '../shared/report-workflow.js';
+import { resolveReportIdentity } from '../shared/filename-identity.js';
+import { registerImportedReport, identifyReport, applyReprocessedReport, confirmReport, deleteReportAndStudent, linkAcademic, ReportWorkflowError } from '../shared/report-workflow.js';
 import { Store, CapacityError } from './store.js';
 import { extractPdf } from './pdf.js';
 import { buildWorkbook } from './export.js';
@@ -23,6 +24,12 @@ import { backupSchema, newStudentSchema, settingsSchema, studentSchema, semantic
 class HttpError extends Error { constructor(public status: number, message: string, public details?: string[]) { super(message); } }
 const same=(a:unknown,b:unknown)=>isDeepStrictEqual(a,b);
 const stamp=()=>new Date().toISOString();
+const pdfFilename=(value:string):string=>{
+  // Multipart headers are read as latin1 by busboy; restore valid UTF-8 names once.
+  const decoded=Buffer.from(value,'latin1').toString('utf8');
+  const restored=/[ÃÂ][\u0080-\u00bf]/.test(value)&&!decoded.includes('�')?decoded:value;
+  return path.basename(restored.replace(/\\/g,'/')).slice(0,300);
+};
 const audit=(field:string,before:unknown,after:unknown):HistoryEntry=>({id:randomUUID(),date:stamp(),field,before:typeof before==='string'?before:JSON.stringify(before),after:typeof after==='string'?after:JSON.stringify(after)});
 const dataset=(req:Request):Dataset=>{ const v=req.query.dataset??'real'; if(v!=='real'&&v!=='demo') throw new HttpError(400,'La base de datos seleccionada no es válida.'); return v; };
 const unlocked=(state:AppState)=>{if(state.settings.closed) throw new HttpError(423,'La evaluación está cerrada. Reábrala en Parámetros antes de modificar registros.');};
@@ -138,7 +145,7 @@ export function createApp(options: {dataDir?: string} = {}) {
       const hash=createHash('sha256').update(file.buffer).digest('hex');
       let state=store.read(ds);unlocked(state);
       const duplicate=state.pdfs.find(p=>p.hash===hash&&p.status!=='duplicate');
-      const pdf:PdfRecord={id:randomUUID(),name:path.basename(file.originalname).slice(0,300),hash,size:file.size,uploadedAt:stamp(),status:'review',studentId:null,extractedCode:'',extractedName:'',extractedGrade:'',extractedSection:'',period:'',text:'',ocr:false,warnings:[],areas:[]};
+      const pdf:PdfRecord={id:randomUUID(),name:pdfFilename(file.originalname),hash,size:file.size,uploadedAt:stamp(),status:'review',studentId:null,extractedCode:'',extractedName:'',extractedGrade:'',extractedSection:'',period:'',text:'',ocr:false,warnings:[],areas:[]};
       if(duplicate){pdf.status='duplicate';pdf.studentId=duplicate.studentId;pdf.warnings=[`Contenido duplicado de ${duplicate.name}. No se han sobrescrito las calificaciones.`];const student=state.students.find(s=>s.id===pdf.studentId);if(student)student.pdfIds.push(pdf.id);}
       else if(!file.buffer.subarray(0,1024).includes(Buffer.from('%PDF-'))){pdf.status='failed';pdf.warnings=['El archivo no contiene un documento PDF válido.'];}
       else {
@@ -146,7 +153,8 @@ export function createApp(options: {dataDir?: string} = {}) {
         try{
           const source=path.join(dir,'document.pdf');await writeFile(source,file.buffer);
           const extractionSettings=structuredClone(state.settings);
-          Object.assign(pdf,await extractPdf(source,extractionSettings));
+          const sourceIdentity=resolveReportIdentity(pdf);
+          Object.assign(pdf,await extractPdf(source,extractionSettings,{identityFromFilename:Boolean(sourceIdentity.name&&normalizeCohort(sourceIdentity.grade,sourceIdentity.section))}));
           // Extraction can take time; reload so simultaneous manual edits are retained.
           state=store.read(ds);unlocked(state);
           if(!same(extractionSettings,state.settings)){
@@ -155,7 +163,15 @@ export function createApp(options: {dataDir?: string} = {}) {
           }
           registerImportedReport(state,pdf);
           if(!pdf.studentId)pdf.warnings.push('La lectura automática no reconoció todos los datos del estudiante. La libreta permanece sin confirmar.');
-        }catch(error){state=store.read(ds);pdf.status='failed';pdf.warnings=[error instanceof Error?error.message:'No fue posible leer el PDF.'];}
+        }catch(error){
+          state=store.read(ds);unlocked(state);
+          const message=error instanceof Error?error.message:'No fue posible leer el PDF.';
+          const identity=resolveReportIdentity(pdf);
+          const usableFilename=identity.name&&normalizeCohort(identity.grade,identity.section);
+          pdf.status=usableFilename&&!/no se pudo abrir|no contiene.*PDF|dañado|contraseña|protegido/i.test(message)?'review':'failed';
+          pdf.warnings=[message];
+          if(pdf.status==='review'){pdf.warnings.push('El nombre y el aula se obtuvieron del archivo. Las notas no reconocidas quedan pendientes de revisión.');registerImportedReport(state,pdf);}
+        }
         finally{await rm(dir,{recursive:true,force:true});}
       }
       state.pdfs.push(pdf);store.transaction(()=>{store.putFile(ds,pdf.id,file.buffer);store.save(ds,state);});processed.push(pdf);
@@ -174,7 +190,12 @@ export function createApp(options: {dataDir?: string} = {}) {
     if(!req.body||typeof req.body!=='object')throw new HttpError(400,'Envíe una acción y un estudiante para actualizar el PDF.');
     const pdf=state.pdfs.find(p=>p.id===req.params.id);if(!pdf)throw new HttpError(404,'PDF no encontrado.');
     const action=req.body.action;
-    if(!['link','replace','validate','reprocess'].includes(action))throw new HttpError(400,'Acción de PDF no válida.');
+    if(!['link','replace','validate','identify','reprocess'].includes(action))throw new HttpError(400,'Acción de PDF no válida.');
+    if(action==='identify'){
+      if(typeof req.body.name!=='string')throw new HttpError(400,'Indique los apellidos y nombres del estudiante.');
+      const updated=identifyReport(state,pdf.id,{name:req.body.name});
+      store.save(ds,state);res.json(updated);return;
+    }
     if(action==='reprocess'){
       if(!['pending','review','failed'].includes(pdf.status))throw new HttpError(409,'Esta versión ya está confirmada, duplicada o reemplazada.');
       const content=store.file(ds,pdf.id);
@@ -183,7 +204,8 @@ export function createApp(options: {dataDir?: string} = {}) {
       try{
         const source=path.join(directory,'original.pdf');
         await writeFile(source,content);
-        const reading=await extractPdf(source,structuredClone(state.settings));
+        const sourceIdentity=resolveReportIdentity(pdf);
+        const reading=await extractPdf(source,structuredClone(state.settings),{identityFromFilename:Boolean(sourceIdentity.name&&normalizeCohort(sourceIdentity.grade,sourceIdentity.section))});
         const latest=store.read(ds);unlocked(latest);
         const current=latest.pdfs.find(record=>record.id===pdf.id);
         if(!current||current.hash!==pdf.hash||!same(state.settings,latest.settings)||!same(current,pdf))throw new HttpError(409,'El documento o sus parámetros cambiaron durante la lectura automática. Vuelva a abrir la revisión.');
@@ -193,7 +215,8 @@ export function createApp(options: {dataDir?: string} = {}) {
     }
     if(pdf.status==='failed'||pdf.status==='duplicate')throw new HttpError(400,'Un PDF fallido o duplicado no puede aplicarse a un expediente.');
     if(action==='validate'){
-      const result=confirmReport(state,pdf.id,{identity:req.body.identity,confirmMismatch:req.body.confirmMismatch===true});
+      if(req.body.name!==undefined&&typeof req.body.name!=='string')throw new HttpError(400,'Los apellidos y nombres deben ser texto.');
+      const result=confirmReport(state,pdf.id,{identity:req.body.identity,...(req.body.name!==undefined?{name:req.body.name}:{}),confirmMismatch:req.body.confirmMismatch===true});
       store.save(ds,state);res.json(result.pdf);return;
     }
     const student=findStudent(state,req.body.studentId||pdf.studentId);

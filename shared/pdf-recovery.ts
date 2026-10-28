@@ -5,8 +5,8 @@ import type { Settings } from './types.js';
 const metadataFields = ['extractedCode', 'extractedName', 'extractedGrade', 'extractedSection', 'period'] as const;
 
 /** Image recognition is useful only while a labelled field or a catalog cell is missing. */
-export function needsPdfRecovery(report: ExtractedReport): boolean {
-  return metadataFields.some(field => !report[field].trim())
+export function needsPdfRecovery(report: ExtractedReport, requireMetadata = true): boolean {
+  return requireMetadata && metadataFields.some(field => !report[field].trim())
     || report.areas.some(area => area.grades.some(row => row.some(cell => !cell)));
 }
 

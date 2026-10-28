@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { Student, Settings, AppState } from '../shared/types.js';
 import { normalizeCohort } from '../shared/policy.js';
+import { resolveReportIdentity } from '../shared/filename-identity.js';
 
 const text = z.string().max(2000);
 const id = z.string().min(1).max(150);
@@ -37,6 +38,7 @@ const pdfSchema = z.object({
   status:z.enum(['pending','review','validated','failed','duplicate','replaced']),studentId:id.nullable(),
   extractedCode:text,extractedName:text,extractedGrade:text,extractedSection:text,period:text,text:z.string().max(4_194_304),ocr:z.boolean(),
   warnings:z.array(text).max(1000),areas:z.array(academic).max(100),replacesId:id.optional(),
+  manualName:z.string().max(200).optional(),
   confirmedIdentity:z.object({code:z.string().trim().min(1).max(100),name:z.string().trim().min(1).max(200),grade:z.string().trim().min(1).max(60),section:z.string().trim().min(1).max(20)}).optional(),
 });
 export const stateSchema = z.object({ students: z.array(studentSchema).max(10000),settings:settingsSchema,pdfs:z.array(pdfSchema).max(10000) });
@@ -102,11 +104,11 @@ export function stateReferenceErrors(state: AppState): string[] {
     if(student.pdfIds.some(id=>state.pdfs.find(pdf=>pdf.id===id)?.studentId!==student.id))errors.push('Un expediente contiene un PDF vinculado a otro estudiante.');
     if(student.reportApproval){
       const pdf=state.pdfs.find(record=>record.id===student.reportApproval!.pdfId);
-      const identity=pdf?.confirmedIdentity??(pdf?{code:pdf.extractedCode,name:pdf.extractedName,grade:pdf.extractedGrade,section:pdf.extractedSection}:null);
+      const identity=pdf?{...resolveReportIdentity(pdf),code:pdf.confirmedIdentity?.code??pdf.extractedCode}:null;
       const cohort=identity?normalizeCohort(identity.grade,identity.section):null;
       const studentCohort=normalizeCohort(student.grade,student.section);
       const normalize=(value:string)=>value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().replace(/\s+/g,' ').toLocaleLowerCase();
-      if(!pdf||pdf.status!=='validated'||pdf.studentId!==student.id||!student.pdfIds.includes(pdf.id)||!identity||!cohort||cohort.grade!==studentCohort?.grade||normalize(identity.code)!==normalize(student.code)||normalize(identity.name)!==normalize(student.name))errors.push('La aprobación de libreta no corresponde a un PDF validado y a la identidad del estudiante.');
+      if(!pdf||pdf.status!=='validated'||pdf.studentId!==student.id||!student.pdfIds.includes(pdf.id)||!identity||!cohort||cohort.grade!==studentCohort?.grade||(Boolean(normalize(identity.code))&&normalize(identity.code)!==normalize(student.code))||normalize(identity.name)!==normalize(student.name))errors.push('La aprobación de libreta no corresponde a un PDF validado y a la identidad del estudiante.');
     }
     errors.push(...semanticStudentErrors(student,state.settings));
   }

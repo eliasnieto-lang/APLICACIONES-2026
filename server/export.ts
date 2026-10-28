@@ -65,6 +65,10 @@ export async function buildWorkbook(state: AppState, filters: {grade?:string;sec
     sheet.columns.forEach((column,index)=>{column.width=index===2?35:24;});
     sheet.eachRow((row,index)=>{ if(index>1) row.eachCell(cell=>{if(typeof cell.value==='number') cell.numFmt='0.00'; cell.alignment={vertical:'top',wrapText:true};});});
   }
+  // Keep legacy import identifiers available internally without showing them in reports.
+  ranking.getColumn(2).hidden=true;
+  detail.getColumn(1).hidden=true;
+  pending.getColumn(1).hidden=true;
   ranking.getColumn(1).numFmt='0';
   config.getColumn(2).width=100;
   return workbook;

@@ -1,17 +1,19 @@
 import type { AppState, PdfRecord, Student } from './types';
 import { isReportApproved, normalizeCohort } from './policy';
+import { applyFilenameIdentity, parseReportFilename, resolveReportIdentity } from './filename-identity';
+import { registerImportedReport } from './report-workflow';
 
-const identityKey = (value: string): string => value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('es');
+const identityKey = (value: string): string => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('es');
 const validTimestamp = (value: string | undefined): value is string => Boolean(value?.trim() && Number.isFinite(Date.parse(value)));
 
 /** A legacy confirmation can be trusted only while its document and identity still agree. */
 function matchesApprovedReport(student: Student, pdf: PdfRecord, pdfs: PdfRecord[]): boolean {
   if (pdf.status !== 'validated' || pdf.studentId !== student.id || !student.pdfIds.includes(pdf.id)) return false;
   if (pdfs.some(other => other.replacesId === pdf.id && other.studentId === student.id && other.status === 'validated')) return false;
-  const identity = pdf.confirmedIdentity ?? { code: pdf.extractedCode, name: pdf.extractedName, grade: pdf.extractedGrade, section: pdf.extractedSection };
+  const identity = { ...resolveReportIdentity(pdf), code: pdf.confirmedIdentity?.code ?? pdf.extractedCode };
   const studentCohort = normalizeCohort(student.grade, student.section);
   const reportCohort = normalizeCohort(identity.grade, identity.section);
-  return Boolean(studentCohort && reportCohort && studentCohort.label === reportCohort.label && identityKey(identity.code) && identityKey(identity.name) && identityKey(identity.code) === identityKey(student.code) && identityKey(identity.name) === identityKey(student.name));
+  return Boolean(studentCohort && reportCohort && studentCohort.label === reportCohort.label && identityKey(identity.name) && (!identityKey(identity.code) || identityKey(identity.code) === identityKey(student.code)) && identityKey(identity.name) === identityKey(student.name));
 }
 
 /** Normalize the three-period workflow without deleting historical grades or manual B/C data. */
@@ -30,16 +32,31 @@ export function migrateState(state: AppState): AppState {
       if (record.section.trim()) record.section = cohort.section;
     }
   }
+  for (const student of result.students) {
+    const cohort = normalizeCohort(student.grade, student.section);
+    if (cohort) { student.grade = cohort.grade; student.section = cohort.section; }
+  }
   for (const pdf of result.pdfs) {
+    const priorName = pdf.extractedName;
+    applyFilenameIdentity(pdf);
+    const filename = parseReportFilename(pdf.name);
+    const linked = result.students.find(student => student.id === pdf.studentId);
+    const linkedCohort = linked && normalizeCohort(linked.grade, linked.section);
+    const filenameCohort = normalizeCohort(filename.grade, filename.section);
+    // Repair the automatic provisional label without changing a manual correction or its classroom.
+    if (linked && ['pending', 'review'].includes(pdf.status) && !pdf.confirmedIdentity && pdf.manualName === undefined && filename.name && identityKey(linked.name) === identityKey(priorName) && linkedCohort?.label === filenameCohort?.label) linked.name = filename.name;
     if (pdf.confirmedIdentity) {
       const confirmedCohort = normalizeCohort(pdf.confirmedIdentity.grade, pdf.confirmedIdentity.section);
       if (confirmedCohort) { pdf.confirmedIdentity.grade = confirmedCohort.grade; pdf.confirmedIdentity.section = confirmedCohort.section; }
     }
     if (pdf.studentId && !result.students.some(student => student.id === pdf.studentId)) pdf.studentId = null;
   }
+  // A retained filename is enough to restore a missing provisional record; OCR is unnecessary.
+  for (const pdf of result.pdfs) {
+    const filename = parseReportFilename(pdf.name);
+    if (!pdf.studentId && ['pending', 'review'].includes(pdf.status) && filename.name && normalizeCohort(filename.grade, filename.section)) registerImportedReport(result, pdf);
+  }
   for (const student of result.students) {
-    const cohort = normalizeCohort(student.grade, student.section);
-    if (cohort) { student.grade = cohort.grade; student.section = cohort.section; }
     student.pdfIds = [...new Set([...student.pdfIds, ...result.pdfs.filter(pdf => pdf.studentId === student.id).map(pdf => pdf.id)])].filter(id => result.pdfs.some(pdf => pdf.id === id && pdf.studentId === student.id));
     if (upgrading) student.validated.academic = false;
 

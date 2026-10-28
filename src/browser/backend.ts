@@ -6,7 +6,8 @@ import { createDemoState, createStudent, defaultSettings } from '../../shared/de
 import { calculateStudent, cohortRecordApplies, validateSettings } from '../../shared/calculations';
 import { isReportApproved, normalizeCohort } from '../../shared/policy';
 import { migrateState } from '../../shared/migrations';
-import { confirmReport, applyReprocessedReport, deleteReportAndStudent, linkAcademic, registerImportedReport, ReportWorkflowError } from '../../shared/report-workflow';
+import { resolveReportIdentity } from '../../shared/filename-identity';
+import { confirmReport, identifyReport, applyReprocessedReport, deleteReportAndStudent, linkAcademic, registerImportedReport, ReportWorkflowError } from '../../shared/report-workflow';
 import { buildWorkbook } from '../../server/export';
 import { backupSchema, newStudentSchema, semanticStudentErrors, settingsSchema, stateReferenceErrors, stateSchema, studentSchema } from '../../server/validation';
 import { setBrowserRuntime } from '../runtime';
@@ -308,9 +309,20 @@ async function install(): Promise<void> {
         else if (!new TextDecoder('latin1').decode(await file.slice(0, 1024).arrayBuffer()).includes('%PDF-')) { pdf.status = 'failed'; pdf.warnings = ['El archivo no contiene un documento PDF válido.']; }
         else {
           try {
-            Object.assign(pdf, await extractBrowserPdf(file, structuredClone(state.settings)));
+            const sourceIdentity = resolveReportIdentity(pdf);
+            Object.assign(pdf, await extractBrowserPdf(file, structuredClone(state.settings), { identityFromFilename: Boolean(sourceIdentity.name && normalizeCohort(sourceIdentity.grade, sourceIdentity.section)) }));
             registerImportedReport(state, pdf);
-          } catch (error) { pdf.status = 'failed'; pdf.warnings = [error instanceof Error ? error.message : 'No fue posible leer el PDF.']; }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : 'No fue posible leer el PDF.';
+            const identity = resolveReportIdentity(pdf);
+            const usableFilename = identity.name && normalizeCohort(identity.grade, identity.section);
+            pdf.status = usableFilename && !/no se pudo abrir|no contiene.*PDF|dañado|contraseña|protegido/i.test(message) ? 'review' : 'failed';
+            pdf.warnings = [message];
+            if (pdf.status === 'review') {
+              pdf.warnings.push('El nombre y el aula se obtuvieron del archivo. Las notas no reconocidas quedan pendientes de revisión.');
+              registerImportedReport(state, pdf);
+            }
+          }
         }
         state.pdfs.push(pdf); additions.set(pdf.id, file.slice(0, file.size, 'application/pdf')); processed.push(pdf);
       }
@@ -338,12 +350,18 @@ async function install(): Promise<void> {
       const body = raw as Record<string, unknown>, pdf = state.pdfs.find(value => value.id === decodeURIComponent(pdfMatch[1]));
       if (!pdf) throw new HttpError(404, 'PDF no encontrado.');
       const action = body.action;
-      if (!['link', 'replace', 'validate', 'confirm', 'reprocess'].includes(String(action))) throw new HttpError(400, 'Acción de PDF no válida.');
+      if (!['link', 'replace', 'validate', 'confirm', 'identify', 'reprocess'].includes(String(action))) throw new HttpError(400, 'Acción de PDF no válida.');
+      if (action === 'identify') {
+        if (typeof body.name !== 'string') throw new HttpError(400, 'Indique los apellidos y nombres del estudiante.');
+        const updated = identifyReport(state, pdf.id, { name: body.name });
+        await save(dataset, state, expected); return json(updated);
+      }
       if (action === 'reprocess') {
         if (!['pending', 'review', 'failed'].includes(pdf.status)) throw new HttpError(409, 'Esta versión ya está confirmada, duplicada o reemplazada.');
         const original = (await readFiles(db, dataset)).get(pdf.id);
         if (!original) throw new HttpError(404, 'No está disponible el PDF original para leerlo automáticamente.');
-        const reading = await extractBrowserPdf(original, structuredClone(state.settings));
+        const sourceIdentity = resolveReportIdentity(pdf);
+        const reading = await extractBrowserPdf(original, structuredClone(state.settings), { identityFromFilename: Boolean(sourceIdentity.name && normalizeCohort(sourceIdentity.grade, sourceIdentity.section)) });
         const updated = applyReprocessedReport(state, pdf.id, reading);
         await save(dataset, state, expected);
         return json(updated);
@@ -357,7 +375,8 @@ async function install(): Promise<void> {
           if (['code', 'name', 'grade', 'section'].some(field => typeof value[field] !== 'string')) throw new HttpError(400, 'Complete el código, nombre, grado y sección de la libreta.');
           identity = { code: value.code as string, name: value.name as string, grade: value.grade as string, section: value.section as string };
         }
-        const confirmed = confirmReport(state, pdf.id, { identity, confirmMismatch: body.confirmMismatch === true });
+        if (body.name !== undefined && typeof body.name !== 'string') throw new HttpError(400, 'Los apellidos y nombres deben ser texto.');
+        const confirmed = confirmReport(state, pdf.id, { identity, ...(body.name !== undefined ? { name: body.name as string } : {}), confirmMismatch: body.confirmMismatch === true });
         await save(dataset, state, expected); return json(confirmed.pdf);
       }
       const student = findStudent(state, typeof body.studentId === 'string' && body.studentId ? body.studentId : pdf.studentId ?? '');

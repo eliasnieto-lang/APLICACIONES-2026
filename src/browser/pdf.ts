@@ -114,7 +114,7 @@ function makeOcrWorkerSource(): string {
 }
 
 /** Browser-only PDF and Spanish OCR. All document processing stays on this device. */
-export async function extractBrowserPdf(file: Blob, settings: Settings): Promise<ExtractedReport> {
+export async function extractBrowserPdf(file: Blob, settings: Settings, options: { identityFromFilename?: boolean } = {}): Promise<ExtractedReport> {
   if (file.size > MAX_BYTES) throw new Error('El PDF debe ser un archivo de hasta 20 MB.');
   const data = new Uint8Array(await file.arrayBuffer());
   const header = new TextDecoder('latin1').decode(data.subarray(0, 1024));
@@ -149,7 +149,7 @@ export async function extractBrowserPdf(file: Blob, settings: Settings): Promise
     const nativeText = texts.join('\n\f\n');
     const nativeReading = parseReportText(nativeText, settings);
     let rasterPresent = false;
-    if (needsPdfRecovery(nativeReading)) {
+    if (needsPdfRecovery(nativeReading, !options.identityFromFilename)) {
       for (let i = 1; i <= documentPdf.numPages && !rasterPresent; i++) {
         const page = await documentPdf.getPage(i);
         const operators = await timed(page.getOperatorList(), Math.min(20_000, remaining()), 'No se pudieron inspeccionar las imágenes del PDF a tiempo.');

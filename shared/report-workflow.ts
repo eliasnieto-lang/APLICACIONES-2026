@@ -1,6 +1,7 @@
 import { createStudent } from './defaults.js';
 import { cohortRecordApplies } from './calculations.js';
 import { ACTIVE_BIMESTERS, normalizeCohort } from './policy.js';
+import { applyFilenameIdentity, resolveReportIdentity } from './filename-identity.js';
 import type { AppState, Grade, PdfRecord, Settings, Student } from './types.js';
 import type { ExtractedReport } from './pdf-parser.js';
 
@@ -15,20 +16,41 @@ export class ReportWorkflowError extends Error {
 }
 
 function identityOf(pdf: PdfRecord): Identity {
-  return pdf.confirmedIdentity ?? { code: pdf.extractedCode, name: pdf.extractedName, grade: pdf.extractedGrade, section: pdf.extractedSection };
+  return { ...resolveReportIdentity(pdf), code: pdf.confirmedIdentity?.code ?? pdf.extractedCode };
 }
 
 function normalizeIdentity(input: Identity): Identity | null {
   if (!input || typeof input.code !== 'string' || typeof input.name !== 'string') return null;
   const code = input.code.trim(), name = input.name.trim().replace(/\s+/g, ' ');
   const cohort = normalizeCohort(input.grade, input.section);
-  if (!code || code.length > 100 || !name || name.length > 200 || !cohort) return null;
+  if (code.length > 100 || !name || name.length > 200 || !cohort) return null;
   return { code, name, grade: cohort.grade, section: cohort.section };
 }
 
-function sameIdentity(student: Student, identity: Identity): boolean {
+function sameNameAndCohort(student: Student, identity: Identity): boolean {
   const cohort = normalizeCohort(student.grade, student.section);
-  return codeKey(student.code) === codeKey(identity.code) && nameKey(student.name) === nameKey(identity.name) && cohort?.grade === identity.grade && cohort.section === identity.section;
+  return nameKey(student.name) === nameKey(identity.name) && cohort?.grade === identity.grade && cohort.section === identity.section;
+}
+
+function sameIdentity(student: Student, identity: Identity): boolean {
+  return (!identity.code || codeKey(student.code) === codeKey(identity.code)) && sameNameAndCohort(student, identity);
+}
+
+function warn(pdf: PdfRecord, warning: string): void {
+  if (!pdf.warnings.includes(warning)) pdf.warnings.push(warning);
+}
+
+function internalCode(state: AppState, pdf: PdfRecord): string {
+  const base = `AUTO-${pdf.id}`.slice(0, 90);
+  let code = base, suffix = 1;
+  while (state.students.some(student => codeKey(student.code) === codeKey(code))) code = `${base}-${suffix++}`;
+  return code;
+}
+
+function matchingStudents(state: AppState, identity: Identity): Student[] {
+  return identity.code
+    ? state.students.filter(candidate => codeKey(candidate.code) === codeKey(identity.code))
+    : state.students.filter(candidate => sameNameAndCohort(candidate, identity));
 }
 
 /** Copies only the three active periods. Manual attendance, discipline and commitments are retained. */
@@ -69,23 +91,34 @@ function supersedeReports(state: AppState, pdf: PdfRecord, student: Student): vo
   if (!pdf.replacesId && active.length) pdf.replacesId = active[active.length - 1].id;
 }
 
-/** Only an identity read completely from the report can create its provisional student. */
+/** Filename identity can create a provisional student without a student code or PDF text. */
 export function registerImportedReport(state: AppState, pdf: PdfRecord): Student | null {
-  if (pdf.status === 'failed' || pdf.status === 'duplicate') return null;
+  applyFilenameIdentity(pdf);
+  if (pdf.status === 'failed' || pdf.status === 'duplicate' || pdf.status === 'replaced') return null;
   const identity = normalizeIdentity(identityOf(pdf));
   if (!identity) {
     pdf.status = 'review';
-    pdf.warnings.push('La lectura automática necesita reconocer código, apellidos y nombres y aula. Solo se admiten 2.º F, 3.º F y 4.º F.');
+    warn(pdf, 'Revise los apellidos y nombres y el aula. Solo se admiten 2.º F, 3.º F y 4.º F.');
     return null;
   }
-  let student = state.students.find(candidate => codeKey(candidate.code) === codeKey(identity.code));
-  if (student && !sameIdentity(student, identity)) {
-    pdf.warnings.push('El código corresponde a un expediente con otra identidad. Confirme la identidad antes de aplicar la libreta.');
+  const linked = state.students.find(candidate => candidate.id === pdf.studentId);
+  const matches = matchingStudents(state, identity);
+  if (!linked && matches.length > 1) {
+    warn(pdf, 'Hay varios expedientes con los mismos apellidos, nombres y aula. Seleccione el expediente correcto antes de confirmar.');
+    return null;
+  }
+  let student = linked ?? matches[0];
+  if (student && (!sameNameAndCohort(student, identity) || (identity.code && codeKey(student.code) !== codeKey(identity.code) && !student.code.startsWith('AUTO-')))) {
+    warn(pdf, 'La identidad corresponde a un expediente con otros datos. Confirme la identidad antes de aplicar la libreta.');
+    return null;
+  }
+  if (linked && matches.some(candidate => candidate.id !== linked.id)) {
+    warn(pdf, 'La identidad corresponde a otro expediente. Revise el vínculo antes de confirmar la libreta.');
     return null;
   }
   if (!student) {
-    student = createStudent(identity, state.settings);
-    audit(student, 'Creación desde PDF', '', identity);
+    student = createStudent({ ...identity, code: identity.code || internalCode(state, pdf) }, state.settings);
+    audit(student, 'Creación desde PDF', '', { ...identity, code: student.code });
     state.students.push(student);
   }
   supersedeReports(state, pdf, student);
@@ -93,6 +126,33 @@ export function registerImportedReport(state: AppState, pdf: PdfRecord): Student
   pdf.status = 'review';
   linkAcademic(student, pdf, state.settings);
   return student;
+}
+
+/** Save an editable name independently of academic confirmation or a new OCR reading. */
+export function identifyReport(state: AppState, pdfId: string, options: { name: string; grade?: string; section?: string }): PdfRecord {
+  const pdf = state.pdfs.find(record => record.id === pdfId);
+  if (!pdf) throw new ReportWorkflowError(404, 'PDF no encontrado.');
+  if (!['pending', 'review'].includes(pdf.status)) throw new ReportWorkflowError(409, 'Esta versión no admite cambios de nombre pendientes.');
+  if (typeof options.name !== 'string' || options.name.trim().length > 200) throw new ReportWorkflowError(400, 'Los apellidos y nombres deben tener como máximo 200 caracteres.');
+  const name = options.name.trim().replace(/\s+/g, ' ');
+  const beforeName = resolveReportIdentity(pdf).name;
+  const linked = state.students.find(student => student.id === pdf.studentId);
+  const current = identityOf(pdf);
+  const cohort = normalizeCohort(options.grade ?? current.grade, options.section ?? current.section);
+  if ((options.grade !== undefined || options.section !== undefined) && !cohort) throw new ReportWorkflowError(400, 'Solo se admiten 2.º F, 3.º F y 4.º F.');
+  const draftMatches = !linked && name && cohort ? matchingStudents(state, { ...current, name, grade: cohort.grade, section: cohort.section }) : [];
+  if (draftMatches.length > 1) throw new ReportWorkflowError(409, 'Hay varios expedientes con los mismos apellidos, nombres y aula. Seleccione el expediente correcto antes de confirmar.');
+  pdf.manualName = name;
+  if (cohort && (options.grade !== undefined || options.section !== undefined)) {
+    if (name || current.name) pdf.confirmedIdentity = { code: linked?.code || draftMatches[0]?.code || current.code || internalCode(state, pdf), name: name || current.name, grade: cohort.grade, section: cohort.section };
+    else { pdf.extractedGrade = cohort.grade; pdf.extractedSection = cohort.section; }
+  }
+  if (linked && name && linked.name !== name) {
+    linked.name = name;
+    linked.updatedAt = stamp();
+    audit(linked, 'Corrección del nombre de la libreta', beforeName, name);
+  } else if (!linked && name && cohort) registerImportedReport(state, pdf);
+  return pdf;
 }
 
 /** Retry the retained original without changing its id, bytes or manual B/C records. */
@@ -103,10 +163,10 @@ export function applyReprocessedReport(state: AppState, pdfId: string, reading: 
   const linked = state.students.find(student => student.id === pdf.studentId);
   const before = { code: pdf.extractedCode, name: pdf.extractedName, grade: pdf.extractedGrade, section: pdf.extractedSection, status: pdf.status };
   Object.assign(pdf, structuredClone(reading), { status: 'review' });
-  delete pdf.confirmedIdentity;
+  applyFilenameIdentity(pdf);
   const identity = normalizeIdentity(identityOf(pdf));
   // An automatic retry cannot silently move this report or overwrite a different student.
-  if (linked && (!identity || !sameIdentity(linked, identity))) {
+  if (linked && (!identity || !sameNameAndCohort(linked, identity) || (identity.code && codeKey(linked.code) !== codeKey(identity.code) && !linked.code.startsWith('AUTO-')))) {
     pdf.warnings.push('La lectura automática todavía no coincide completamente con la ficha vinculada. Se conservaron la ficha y sus registros; esta libreta sigue sin confirmar.');
   } else registerImportedReport(state, pdf);
   const student = state.students.find(candidate => candidate.id === pdf.studentId);
@@ -117,25 +177,34 @@ export function applyReprocessedReport(state: AppState, pdfId: string, reading: 
   return pdf;
 }
 
-export function confirmReport(state: AppState, pdfId: string, options: { identity?: Identity; confirmMismatch?: boolean } = {}): { pdf: PdfRecord; student: Student } {
+export function confirmReport(state: AppState, pdfId: string, options: { identity?: Identity; name?: string; grade?: string; section?: string; confirmMismatch?: boolean } = {}): { pdf: PdfRecord; student: Student } {
   const pdf = state.pdfs.find(record => record.id === pdfId);
   if (!pdf) throw new ReportWorkflowError(404, 'PDF no encontrado.');
   if (pdf.status === 'failed' || pdf.status === 'duplicate' || pdf.status === 'replaced') throw new ReportWorkflowError(400, 'Un PDF fallido, duplicado o reemplazado no puede confirmarse.');
-  const identity = normalizeIdentity(options.identity ?? identityOf(pdf));
-  if (!identity) throw new ReportWorkflowError(400, 'La lectura automática no ha identificado todos los datos del estudiante y un aula habilitada. No se puede confirmar esta libreta todavía.');
+  applyFilenameIdentity(pdf);
   const linked = state.students.find(student => student.id === pdf.studentId);
-  const existing = state.students.find(student => codeKey(student.code) === codeKey(identity.code));
+  const base = options.identity ?? identityOf(pdf);
+  const identity = normalizeIdentity({ ...base, name: options.name ?? base.name, grade: options.grade ?? base.grade, section: options.section ?? base.section });
+  if (!identity) throw new ReportWorkflowError(400, 'Complete los apellidos y nombres y un aula habilitada para confirmar la libreta.');
+  const matches = matchingStudents(state, identity);
+  if (!linked && matches.length > 1) throw new ReportWorkflowError(409, 'Hay varios expedientes con los mismos apellidos, nombres y aula. Seleccione el expediente correcto antes de confirmar.');
+  const existing = matches[0];
+  const explicitIdentity = options.identity !== undefined || options.name !== undefined || options.grade !== undefined || options.section !== undefined || pdf.manualName !== undefined || pdf.confirmedIdentity !== undefined;
   let student = linked ?? existing;
-  if (existing && existing.id !== linked?.id) {
+  // A name edit applies to the linked student; only an explicitly supplied code can reassign it.
+  if (existing && existing.id !== linked?.id && (!linked || Boolean(identity.code))) {
     if ((!sameIdentity(existing, identity) || linked) && options.confirmMismatch !== true) throw new ReportWorkflowError(409, 'La identidad corresponde a otro expediente. Confirme la reasignación antes de aplicar la libreta.');
     student = existing;
   }
-  if (linked && !options.identity && !sameIdentity(linked, identity) && options.confirmMismatch !== true) throw new ReportWorkflowError(409, 'La identidad extraída no coincide. Revise y confirme la reasignación.');
+  if (linked && !explicitIdentity && (!sameNameAndCohort(linked, identity) || (identity.code && codeKey(linked.code) !== codeKey(identity.code) && !linked.code.startsWith('AUTO-'))) && options.confirmMismatch !== true) throw new ReportWorkflowError(409, 'La identidad extraída no coincide. Revise y confirme la reasignación.');
   if (!student) {
-    student = createStudent(identity, state.settings);
+    student = createStudent({ ...identity, code: identity.code || internalCode(state, pdf) }, state.settings);
     state.students.push(student);
-    audit(student, 'Creación desde PDF confirmado', '', identity);
+    audit(student, 'Creación desde PDF confirmado', '', { ...identity, code: student.code });
   }
+  // Codes are an internal persistence key; correcting a name never asks the user for one.
+  identity.code = options.identity?.code?.trim() || student.code;
+  if (options.name !== undefined) pdf.manualName = identity.name;
   const preserveAcademic = student.id === linked?.id && pdf.status === 'validated' && student.reportApproval?.pdfId === pdf.id;
   const priorIdentity = { code: student.code, name: student.name, grade: student.grade, section: student.section };
   detachReport(state, pdf, student.id);

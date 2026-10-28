@@ -9,9 +9,9 @@ import { createApp } from '../server/index.js';
 import type { AppState, Student } from '../shared/types.js';
 import { createStudent, defaultSettings } from '../shared/defaults.js';
 
-function reportPdf(code:string,name:string,omitArea='',grade='3',section='F',identityLayout:'inline'|'stacked'='inline') {
+function reportPdf(code:string,name:string,omitArea='',grade='3',section='F',identityLayout:'inline'|'stacked'|'none'|'classroom'='inline') {
   const normalize=(text:string)=>text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[()\\]/g,'\\$&');
-  const lines=identityLayout==='stacked'
+  const lines=identityLayout==='none' ? ['BIMESTRES I II III'] : identityLayout==='classroom' ? [`Grado: ${grade}`,`Seccion: ${section}`,'BIMESTRES I II III'] : identityLayout==='stacked'
     ? ['INFORME DE PROGRESO DEL ESTUDIANTE','Codigo modular: 1234567','Codigo del estudiante',code,'Apellidos y nombres del estudiante',name,'Grado',grade,'Seccion',section,'Periodo: 2026']
     : [`Codigo estudiante: ${code}`,`Estudiante: ${name}`,`Grado: ${grade}`,`Seccion: ${section}`,'Periodo: 2026'];
   for(const area of defaultSettings.areas.filter(area=>area.id!==omitArea)){lines.push(area.name,...area.competencies.map(c=>`${c} A A A`));}
@@ -95,6 +95,63 @@ test('El PDF nativo con rótulos sin dos puntos reconoce automáticamente códig
   }finally{await h.close();}
 });
 
+test('El nombre del archivo identifica la libreta antes de confirmar, sin código ni periodo extraído',async()=>{
+  const h=await harness();try{
+    const filename='BOLETA_2do año F_Secundaria_SEGURA_CAMONES_ANDRES ADRIAN.pdf';
+    const pdf=await upload(h,reportPdf('','','','3','F','none'),filename);
+    assert.equal(pdf.name,filename);assert.equal(pdf.extractedName,'SEGURA CAMONES ANDRES ADRIAN');
+    assert.equal(pdf.extractedCode,'');assert.equal(pdf.period,'');assert.equal(pdf.ocr,false);
+    assert.equal(pdf.extractedGrade,'2.º de secundaria');assert.equal(pdf.extractedSection,'F');
+    assert.equal(pdf.areas.flatMap(area=>area.grades).flat().length,45);
+    let state=await readState(h),student=state.students[0];
+    assert.equal(state.students.length,1);assert.equal(student.name,'SEGURA CAMONES ANDRES ADRIAN');
+    assert.equal(student.grade,'2.º de secundaria');assert.equal(student.section,'F');assert(student.code);
+    assert.equal(student.reportApproval,undefined);assert.equal(student.validated.academic,false);
+    const studentId=student.id,internalCode=student.code;
+    await confirm(h,pdf.id);
+    state=await readState(h);student=state.students[0];
+    assert.equal(student.id,studentId);assert.equal(student.code,internalCode);assert.equal(student.reportApproval?.pdfId,pdf.id);
+    assert.equal(student.validated.academic,true);assert(student.academic.every(area=>area.grades.every(row=>row.length===3)));
+    assert.deepEqual(student.attendance,{required:null,attended:null,punctual:null,exempted:null,validated:false});
+    assert.deepEqual(student.discipline,{confirmed:false,incidents:[]});assert.deepEqual(student.institutional,[]);assert.deepEqual(student.family,[]);
+  }finally{await h.close();}
+});
+
+test('El nombre del archivo prevalece sobre otro nombre leído dentro del PDF',async()=>{
+  const h=await harness();try{
+    const pdf=await upload(h,reportPdf('TEXT-OTHER','Nombre Contradictorio','','4','F'),'BOLETA_2do año F_Secundaria_SEGURA_CAMONES_ANDRES ADRIAN.pdf');
+    assert.equal(pdf.extractedName,'SEGURA CAMONES ANDRES ADRIAN');assert.equal(pdf.ocr,false);
+    assert.equal((await readState(h)).students[0].name,'SEGURA CAMONES ANDRES ADRIAN');
+    await confirm(h,pdf.id);
+    assert.equal((await readState(h)).students[0].name,'SEGURA CAMONES ANDRES ADRIAN');
+  }finally{await h.close();}
+});
+
+test('Una libreta sin nombre permite confirmarlo manualmente sin exigir código ni año',async()=>{
+  const h=await harness();try{
+    const pdf=await upload(h,reportPdf('','','','4','F','classroom'),'documento-sin-nombre.pdf');
+    assert.equal(pdf.extractedName,'');assert.equal(pdf.extractedCode,'');assert.equal(pdf.period,'');assert.equal(pdf.ocr,false);
+    assert.equal(pdf.studentId,null);assert.equal((await readState(h)).students.length,0);
+    assert.equal((await h.request(`/api/pdfs/${pdf.id}`,'PUT',{action:'validate'})).status,400);
+    await confirm(h,pdf.id,{name:'APELLIDOS Y NOMBRES INGRESADOS'});
+    const state=await readState(h),student=state.students[0];
+    assert.equal(state.students.length,1);assert.equal(student.name,'APELLIDOS Y NOMBRES INGRESADOS');
+    assert.equal(student.grade,'4.º de secundaria');assert.equal(student.section,'F');assert.equal(student.reportApproval?.pdfId,pdf.id);
+    assert.equal(student.validated.academic,true);assert.equal(state.pdfs[0].extractedCode,'');assert.equal(state.pdfs[0].period,'');
+  }finally{await h.close();}
+});
+
+test('Confirmar por nombre de archivo abre la ficha y mantiene A pendiente si faltan notas',async()=>{
+  const h=await harness();try{
+    const pdf=await upload(h,reportPdf('','','matematica','3','F','none'),'BOLETA_3ro año F_Secundaria_RIVERA_SOTO_ALBA.pdf');
+    assert.equal(pdf.extractedName,'RIVERA SOTO ALBA');assert.equal(pdf.extractedCode,'');assert.equal(pdf.period,'');
+    await confirm(h,pdf.id);
+    const student=(await readState(h)).students[0];assert.equal(student.reportApproval?.pdfId,pdf.id);
+    assert.equal(student.validated.academic,false);assert.equal(student.academic.find(area=>area.areaId==='matematica')!.validated,false);
+    assert.equal(student.validated.performance,false);assert.equal(student.validated.commitment,false);
+  }finally{await h.close();}
+});
+
 test('Reprocesar libretas antiguas sin identidad usa el original y conserva id, hash y confirmación pendiente',async()=>{
   const h=await harness();try{
     for(const status of ['review','failed'] as const){
@@ -147,7 +204,7 @@ test('Reprocesar una libreta enlazada conserva el expediente y B/C manuales hast
   }finally{await h.close();}
 });
 
-test('Identidades ausentes o aulas ajenas permanecen en revisión; la corrección explícita conserva la extracción',async()=>{
+test('Las aulas ajenas permanecen en revisión; el código ausente no bloquea una identidad y aula reconocidas',async()=>{
   const h=await harness();try{
     for(const [grade,section] of [['1','F'],['5','F'],['12','F'],['25','F'],['3xyz','F'],['3','A']]){
       assert.equal((await h.request('/api/students','POST',{code:`BAD-${grade}-${section}`,name:'No permitido',grade,section})).status,400);
@@ -160,9 +217,10 @@ test('Identidades ausentes o aulas ajenas permanecen en revisión; la correcció
     assert.equal(state.students[0].grade,'3.º de secundaria');assert.equal(state.pdfs[0].extractedName,'Identidad Leida');assert.equal(state.pdfs[0].extractedSection,'A');
     assert.equal(state.pdfs[0].confirmedIdentity?.section,'F');assert.equal(state.students[0].reportApproval?.pdfId,pdf.id);
     const missing=await upload(h,reportPdf('','Sin Codigo','','4','F'),'sin_codigo.pdf');
-    assert.equal(missing.studentId,null);assert.equal((await readState(h)).students.length,1);
-    await confirm(h,missing.id,{identity:{code:'COR-2',name:'Sin Codigo Corregido',grade:'4.º',section:'F'}});
+    assert(missing.studentId);assert.equal(missing.extractedCode,'');assert.equal((await readState(h)).students.length,2);
+    await confirm(h,missing.id,{name:'Sin Codigo Corregido'});
     assert.equal((await readState(h)).students.length,2);
+    assert.equal((await readState(h)).students.find(student=>student.id===missing.studentId)!.name,'Sin Codigo Corregido');
   }finally{await h.close();}
 });
 

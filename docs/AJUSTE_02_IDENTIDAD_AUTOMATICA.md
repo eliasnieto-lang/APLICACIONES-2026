@@ -1,5 +1,7 @@
 # Identidad automática y revisión con dos acciones
 
+Documento histórico. La instrucción posterior en [AJUSTE_03_NOMBRE_ARCHIVO.md](AJUSTE_03_NOMBRE_ARCHIVO.md) prioriza el nombre del archivo, elimina el requisito de código y permite editar los apellidos y nombres.
+
 Corrección solicitada después del primer ajuste: código, apellidos y nombres y aula deben proceder del PDF. La pantalla no muestra campos de identidad editables ni selectores de aula o de vinculación manual. Presenta los valores reconocidos y solo dos botones: **Confirmar libreta** y **Eliminar libreta**.
 
 El lector reconoce etiquetas con y sin dos puntos, valores debajo de su etiqueta y encabezados en columnas. Distingue el código del estudiante del código modular del colegio y del DNI. Una cabecera escaneada también se procesa aunque las notas sean texto nativo. La combinación de texto y OCR conserva los valores nativos fiables y evita mezclar estudiantes o periodos distintos.

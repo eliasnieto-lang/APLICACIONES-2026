@@ -36,6 +36,7 @@ export interface PdfRecord {
   extractedGrade: string; extractedSection: string; period: string;
   text: string; ocr: boolean; warnings: string[];
   areas: AcademicArea[]; replacesId?: string;
+  manualName?: string;
   confirmedIdentity?: { code: string; name: string; grade: string; section: string };
 }
 export type Dataset = 'real' | 'demo';

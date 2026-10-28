@@ -1,5 +1,13 @@
 # Validación de la edición web
 
+## Nombre de archivo, código opcional y nombre editable
+
+El ajuste vigente usa prioritariamente el nombre del archivo PDF para la identidad. La captura del usuario se reproduce con `BOLETA_2do año F_Secundaria_SEGURA_CAMONES_ANDRES ADRIAN.pdf`: aparece **SEGURA CAMONES ANDRES ADRIAN**, aula **2.º F**, antes de confirmar, aun sin código ni año extraídos. El casillero de nombre permite corregir o completar la identidad.
+
+Validación: `npm test` aprobó **107 pruebas**; se ejecutó además el caso actualizado de ingreso manual con PDF que solo contiene aula. La construcción portátil y `npm run test:web` pasaron. La aceptación verifica el nombre exacto, prioridad frente a un nombre distinto dentro del PDF, lista previa a la confirmación, edición manual sin código/año, A pendiente por falta de notas y apertura de A/B/C, migración inmediata desde archivos ya guardados, conservación de B/C y restauración después de editar el nombre sin mantener borradores obsoletos. No hubo solicitudes HTTP adicionales ni errores de página o consola.
+
+Los identificadores internos permanecen en almacenamiento por compatibilidad, sin requisito de ingresarlos ni mostrarlos en la revisión. Sus columnas se ocultan en Excel. No se fuerza OCR de metadatos si el archivo ya proporciona nombre y aula; las calificaciones siguen leyendo el PDF y la progresión mantiene I–II frente a III.
+
 ## Identidad automática y dos acciones de revisión
 
 El segundo ajuste elimina los campos editables de identidad. La revisión muestra código, apellidos y nombres y aula leídos del PDF, con únicamente **Confirmar libreta** y **Eliminar libreta**. Las libretas pendientes de una lectura anterior se reprocesan automáticamente desde su original conservado.

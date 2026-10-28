@@ -23,14 +23,14 @@ async function poll(check, label, timeout = 20000) {
   throw new Error(`No se confirmó: ${label}`);
 }
 
-// Genuine one-page native PDFs, with identity independent of the filename and
-// exactly three explicit cells per competency. No parser/API is mocked.
-function makePdf(settings, { code, name, grade, section = 'F', grades = ['C', 'B', 'A'], identityLayout = 'inline' }) {
+// Genuine one-page native PDFs with optional identity and three explicit cells
+// per competency. No parser/API is mocked.
+function makePdf(settings, { code, name, grade, section = 'F', grades = ['C', 'B', 'A'], identityLayout = 'inline', omitArea = '' }) {
   const clean = value => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[()\\]/g, '\\$&');
-  const lines = identityLayout === 'stacked'
+  const lines = identityLayout === 'none' ? ['BIMESTRES I II III'] : identityLayout === 'classroom' ? [`Grado: ${grade}`, `Seccion: ${section}`, 'BIMESTRES I II III'] : identityLayout === 'stacked'
     ? ['INFORME DE PROGRESO DEL ESTUDIANTE', 'Codigo modular: 1234567', 'Codigo del estudiante', code, 'Apellidos y nombres del estudiante', name, 'Grado', String(grade), 'Seccion', section, 'Periodo: 2026', 'BIMESTRES I II III']
     : [`Codigo del estudiante: ${code}`, `Apellidos y nombres: ${name}`, `Grado: ${grade}`, `Seccion: ${section}`, 'Periodo: 2026', 'BIMESTRES I II III'];
-  for (const area of settings.areas) lines.push(area.name, ...area.competencies.map(competency => `${competency} ${grades.join(' ')}`));
+  for (const area of settings.areas.filter(area => area.id !== omitArea)) lines.push(area.name, ...area.competencies.map(competency => `${competency} ${grades.join(' ')}`));
   const stream = `BT /F1 8 Tf 35 800 Td 13 TL ${lines.map((line, index) => `${index ? 'T* ' : ''}(${clean(line)}) Tj`).join('\n')} ET`;
   const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>', '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>', `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`];
   let result = '%PDF-1.4\n';
@@ -128,7 +128,7 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
   const navigate = name => page.locator('.sidebar .nav-item').filter({ hasText: name }).click();
   const openStudent = async (code, name) => {
     await navigate('Estudiantes');
-    await page.getByRole('textbox', { name: 'Buscar estudiante' }).fill(code);
+    await page.getByRole('textbox', { name: 'Buscar estudiante' }).fill(name);
     await page.getByRole('button', { name: new RegExp(name) }).click();
     await page.getByRole('heading', { name, exact: true }).waitFor();
   };
@@ -163,18 +163,30 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     await row.getByRole('button', { name: 'Revisar', exact: true }).click();
     const panel = page.locator('.import-review');
     await panel.getByRole('heading', { name: filename, exact: true }).waitFor();
-    assert.equal(await panel.locator('input, select, textarea, [contenteditable=true]').count(), 0, 'La revisión muestra la identidad reconocida sin pedir transcripción o vinculación manual.');
+    assert.equal(await panel.locator('input, select, textarea, [contenteditable=true]').count(), 1, 'La revisión permite corregir únicamente apellidos y nombres.');
+    const pending = ['pending', 'review'].includes((await snapshot()).state.pdfs.find(pdf => pdf.name === filename).status);
+    if (pending) assert(await panel.getByLabel('Apellidos y nombres', { exact: true }).isEditable(), 'El nombre reconocido se puede corregir antes de confirmar.');
     assert.deepEqual((await panel.getByRole('button').allTextContents()).map(value => value.trim()), ['Confirmar libreta', 'Eliminar libreta'], 'La revisión solo permite confirmar o eliminar.');
     await panel.locator('.import-identity').waitFor();
   };
-  const confirm = async filename => {
+  const confirm = async (filename, manualName) => {
     await review(filename);
-    await poll(async () => Boolean((await snapshot()).state.pdfs.find(pdf => pdf.name === filename)?.extractedName), 'identidad extraída automáticamente', 180000);
-    const name = (await snapshot()).state.pdfs.find(pdf => pdf.name === filename).extractedName;
-    assert((await page.locator('.import-identity').innerText()).includes(name), 'El nombre reconocido se muestra de solo lectura.');
+    const nameField = page.locator('.import-review').getByLabel('Apellidos y nombres', { exact: true });
+    if (manualName) await nameField.fill(manualName);
+    await poll(async () => Boolean((await nameField.inputValue()).trim()), 'nombre visible antes de confirmar', 180000);
+    const name = await nameField.inputValue();
+    assert(name, 'La confirmación usa el nombre ya visible en la revisión.');
     await page.locator('.import-review').getByRole('button', { name: 'Confirmar libreta', exact: true }).click();
     await page.getByRole('heading', { name, exact: true }).waitFor();
     await poll(async () => Boolean((await snapshot()).state.students.find(value => value.name === name)?.reportApproval), 'libreta confirmada');
+  };
+  const deleteImported = async filename => {
+    await review(filename);
+    const pdfId = (await snapshot()).state.pdfs.find(pdf => pdf.name === filename).id;
+    const accepted = page.waitForEvent('dialog').then(dialog => dialog.accept());
+    await page.locator('.import-review').getByRole('button', { name: 'Eliminar libreta', exact: true }).click();
+    await accepted;
+    await poll(async () => !(await snapshot()).state.pdfs.some(pdf => pdf.id === pdfId), 'eliminación de la libreta de aceptación');
   };
   const metric = label => page.locator('.detail-metric').filter({ has: page.locator('span', { hasText: new RegExp(`^${label}$`) }) });
   const dimension = name => page.locator('.detail-score-row').filter({ hasText: name }).locator('strong');
@@ -251,7 +263,8 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     }
     await review(path.basename(outsidePath));
     const outsideIdentity = await page.locator('.import-identity').innerText();
-    assert(outsideIdentity.includes(outside.code) && outsideIdentity.includes(outside.name));
+    assert(!outsideIdentity.includes(outside.code), 'El ingreso no exige mostrar códigos de estudiante.');
+    assert.equal(await page.getByLabel('Apellidos y nombres', { exact: true }).inputValue(), outside.name);
     const outsideCohort = page.locator('.import-identity > div').filter({ has: page.locator('dt', { hasText: /^Grado y sección$/ }) }).locator('dd');
     assert.match(await outsideCohort.innerText(), /^5(?:[.º°\s]*(?:de secundaria)?)?\s+F$/, 'El aula ajena se muestra tal como fue reconocida.');
     assert(await page.locator('.import-review').getByRole('button', { name: 'Confirmar libreta', exact: true }).isDisabled());
@@ -364,13 +377,14 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     assert.equal(ranking.getCell('H2').value, 65);
     assert(Math.abs(ranking.getCell('I2').value - (58.75 + 95.5 + 65) / 3) < 1e-10);
 
-    // Recreate an earlier saved extraction through the supported backup UI.
-    // Its original bytes and student B/C records are kept intact.
+    // Old saved metadata is repaired from the retained filename immediately.
+    // Its original bytes, three grade columns and manual B/C stay intact.
     const legacyBackup = await backup();
     const legacyPdf = legacyBackup.state.pdfs.find(pdf => pdf.studentId === completed.id && pdf.status === 'validated');
     const legacyOriginal = { id: legacyPdf.id, hash: legacyPdf.hash, size: legacyPdf.size, uploadedAt: legacyPdf.uploadedAt };
-    Object.assign(legacyPdf, { status: 'review', extractedCode: '', extractedName: '', extractedGrade: '', extractedSection: '', text: '', areas: [], warnings: ['Lectura antigua incompleta'] });
+    Object.assign(legacyPdf, { name: 'BOLETA_2do año F_Secundaria_PEREZ_RAMOS_Lucia Elena.pdf', status: 'review', extractedCode: '', extractedName: '', extractedGrade: '', extractedSection: '', text: '', warnings: ['Lectura antigua incompleta'] });
     delete legacyPdf.confirmedIdentity;
+    delete legacyPdf.manualName;
     const legacyStudent = legacyBackup.state.students.find(value => value.id === completed.id);
     delete legacyStudent.reportApproval;
     legacyStudent.validated.academic = false;
@@ -382,29 +396,31 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
       await page.getByRole('dialog').getByRole('button', { name: 'Restaurar datos', exact: true }).click();
       await page.getByRole('dialog').waitFor({ state: 'hidden' });
     };
+    await navigate('Importar libretas');
+    await restoreLegacy();
     await review(legacyPdf.name);
+    assert.equal(await page.getByLabel('Apellidos y nombres', { exact: true }).inputValue(), pupils[0].name, 'El nombre del archivo aparece antes de confirmar.');
+    assert((await page.locator('tr').filter({ has: page.locator('.file-cell strong', { hasText: legacyPdf.name }) }).innerText()).includes(pupils[0].name), 'La lista ya muestra el nombre del archivo.');
+    assert(await page.locator('.import-review').getByRole('button', { name: 'Confirmar libreta', exact: true }).isEnabled());
+    assert.equal(await page.locator('.import-review').getAttribute('aria-busy'), 'false', 'La metadata del archivo no inicia otra lectura OCR.');
+    const temporaryName = 'PEREZ RAMOS NOMBRE TEMPORAL';
+    await page.getByLabel('Apellidos y nombres', { exact: true }).fill(temporaryName);
+    await page.locator('.import-review').getByRole('heading', { name: legacyPdf.name, exact: true }).click();
+    await poll(async () => (await snapshot()).state.pdfs.find(pdf => pdf.id === legacyOriginal.id)?.manualName === temporaryName, 'nombre temporal guardado sin confirmar');
+    await poll(async () => (await page.locator('tr').filter({ has: page.locator('.file-cell strong', { hasText: legacyPdf.name }) }).innerText()).includes(temporaryName), 'nombre temporal guardado visible');
     await restoreLegacy();
-    await poll(async () => (await snapshot()).state.pdfs.find(pdf => pdf.id === legacyOriginal.id)?.extractedCode === pupils[0].code, 'recuperación automática tras restaurar sin recargar', 180000);
-    await poll(async () => (await page.locator('.import-identity').innerText()).includes(pupils[0].name), 'identidad recuperada visible');
-    // A second restore of the same old record must clear the displayed identity.
-    // This mounted review already attempted its single recovery; it stays safe
-    // and disabled until the saved original is retried in a new application load.
-    await restoreLegacy();
-    await poll(async () => (await snapshot()).state.pdfs.find(pdf => pdf.id === legacyOriginal.id)?.extractedName === '', 'segunda restauración de lectura antigua');
-    await poll(async () => !(await page.locator('.import-identity').innerText()).includes(pupils[0].name), 'la revisión descarta la identidad anterior al restaurar');
-    assert(await page.locator('.import-review').getByRole('button', { name: 'Confirmar libreta', exact: true }).isDisabled());
-    await poll(async () => (await page.locator('.import-review').getAttribute('aria-busy')) === 'false', 'revisión inactiva tras segundo respaldo');
-    assert(await page.locator('.import-review').getByRole('button', { name: 'Eliminar libreta', exact: true }).isEnabled(), 'La identidad incompleta permite eliminar el documento.');
+    await poll(async () => (await page.getByLabel('Apellidos y nombres', { exact: true }).inputValue()) === pupils[0].name, 'el respaldo reemplaza el nombre editado sin conservar un borrador anterior');
+    assert(await page.locator('.import-review').getByRole('button', { name: 'Confirmar libreta', exact: true }).isEnabled(), 'Otra restauración tampoco bloquea la confirmación sin código.');
     await load();
     await review(legacyPdf.name);
-    await poll(async () => (await snapshot()).state.pdfs.find(pdf => pdf.id === legacyOriginal.id)?.extractedCode === pupils[0].code, 'recuperación automática del PDF ya guardado', 180000);
     current = await snapshot();
     const recoveredPdf = current.state.pdfs.find(pdf => pdf.id === legacyOriginal.id);
     const recoveredStudent = current.state.students.find(value => value.id === completed.id);
     assert.deepEqual({ id: recoveredPdf.id, hash: recoveredPdf.hash, size: recoveredPdf.size, uploadedAt: recoveredPdf.uploadedAt }, legacyOriginal);
+    assert.equal(recoveredPdf.extractedCode, '');assert.equal(recoveredPdf.text, '');assert.equal(recoveredPdf.ocr, false, 'La recuperación usa el archivo sin releer su contenido.');
     assert.equal(current.state.students.length, 3);
     assert(!recoveredStudent.reportApproval);
-    assert.equal(recoveredStudent.validated.academic, false, 'Reprocesar todavía exige confirmar la lectura antes de calcular A.');
+    assert.equal(recoveredStudent.validated.academic, false, 'El nombre recuperado todavía exige confirmar antes de calcular A.');
     for (const field of ['attendance', 'discipline', 'institutional', 'family']) assert.deepEqual(recoveredStudent[field], completed[field], `La recuperación conserva ${field} manual.`);
     await page.screenshot({ path: '/tmp/circulos-import-review.png', fullPage: true });
     await page.locator('.import-review').screenshot({ path: '/tmp/circulos-import-review-panel.png' });
@@ -421,7 +437,7 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     await upload([fixtures[0]]);
     current = await snapshot();
     assert.equal(current.state.students.length, 3);
-    const original = current.state.pdfs.find(pdf => pdf.extractedCode === pupils[0].code && pdf.status === 'validated');
+    const original = current.state.pdfs.find(pdf => pdf.studentId === completed.id && pdf.status === 'validated');
     assert.equal(current.state.pdfs.filter(pdf => pdf.hash === original.hash).length, 2);
     assert(current.state.pdfs.some(pdf => pdf.hash === original.hash && pdf.status === 'duplicate'));
     const replacementPath = path.join(directory, 'version-corregida-sin-identidad.pdf');
@@ -442,7 +458,7 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     const dialogPromise = page.waitForEvent('dialog');
     const clickPromise = page.locator('.import-review').getByRole('button', { name: 'Eliminar libreta', exact: true }).click();
     const dialog = await dialogPromise;
-    assert.match(dialog.message(), new RegExp(pupils[0].code));
+    assert.match(dialog.message(), new RegExp(pupils[0].name));
     assert.match(dialog.message(), /todas sus versiones PDF/);
     await dialog.accept(); await clickPromise;
     await poll(async () => !(await student(pupils[0].code)), 'eliminación de la ficha vinculada');
@@ -486,17 +502,75 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     const mixedPending = await student(mixedPupil.code);
     assert.equal(mixedPending.grade, '3.º de secundaria');assert(!mixedPending.reportApproval);assertBlankManual(mixedPending);
     await review(path.basename(mixedPath));
-    assert((await page.locator('.import-identity').innerText()).includes(mixedPupil.name));
+    assert.equal(await page.getByLabel('Apellidos y nombres', { exact: true }).inputValue(), mixedPupil.name);
     await page.screenshot({ path: '/tmp/circulos-mixed-pdf-review.png', fullPage: true });
     await page.locator('.import-review').screenshot({ path: '/tmp/circulos-mixed-pdf-review-panel.png' });
     await confirm(path.basename(mixedPath));
     const mixedConfirmed = await student(mixedPupil.code);
     assert.equal(mixedConfirmed.validated.academic, true);assertBlankManual(mixedConfirmed);
     await review(path.basename(mixedPath));
-    const mixedDialog = page.waitForEvent('dialog').then(async dialog => { assert.match(dialog.message(), /HEADER-TEST-003/);await dialog.accept(); });
+    const mixedDialog = page.waitForEvent('dialog').then(async dialog => { assert.match(dialog.message(), new RegExp(mixedPupil.name));await dialog.accept(); });
     await page.locator('.import-review').getByRole('button', { name: 'Eliminar libreta', exact: true }).click();
     await mixedDialog;
     await poll(async () => !(await student(mixedPupil.code)), 'eliminación de ficha mixta ficticia');
+    assert.equal((await snapshot()).state.students.length, 3);
+
+    // The provided filename is sufficient even when every native identity field
+    // is absent. All 45 grade cells remain real native PDF text.
+    const filenameCase = 'BOLETA_2do año F_Secundaria_SEGURA_CAMONES_ANDRES ADRIAN.pdf';
+    const filenamePath = path.join(directory, filenameCase);
+    await fs.writeFile(filenamePath, makePdf(settings, { identityLayout: 'none' }));
+    await navigate('Importar libretas');
+    await upload([filenamePath]);
+    current = await snapshot();
+    const filenamePdf = current.state.pdfs.find(pdf => pdf.name === filenameCase);
+    const filenameStudent = current.state.students.find(value => value.id === filenamePdf.studentId);
+    assert.equal(filenamePdf.extractedName, 'SEGURA CAMONES ANDRES ADRIAN');
+    assert.equal(filenamePdf.extractedCode, '');assert.equal(filenamePdf.period, '');assert.equal(filenamePdf.ocr, false);
+    assert.equal(filenamePdf.areas.flatMap(area => area.grades).flat().length, 45);
+    assert.equal(filenameStudent.name, 'SEGURA CAMONES ANDRES ADRIAN');assert.equal(filenameStudent.grade, '2.º de secundaria');
+    assert(!filenameStudent.reportApproval);assertBlankManual(filenameStudent);
+    const filenameRow = page.locator('tr').filter({ has: page.locator('.file-cell strong', { hasText: filenameCase }) });
+    assert((await filenameRow.innerText()).includes(filenameStudent.name), 'El estudiante figura en la lista antes de confirmar.');
+    assert(!(await filenameRow.innerText()).includes(filenameStudent.code), 'La lista no pide un código generado.');
+    await review(filenameCase);
+    assert.equal(await page.getByLabel('Apellidos y nombres', { exact: true }).inputValue(), filenameStudent.name);
+    assert.equal(await page.locator('.import-review').getByText('Código', { exact: true }).count(), 0);
+    assert(await page.locator('.import-review').getByRole('button', { name: 'Confirmar libreta', exact: true }).isEnabled());
+    assert.equal(await page.locator('.import-review').getAttribute('aria-busy'), 'false');
+    await page.screenshot({ path: '/tmp/circulos-filename-review.png', fullPage: true });
+    await page.locator('.import-review').screenshot({ path: '/tmp/circulos-filename-review-panel.png' });
+    await confirm(filenameCase);
+    const filenameApproved = await student(filenameStudent.code);
+    assert.equal(filenameApproved.id, filenameStudent.id);assert.equal(filenameApproved.validated.academic, true);assertBlankManual(filenameApproved);
+    for (const name of ['Académico', 'Desempeño', 'Compromiso']) assert(await tab(name).isEnabled());
+    await deleteImported(filenameCase);
+
+    const fallbackCase = 'documento-sin-nombre.pdf';
+    const fallbackPath = path.join(directory, fallbackCase);
+    await fs.writeFile(fallbackPath, makePdf(settings, { identityLayout: 'classroom', grade: 4, omitArea: 'matematica' }));
+    await upload([fallbackPath]);
+    await review(fallbackCase);
+    const fallbackPdf = (await snapshot()).state.pdfs.find(pdf => pdf.name === fallbackCase);
+    assert.equal(fallbackPdf.extractedName, '');assert.equal(fallbackPdf.extractedCode, '');assert.equal(fallbackPdf.period, '');assert.equal(fallbackPdf.ocr, false);
+    assert.equal(await page.getByLabel('Apellidos y nombres', { exact: true }).inputValue(), '');
+    assert(await page.locator('.import-review').getByRole('button', { name: 'Confirmar libreta', exact: true }).isDisabled());
+    assert.equal(await page.locator('.import-review').getAttribute('aria-busy'), 'false', 'El nombre faltante permite escribir sin esperar OCR.');
+    await page.getByLabel('Apellidos y nombres', { exact: true }).fill('RAMIREZ FLORES NOMBRE MANUAL');
+    await page.locator('.import-review').getByRole('heading', { name: fallbackCase, exact: true }).click();
+    await poll(async () => (await snapshot()).state.students.some(value => value.name === 'RAMIREZ FLORES NOMBRE MANUAL' && !value.reportApproval), 'nombre manual en la lista antes de confirmar');
+    await poll(async () => (await page.locator('tr').filter({ has: page.locator('.file-cell strong', { hasText: fallbackCase }) }).innerText()).includes('RAMIREZ FLORES NOMBRE MANUAL'), 'nombre manual visible antes de confirmar');
+    await confirm(fallbackCase);
+    const fallbackStudent = (await snapshot()).state.students.find(value => value.name === 'RAMIREZ FLORES NOMBRE MANUAL');
+    assert.equal(fallbackStudent.grade, '4.º de secundaria');assert(fallbackStudent.reportApproval);
+    assert.equal(fallbackStudent.validated.academic, false, 'La falta de notas deja A pendiente y permite abrir la ficha.');
+    assertBlankManual(fallbackStudent);
+    for (const name of ['Académico', 'Desempeño', 'Compromiso']) assert(await tab(name).isEnabled());
+    await tab('Académico').click();
+    assert.equal(await dimension('Académico').innerText(), 'Pendiente');
+    await tab('Desempeño').click();
+    assert.equal(await page.getByLabel('Días lectivos del periodo').inputValue(), '');
+    await deleteImported(fallbackCase);
     assert.equal((await snapshot()).state.students.length, 3);
 
     const finalBackup = await backup();
@@ -531,7 +605,7 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     assert.deepEqual(requests.filter(request => /^https?:/.test(request.url) && /\/api(?:\/|\?)/.test(new URL(request.url).pathname)), [], 'No se usa una API HTTP.');
     assert.deepEqual(requests.filter(request => /^https?:/.test(request.url) && new URL(request.url).origin !== new URL(appUrl).origin), [], 'No se descargan recursos externos.');
     assert.deepEqual(errors, [], 'Sin excepciones JavaScript.');
-    const report = { passed: true, classrooms: ['2.º F', '3.º F', '4.º F'], rejectedClassroom: '5.º F', bimesters: ['I', 'II', 'III'], provisionalImport: true, automaticIdentityWithoutColons: true, readOnlyConfirmDeleteReview: true, existingPdfAutomaticRecovery: true, recoveryPreservesManualRecords: true, mixedRasterHeaderNativeGrades: true, reportGate: true, automaticAcademicOnly: true, progression: { firstTwo: 1.5, third: 3, score: 93.75, academic: 58.75 }, manualCompetition: true, missedRecordReducesParticipation: true, scores: { a: 58.75, b: 95.5, c: 65, total: (58.75 + 95.5 + 65) / 3 }, replacementAndDuplicateCascade: true, exactFileReimport: true, indexedDBPersistenceAfterRestart: true, standaloneInlineHtml: true, offlineOperations: true, httpRequestsAfterLoad: operationHttpRequests, downloads, pageErrors: errors, consoleErrors };
+    const report = { passed: true, classrooms: ['2.º F', '3.º F', '4.º F'], rejectedClassroom: '5.º F', bimesters: ['I', 'II', 'III'], provisionalImport: true, automaticIdentityWithoutColons: true, editableFullNameConfirmDeleteReview: true, filenameIdentityBeforeConfirmation: true, filenameWithoutCodeOrYear: true, manualNameFallback: true, missingGradesRemainPending: true, existingPdfFilenameRecoveryWithoutOcr: true, recoveryPreservesManualRecords: true, mixedRasterHeaderNativeGrades: true, reportGate: true, automaticAcademicOnly: true, progression: { firstTwo: 1.5, third: 3, score: 93.75, academic: 58.75 }, manualCompetition: true, missedRecordReducesParticipation: true, scores: { a: 58.75, b: 95.5, c: 65, total: (58.75 + 95.5 + 65) / 3 }, replacementAndDuplicateCascade: true, exactFileReimport: true, indexedDBPersistenceAfterRestart: true, standaloneInlineHtml: true, offlineOperations: true, httpRequestsAfterLoad: operationHttpRequests, downloads, pageErrors: errors, consoleErrors };
     await fs.writeFile('/tmp/circulos-adjustment-result.json', JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
   } catch (error) {

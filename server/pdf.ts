@@ -17,7 +17,7 @@ const MAX_OCR_PAGES = 8;
 const LOCAL_TESSDATA = fileURLToPath(new URL('../.tools/tessdata/', import.meta.url));
 
 /** Local extraction; documents never leave this machine. */
-export async function extractPdf(filePath: string, settings: Settings): Promise<ExtractedReport> {
+export async function extractPdf(filePath: string, settings: Settings, identityOptions: { identityFromFilename?: boolean } = {}): Promise<ExtractedReport> {
   const info = await stat(filePath);
   if (!info.isFile() || info.size > MAX_BYTES) throw new Error('El PDF debe ser un archivo de hasta 20 MB.');
   const header = (await readFile(filePath)).subarray(0, 1024).toString('latin1');
@@ -50,7 +50,7 @@ export async function extractPdf(filePath: string, settings: Settings): Promise<
     const nativeReading = parseReportText(text, settings);
     let result = nativeReading;
     let rasterTextPossible = false;
-    if (needsPdfRecovery(nativeReading)) {
+    if (needsPdfRecovery(nativeReading, !identityOptions.identityFromFilename)) {
       const images = await run('pdfimages', ['-list', filePath], options(20_000));
       rasterTextPossible = images.stdout.split('\n').some(line => {
         const columns = line.trim().split(/\s+/);

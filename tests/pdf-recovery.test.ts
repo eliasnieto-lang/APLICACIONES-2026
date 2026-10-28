@@ -23,6 +23,11 @@ test('recovery is needed for a missing header even with complete native grades',
   assert.equal(needsPdfRecovery(parseReportText(identity, settings)), true);
 });
 
+test('filename identity skips metadata OCR while missing grades still require recovery', () => {
+  assert.equal(needsPdfRecovery(parseReportText(grades, settings), false), false);
+  assert.equal(needsPdfRecovery(parseReportText('MATEMATICA\nResuelve problemas de cantidad A - B', settings), false), true);
+});
+
 test('independent OCR fills a missing identity without making repeated native grade rows conflict', () => {
   const native = parseReportText(grades, settings);
   const result = mergePdfReadings(native, parseReportText(`${identity}\n${grades}`, settings), settings);
