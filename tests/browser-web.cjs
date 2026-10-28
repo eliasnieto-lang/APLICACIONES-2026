@@ -66,7 +66,11 @@ function makePdf(settings, code, name, grade = 'A') {
     return { name: result.suggestedFilename(), path: destination, content: await fs.readFile(destination) };
   };
   const backup = async () => JSON.parse((await download(() => page.getByRole('button', { name: 'Descargar copia de seguridad', exact: true }).click())).content.toString());
-  const navigate = async name => page.getByRole('button', { name, exact: true }).click();
+  const navigate = async name => {
+    const sidebarItem = page.locator('.sidebar .nav-item').filter({ hasText: name });
+    if (await sidebarItem.count()) await sidebarItem.click();
+    else await page.getByRole('button', { name, exact: true }).click();
+  };
   const newStudent = async (code, name) => {
     await navigate('Panel principal');
     await page.getByRole('button', { name: 'Nuevo estudiante', exact: true }).click();

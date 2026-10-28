@@ -50,4 +50,14 @@ Una prueba local tampoco demuestra publicación de un sitio público ni disponib
 
 ## Resultado de esta entrega
 
-Pendiente de ejecutar sobre el archivo web definitivo; este apartado se actualizará con la evidencia obtenida.
+**Aprobado.** `tests/browser-web.cjs` terminó con código de salida 0 sobre el HTML definitivo de 10 264 458 bytes. SHA-256 del archivo comprobado:
+
+```text
+a6953d63a63b0b19dab19da729fcf0586d86224009af6f628e1138824985ea53
+```
+
+Se verificaron las tres dimensiones manuales, la recarga, diez PDF en lote, un duplicado, un reemplazo, OCR del PDF mixto, plantilla CSV, Excel con las cuatro hojas y valores esperados, respaldo con integridad de los PDF, restauración exacta y separación del espacio de demostración. Se completaron 15 descargas. No hubo solicitudes HTTP a una API ni a otros orígenes, solicitudes fallidas ni excepciones JavaScript. El servidor estático respondió 404 al favicon opcional en dos aperturas; esto no afectó los flujos.
+
+Después de cerrar y volver a abrir Chromium con el mismo perfil se comprobó la igualdad del estado almacenado realmente en IndexedDB, la ficha con académico 75,00 y la disponibilidad de los originales PDF mediante URL Blob. No se descargaron archivos en esta segunda sesión: el Chromium gestionado de la máquina terminó con `SIGTRAP` al descargar después de reabrir un perfil en una reproducción mínima independiente. Las comprobaciones de descarga se completaron antes del reinicio; esta limitación del ejecutor se conserva explícitamente y no se ocultó con opciones de seguridad.
+
+La apertura mediante `file://` fue bloqueada por la política del Chromium gestionado (`ERR_BLOCKED_BY_ADMINISTRATOR`). La validación aprobada corresponde al origen HTTP estático indicado, con el navegador sin conexión para los flujos funcionales; no establece que un archivo local pueda abrirse en cualquier equipo ni que se haya probado Windows.
