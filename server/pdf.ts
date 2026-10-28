@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Settings } from '../shared/types.js';
 import { parseReportText, type ExtractedReport } from '../shared/pdf-parser.js';
+import { mergePdfReadings, needsPdfRecovery } from '../shared/pdf-recovery.js';
 export { parseReportText } from '../shared/pdf-parser.js';
 export type { ExtractedReport } from '../shared/pdf-parser.js';
 
@@ -25,7 +26,7 @@ export async function extractPdf(filePath: string, settings: Settings): Promise<
   const deadline = Date.now() + 180_000;
   const remaining = (max: number) => {
     const value = Math.min(max, deadline - Date.now());
-    if (value <= 0) throw new Error('El reconocimiento excedió tres minutos. Revise este PDF manualmente.');
+    if (value <= 0) throw new Error('El reconocimiento excedió tres minutos. Divida el PDF o vuelva a procesar una copia más legible.');
     return value;
   };
   const options = (max: number) => ({ encoding: 'utf8' as const, maxBuffer: 4 * 1024 * 1024, timeout: remaining(max), killSignal: 'SIGKILL' as const });
@@ -42,27 +43,31 @@ export async function extractPdf(filePath: string, settings: Settings): Promise<
     }
     const output = path.join(directory, 'text.txt');
     await run('pdftotext', ['-layout', '-enc', 'UTF-8', filePath, output], options(30_000));
-    let text = await readFile(output, 'utf8');
-    let ocr = false;
+    const text = await readFile(output, 'utf8');
     let languageWarning = '';
-    // Mixed PDFs can contain a long native header while the actual grade table is a scan.
-    // Only raster-bearing documents need OCR; a digital-only unrecognized layout remains manual.
+    // Native grades and a scanned identity header can coexist on the same page.
+    // Inspect raster content only when the native reading still needs recovery.
     const nativeReading = parseReportText(text, settings);
-    const nativeGradesFound = nativeReading.areas.some(area => area.grades.some(row => row.some(Boolean)));
-    let rasterGradesPossible = false;
-    if (!nativeGradesFound) {
+    let result = nativeReading;
+    let rasterTextPossible = false;
+    if (needsPdfRecovery(nativeReading)) {
       const images = await run('pdfimages', ['-list', filePath], options(20_000));
-      rasterGradesPossible = images.stdout.split('\n').some(line => {
-        const dimensions = line.match(/^\s*\d+\s+\d+\s+image\s+(\d+)\s+(\d+)\s/);
-        if (!dimensions) return false;
-        const width = Number(dimensions[1]);
-        const height = Number(dimensions[2]);
-        return width >= 400 && height >= 300 && width * height >= 180_000;
+      rasterTextPossible = images.stdout.split('\n').some(line => {
+        const columns = line.trim().split(/\s+/);
+        if (!/^\d+$/.test(columns[0]) || !['image', 'mask'].includes(columns[2])) return false;
+        const width = Number(columns[3]);
+        const height = Number(columns[4]);
+        const xPpi = Number(columns[12]);
+        const yPpi = Number(columns[13]);
+        const drawnWidth = width * 72 / xPpi;
+        const drawnHeight = height * 72 / yPpi;
+        // A narrow scanned header is useful too; a small school logo is not.
+        return width >= 180 && height >= 40 && width * height >= 18_000 && xPpi > 0 && yPpi > 0
+          && ((drawnWidth >= 120 && drawnHeight >= 20) || drawnWidth * drawnHeight >= 16_000);
       });
     }
-    if (!nativeGradesFound && rasterGradesPossible) {
-      if (pages > MAX_OCR_PAGES) throw new Error(`El PDF escaneado supera ${MAX_OCR_PAGES} páginas. Divídalo para realizar OCR o transcriba sus datos manualmente.`);
-      ocr = true;
+    if (rasterTextPossible) {
+      if (pages > MAX_OCR_PAGES) throw new Error(`El PDF escaneado supera ${MAX_OCR_PAGES} páginas. Divídalo para realizar el reconocimiento automático.`);
       const localSpanishAvailable = await access(path.join(LOCAL_TESSDATA, 'spa.traineddata')).then(() => true, () => false);
       const tessdataArgs = localSpanishAvailable ? ['--tessdata-dir', LOCAL_TESSDATA] : [];
       const languages = await run('tesseract', [...tessdataArgs, '--list-langs'], options(10_000));
@@ -73,21 +78,20 @@ export async function extractPdf(filePath: string, settings: Settings): Promise<
       if (images.length !== pages) throw new Error('No fue posible renderizar todas las páginas escaneadas.');
       const results: string[] = [];
       for (const image of images) {
-        const result = await run('tesseract', [path.join(directory, image), 'stdout', ...tessdataArgs, '-l', language, '--psm', '6', '-c', 'preserve_interword_spaces=1'], options(45_000));
+        // Multiple imports must not multiply Tesseract's OpenMP teams and stall each other.
+        const result = await run('tesseract', [path.join(directory, image), 'stdout', ...tessdataArgs, '-l', language, '--psm', '6', '-c', 'preserve_interword_spaces=1'], { ...options(45_000), env: { ...process.env, OMP_THREAD_LIMIT: '1' } });
         results.push(result.stdout);
       }
       const ocrText = results.join('\n\f\n');
-      text = text.trim() ? `${text}\n\n${ocrText}` : ocrText;
+      result = mergePdfReadings(nativeReading, parseReportText(ocrText, settings), settings);
     }
-    const result = parseReportText(text, settings);
-    result.ocr = ocr;
-    if (ocr) result.warnings.unshift('Documento escaneado: OCR aplicado. Todas las celdas requieren confirmación visual.');
+    if (result.ocr) result.warnings.unshift('Documento escaneado o mixto: OCR aplicado. Todas las celdas requieren confirmación visual.');
     if (languageWarning) result.warnings.push(languageWarning);
-    if (!text.trim()) result.warnings.push('No se reconoció texto legible. Puede completar la ficha manualmente conservando este original.');
+    if (!result.text.trim()) result.warnings.push('No se reconoció texto legible. Vuelva a procesar una copia más legible del PDF original.');
     return result;
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') throw new Error('Falta una herramienta de lectura PDF/OCR: instale poppler-utils y tesseract-ocr.');
-    if (error instanceof Error && 'killed' in error && error.killed) throw new Error('El reconocimiento tardó demasiado. Divida el PDF o revise sus datos manualmente.');
+    if (error instanceof Error && 'killed' in error && error.killed) throw new Error('El reconocimiento tardó demasiado. Divida el PDF o vuelva a procesar una copia más legible.');
     throw error;
   } finally {
     await rm(directory, { recursive: true, force: true });

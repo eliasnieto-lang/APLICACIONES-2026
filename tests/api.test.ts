@@ -9,9 +9,11 @@ import { createApp } from '../server/index.js';
 import type { AppState, Student } from '../shared/types.js';
 import { createStudent, defaultSettings } from '../shared/defaults.js';
 
-function reportPdf(code:string,name:string,omitArea='',grade='3',section='F') {
+function reportPdf(code:string,name:string,omitArea='',grade='3',section='F',identityLayout:'inline'|'stacked'='inline') {
   const normalize=(text:string)=>text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[()\\]/g,'\\$&');
-  const lines=[`Codigo estudiante: ${code}`,`Estudiante: ${name}`,`Grado: ${grade}`,`Seccion: ${section}`,'Periodo: 2026'];
+  const lines=identityLayout==='stacked'
+    ? ['INFORME DE PROGRESO DEL ESTUDIANTE','Codigo modular: 1234567','Codigo del estudiante',code,'Apellidos y nombres del estudiante',name,'Grado',grade,'Seccion',section,'Periodo: 2026']
+    : [`Codigo estudiante: ${code}`,`Estudiante: ${name}`,`Grado: ${grade}`,`Seccion: ${section}`,'Periodo: 2026'];
   for(const area of defaultSettings.areas.filter(area=>area.id!==omitArea)){lines.push(area.name,...area.competencies.map(c=>`${c} A A A`));}
   const stream=`BT /F1 9 Tf 40 790 Td 12 TL ${lines.map((s,i)=>`${i?'T* ':''}(${normalize(s)}) Tj`).join('\n')} ET`;
   const objects=[
@@ -78,6 +80,70 @@ test('La libreta crea el expediente real, exige confirmación y autovalida solo 
     assert.equal((await h.request(`/api/students/${student.id}`,'PUT',{...student,name:'Identidad alterada'})).status,409);
     const invalid={...student,attendance:{...student.attendance,attended:201}};
     assert.equal((await h.request(`/api/students/${student.id}`,'PUT',invalid)).status,400);
+  }finally{await h.close();}
+});
+
+test('El PDF nativo con rótulos sin dos puntos reconoce automáticamente código propio, nombre y aula',async()=>{
+  const h=await harness();try{
+    const pdf=await upload(h,reportPdf('00000000123456','PEREZ RAMOS Lucia Elena','','TERCERO','F','stacked'),'nombre_sin_identidad.pdf');
+    assert.equal(pdf.extractedCode,'00000000123456');assert.notEqual(pdf.extractedCode,'1234567');
+    assert.equal(pdf.extractedName,'PEREZ RAMOS Lucia Elena');assert.equal(pdf.extractedSection,'F');assert.equal(pdf.ocr,false);
+    let state=await readState(h);assert.equal(state.students.length,1);assert.equal(state.students[0].grade,'3.º de secundaria');
+    assert.equal(state.students[0].reportApproval,undefined);assert.equal(state.students[0].validated.academic,false);
+    await confirm(h,pdf.id);
+    state=await readState(h);assert.equal(state.students[0].reportApproval?.pdfId,pdf.id);assert.equal(state.students[0].validated.academic,true);
+  }finally{await h.close();}
+});
+
+test('Reprocesar libretas antiguas sin identidad usa el original y conserva id, hash y confirmación pendiente',async()=>{
+  const h=await harness();try{
+    for(const status of ['review','failed'] as const){
+      const code=`REC-${status}`,bytes=reportPdf(code,`Estudiante Recuperado ${status}`,'','4','F','stacked');
+      const uploaded=await upload(h,bytes,`original_${status}.pdf`);
+      const stale=await readState(h),pdf=stale.pdfs.find(value=>value.id===uploaded.id)!;
+      stale.students=stale.students.filter(student=>student.id!==pdf.studentId);
+      Object.assign(pdf,{status,studentId:null,extractedCode:'',extractedName:'',extractedGrade:'',extractedSection:'',text:'',areas:[],warnings:['Lectura antigua incompleta']});
+      delete pdf.confirmedIdentity;h.app.locals.store.save('real',stale);
+      const response=await h.request(`/api/pdfs/${pdf.id}`,'PUT',{action:'reprocess'});
+      assert.equal(response.status,200,await response.clone().text());
+      const recovered=await response.json() as AppState['pdfs'][number];
+      assert.equal(recovered.id,uploaded.id);assert.equal(recovered.hash,uploaded.hash);assert.equal(recovered.size,uploaded.size);assert.equal(recovered.uploadedAt,uploaded.uploadedAt);
+      assert.equal(recovered.extractedCode,code);assert.equal(recovered.extractedName,`Estudiante Recuperado ${status}`);assert.equal(recovered.status,'review');
+      assert.deepEqual(Buffer.from(await(await h.request(`/api/pdfs/${pdf.id}/file`)).arrayBuffer()),bytes);
+      let state=await readState(h),student=state.students.find(value=>value.id===recovered.studentId)!;
+      assert(student);assert.equal(student.reportApproval,undefined);assert.equal(student.validated.academic,false);
+      assert(student.academic.every(area=>!area.validated&&area.grades.every(row=>row.join(',')==='A,A,A')));
+      assert.deepEqual(student.attendance,{required:null,attended:null,punctual:null,exempted:null,validated:false});
+      await confirm(h,pdf.id);state=await readState(h);student=state.students.find(value=>value.id===recovered.studentId)!;
+      assert.equal(student.reportApproval?.pdfId,pdf.id);assert.equal(student.validated.academic,true);
+      assert.equal((await h.request(`/api/pdfs/${pdf.id}`,'PUT',{action:'reprocess'})).status,409,'Una libreta ya confirmada no se vuelve a aplicar al revisar.');
+    }
+    const backup=await(await h.request('/api/backup')).json();assert.equal(backup.state.pdfs.length,2);assert.equal(backup.files.length,2);
+  }finally{await h.close();}
+});
+
+test('Reprocesar una libreta enlazada conserva el expediente y B/C manuales hasta confirmar A',async()=>{
+  const h=await harness();try{
+    const bytes=reportPdf('REC-MANUAL','Estudiante Con Registros'),pdf=await upload(h,bytes);await confirm(h,pdf.id);
+    let state=await readState(h),student=state.students[0];
+    student.attendance={required:200,exempted:10,attended:180,punctual:170,validated:true};student.discipline={confirmed:true,incidents:[]};
+    student.institutional=[{id:'contest',name:'Olimpiada',date:'2026-10-10',required:true,status:'fulfilled',justification:'',evidence:'Acta',validated:true,placement:'Segundo puesto',representingSchool:true}];
+    student.family=[{id:'meeting',name:'Reunión',date:'2026-10-10',required:true,status:'fulfilled',justification:'',evidence:'Firma',validated:true}];
+    let response=await h.request(`/api/students/${student.id}`,'PUT',student);assert.equal(response.status,200);student=await response.json() as Student;
+    const manual={attendance:student.attendance,discipline:student.discipline,institutional:student.institutional,family:student.family};
+    state=await readState(h);student=state.students[0];const legacy=state.pdfs[0];
+    Object.assign(legacy,{status:'review',extractedCode:'',extractedName:'',extractedGrade:'',extractedSection:'',text:'',areas:[]});delete legacy.confirmedIdentity;
+    delete student.reportApproval;student.validated.academic=false;student.academic.forEach(area=>{area.validated=false;});
+    h.app.locals.store.save('real',state);
+    response=await h.request(`/api/pdfs/${pdf.id}`,'PUT',{action:'reprocess'});assert.equal(response.status,200,await response.clone().text());
+    const recovered=await response.json() as AppState['pdfs'][number];state=await readState(h);const pending=state.students[0];
+    assert.equal(state.students.length,1);assert.equal(pending.id,student.id);assert.equal(recovered.studentId,student.id);assert.equal(recovered.hash,pdf.hash);
+    assert.equal(pending.reportApproval,undefined);assert.equal(pending.validated.academic,false);assert(pending.academic.every(area=>!area.validated));
+    assert.deepEqual({attendance:pending.attendance,discipline:pending.discipline,institutional:pending.institutional,family:pending.family},manual);
+    assert.deepEqual(Buffer.from(await(await h.request(`/api/pdfs/${pdf.id}/file`)).arrayBuffer()),bytes);
+    await confirm(h,pdf.id);state=await readState(h);const confirmed=state.students[0];
+    assert.equal(confirmed.id,student.id);assert.equal(confirmed.reportApproval?.pdfId,pdf.id);assert.equal(confirmed.validated.academic,true);
+    assert.deepEqual({attendance:confirmed.attendance,discipline:confirmed.discipline,institutional:confirmed.institutional,family:confirmed.family},manual);
   }finally{await h.close();}
 });
 

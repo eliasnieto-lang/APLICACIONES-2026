@@ -2,6 +2,7 @@ import { createStudent } from './defaults.js';
 import { cohortRecordApplies } from './calculations.js';
 import { ACTIVE_BIMESTERS, normalizeCohort } from './policy.js';
 import type { AppState, Grade, PdfRecord, Settings, Student } from './types.js';
+import type { ExtractedReport } from './pdf-parser.js';
 
 type Identity = NonNullable<PdfRecord['confirmedIdentity']>;
 const stamp = () => new Date().toISOString();
@@ -68,13 +69,13 @@ function supersedeReports(state: AppState, pdf: PdfRecord, student: Student): vo
   if (!pdf.replacesId && active.length) pdf.replacesId = active[active.length - 1].id;
 }
 
-/** An incomplete or unsupported identity stays in the import queue for explicit correction. */
+/** Only an identity read completely from the report can create its provisional student. */
 export function registerImportedReport(state: AppState, pdf: PdfRecord): Student | null {
   if (pdf.status === 'failed' || pdf.status === 'duplicate') return null;
   const identity = normalizeIdentity(identityOf(pdf));
   if (!identity) {
     pdf.status = 'review';
-    pdf.warnings.push('Revise código, nombre y aula: solo se admiten 2.º F, 3.º F y 4.º F.');
+    pdf.warnings.push('La lectura automática necesita reconocer código, apellidos y nombres y aula. Solo se admiten 2.º F, 3.º F y 4.º F.');
     return null;
   }
   let student = state.students.find(candidate => codeKey(candidate.code) === codeKey(identity.code));
@@ -94,12 +95,34 @@ export function registerImportedReport(state: AppState, pdf: PdfRecord): Student
   return student;
 }
 
+/** Retry the retained original without changing its id, bytes or manual B/C records. */
+export function applyReprocessedReport(state: AppState, pdfId: string, reading: ExtractedReport): PdfRecord {
+  const pdf = state.pdfs.find(record => record.id === pdfId);
+  if (!pdf) throw new ReportWorkflowError(404, 'PDF no encontrado.');
+  if (!['pending', 'review', 'failed'].includes(pdf.status)) throw new ReportWorkflowError(409, 'Esta versión ya está confirmada, duplicada o reemplazada; su lectura se conserva.');
+  const linked = state.students.find(student => student.id === pdf.studentId);
+  const before = { code: pdf.extractedCode, name: pdf.extractedName, grade: pdf.extractedGrade, section: pdf.extractedSection, status: pdf.status };
+  Object.assign(pdf, structuredClone(reading), { status: 'review' });
+  delete pdf.confirmedIdentity;
+  const identity = normalizeIdentity(identityOf(pdf));
+  // An automatic retry cannot silently move this report or overwrite a different student.
+  if (linked && (!identity || !sameIdentity(linked, identity))) {
+    pdf.warnings.push('La lectura automática todavía no coincide completamente con la ficha vinculada. Se conservaron la ficha y sus registros; esta libreta sigue sin confirmar.');
+  } else registerImportedReport(state, pdf);
+  const student = state.students.find(candidate => candidate.id === pdf.studentId);
+  if (student) {
+    student.updatedAt = stamp();
+    audit(student, 'Nueva lectura automática del PDF original', before, { code: pdf.extractedCode, name: pdf.extractedName, grade: pdf.extractedGrade, section: pdf.extractedSection });
+  }
+  return pdf;
+}
+
 export function confirmReport(state: AppState, pdfId: string, options: { identity?: Identity; confirmMismatch?: boolean } = {}): { pdf: PdfRecord; student: Student } {
   const pdf = state.pdfs.find(record => record.id === pdfId);
   if (!pdf) throw new ReportWorkflowError(404, 'PDF no encontrado.');
   if (pdf.status === 'failed' || pdf.status === 'duplicate' || pdf.status === 'replaced') throw new ReportWorkflowError(400, 'Un PDF fallido, duplicado o reemplazado no puede confirmarse.');
   const identity = normalizeIdentity(options.identity ?? identityOf(pdf));
-  if (!identity) throw new ReportWorkflowError(400, 'Complete código, nombre y un aula válida: 2.º F, 3.º F o 4.º F.');
+  if (!identity) throw new ReportWorkflowError(400, 'La lectura automática no ha identificado todos los datos del estudiante y un aula habilitada. No se puede confirmar esta libreta todavía.');
   const linked = state.students.find(student => student.id === pdf.studentId);
   const existing = state.students.find(student => codeKey(student.code) === codeKey(identity.code));
   let student = linked ?? existing;

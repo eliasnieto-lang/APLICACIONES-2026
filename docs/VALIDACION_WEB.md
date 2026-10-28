@@ -1,5 +1,15 @@
 # Validación de la edición web
 
+## Identidad automática y dos acciones de revisión
+
+El segundo ajuste elimina los campos editables de identidad. La revisión muestra código, apellidos y nombres y aula leídos del PDF, con únicamente **Confirmar libreta** y **Eliminar libreta**. Las libretas pendientes de una lectura anterior se reprocesan automáticamente desde su original conservado.
+
+Validación del ajuste: `npm test` aprobó **81 pruebas**. `npm run build:web` y `npm run test:web` aprobaron el flujo completo de navegador, incluidos encabezados nativos sin dos puntos, encabezados rasterizados con las 45 notas nativas presentes, relectura de originales antiguos sin perder B/C, eliminación sin identidad, y restauración de respaldo mientras la revisión sigue abierta. La restauración no mantiene una identidad de una lectura obsoleta. No hubo solicitudes HTTP adicionales, errores de página ni errores de consola.
+
+La prueba simultánea de varias instancias de OCR detectó saturación de OpenMP y expiraciones. Se limitó a un hilo cada proceso nativo de reconocimiento; la suite completa volvió a pasar en unos tres segundos, conservando las pruebas OCR reales. La edición de navegador conserva su reconocimiento local mediante WASM.
+
+Los documentos de prueba son generados. Sigue pendiente recibir el PDF original mostrado por el usuario para verificar su formato concreto.
+
 ## Ajuste de libretas y tres bimestres
 
 La prueba vigente es `npm run build:web && npm run test:web`, implementada en `tests/browser-adjustment.cjs`. Sirve únicamente el HTML generado, con un perfil de navegador aislado, y comprueba:

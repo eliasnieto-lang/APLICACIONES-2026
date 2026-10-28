@@ -5,6 +5,7 @@ import ocrWorkerSource from 'tesseract.js/dist/worker.min.js?raw';
 import ocrCoreSource from 'tesseract.js-core/tesseract-core-lstm.wasm.js?raw';
 import spanishModelUrl from '../../.tools/tessdata/spa.traineddata?url&inline';
 import { parseReportText, type ExtractedReport } from '../../shared/pdf-parser';
+import { mergePdfReadings, needsPdfRecovery } from '../../shared/pdf-recovery';
 import type { Settings } from '../../shared/types';
 
 const MAX_BYTES = 20 * 1024 * 1024;
@@ -40,18 +41,60 @@ function layoutText(items: unknown[], viewportTransform: number[]): string {
     if (previous && Math.abs(previous.y - word.y) <= Math.max(2, Math.min(previous.height, word.height) * .3)) previous.words.push(word);
     else rows.push({ y: word.y, height: word.height, words: [word] });
   }
+  const left = words.reduce((value, word) => Math.min(value, word.x), Infinity);
+  // Retain relative columns, including a missing first value below a table header.
+  const widths = words.map(word => word.width / Math.max(1, word.text.length)).filter(width => width > 1 && width < 20).sort((a, b) => a - b);
+  const characterWidth = widths[Math.floor(widths.length / 2)] || 5;
+  const spaces = (gap: number) => ' '.repeat(Math.min(220, Math.max(1, Math.round(gap / characterWidth))));
   return rows.map(row => {
     row.words.sort((a, b) => a.x - b.x);
-    let line = '';
+    let line = row.words[0].x - left > characterWidth ? spaces(row.words[0].x - left) : '';
     let end = -Infinity;
     for (const word of row.words) {
       const gap = word.x - end;
-      if (line && gap > Math.max(.5, word.height * .12)) line += gap > word.height * 2 ? '   ' : ' ';
+      if (Number.isFinite(end) && gap > Math.max(.5, word.height * .12)) line += spaces(gap);
       line += word.text;
       end = Math.max(end, word.x + word.width);
     }
-    return line.trim();
+    return line.trimEnd();
   }).join('\n');
+}
+
+/** Ignore small logos; a wide header or a page/table scan can contain missing fields. */
+function hasReadableRaster(operators: { fnArray: number[]; argsArray: unknown[][] }): boolean {
+  let transform = [1, 0, 0, 1, 0, 0];
+  const saved: number[][] = [];
+  const readable = (pixelsWide: number, pixelsHigh: number, matrix: number[]): boolean => {
+    const width = Math.hypot(matrix[0], matrix[1]);
+    const height = Math.hypot(matrix[2], matrix[3]);
+    return pixelsWide >= 180 && pixelsHigh >= 40 && pixelsWide * pixelsHigh >= 18_000
+      && ((width >= 120 && height >= 20) || width * height >= 16_000);
+  };
+  for (let index = 0; index < operators.fnArray.length; index++) {
+    const operator = operators.fnArray[index];
+    const args = operators.argsArray[index];
+    if (operator === OPS.save) saved.push([...transform]);
+    else if (operator === OPS.restore) transform = saved.pop() || [1, 0, 0, 1, 0, 0];
+    else if (operator === OPS.transform) transform = Util.transform(transform, args as number[]);
+    else if ([OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageMaskXObject].includes(operator)) {
+      const inline = args[0] as { width?: number; height?: number } | undefined;
+      const pixelsWide = operator === OPS.paintImageXObject ? Number(args[1]) : Number(inline?.width);
+      const pixelsHigh = operator === OPS.paintImageXObject ? Number(args[2]) : Number(inline?.height);
+      if (readable(pixelsWide, pixelsHigh, transform)) return true;
+    } else if (operator === OPS.paintImageXObjectRepeat) {
+      // PDF.js folds repeated image draws into one operation and omits their pixel sizes.
+      const repeated = Util.transform(transform, [Number(args[1]), 0, 0, Number(args[2]), 0, 0]);
+      if (readable(Infinity, Infinity, repeated)) return true;
+    } else if (operator === OPS.paintImageMaskXObjectRepeat) {
+      const mask = args[0] as { width: number; height: number };
+      const repeated = Util.transform(transform, [...args.slice(1, 5).map(Number), 0, 0]);
+      if (readable(mask.width, mask.height, repeated)) return true;
+    } else if (operator === OPS.paintImageMaskXObjectGroup) {
+      const images = args[0] as { width: number; height: number; transform: number[] }[];
+      if (images.some(image => readable(image.width, image.height, Util.transform(transform, image.transform)))) return true;
+    }
+  }
+  return false;
 }
 
 function modelBytes(): Uint8Array {
@@ -81,7 +124,7 @@ export async function extractBrowserPdf(file: Blob, settings: Settings): Promise
   const deadline = Date.now() + MAX_DURATION;
   const remaining = () => {
     const value = deadline - Date.now();
-    if (value <= 0) throw new Error('El reconocimiento excedió tres minutos. Divida el PDF o complete sus datos manualmente.');
+    if (value <= 0) throw new Error('El reconocimiento excedió tres minutos. Divida el PDF o vuelva a procesar una copia más legible.');
     return value;
   };
   const pdfWorkerUrl = URL.createObjectURL(new Blob([pdfWorkerSource], { type: 'text/javascript' }));
@@ -105,18 +148,16 @@ export async function extractBrowserPdf(file: Blob, settings: Settings): Promise
     }
     const nativeText = texts.join('\n\f\n');
     const nativeReading = parseReportText(nativeText, settings);
-    const gradesFound = nativeReading.areas.some(area => area.grades.some(row => row.some(Boolean)));
     let rasterPresent = false;
-    if (!gradesFound) {
-      const imageOperators: number[] = [OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageMaskXObject, OPS.paintImageXObjectRepeat];
+    if (needsPdfRecovery(nativeReading)) {
       for (let i = 1; i <= documentPdf.numPages && !rasterPresent; i++) {
         const page = await documentPdf.getPage(i);
         const operators = await timed(page.getOperatorList(), Math.min(20_000, remaining()), 'No se pudieron inspeccionar las imágenes del PDF a tiempo.');
-        rasterPresent = operators.fnArray.some(operator => imageOperators.includes(operator));
+        rasterPresent = hasReadableRaster(operators);
       }
     }
-    if (gradesFound || !rasterPresent) return nativeReading;
-    if (documentPdf.numPages > MAX_OCR_PAGES) throw new Error(`El PDF escaneado supera ${MAX_OCR_PAGES} páginas. Divídalo para realizar OCR o transcriba sus datos manualmente.`);
+    if (!rasterPresent) return nativeReading;
+    if (documentPdf.numPages > MAX_OCR_PAGES) throw new Error(`El PDF escaneado supera ${MAX_OCR_PAGES} páginas. Divídalo para realizar el reconocimiento automático.`);
 
     ocrWorkerUrl = URL.createObjectURL(new Blob([makeOcrWorkerSource()], { type: 'text/javascript' }));
     ocrCoreUrl = URL.createObjectURL(new Blob([ocrCoreSource], { type: 'text/javascript' }));
@@ -133,7 +174,7 @@ export async function extractBrowserPdf(file: Blob, settings: Settings): Promise
     let initializationExpired = false;
     void initialization.then(worker => { if (initializationExpired) void worker.terminate(); }, () => {});
     try {
-      ocrWorker = await timed(initialization, Math.min(45_000, remaining()), 'No se pudo iniciar el OCR español integrado. Recargue la aplicación o complete la libreta manualmente.');
+      ocrWorker = await timed(initialization, Math.min(45_000, remaining()), 'No se pudo iniciar el OCR español integrado. Recargue la aplicación y vuelva a procesar el PDF.');
     } catch (error) { initializationExpired = true; throw error; }
     await ocrWorker.setParameters({ tessedit_pageseg_mode: PSM.SINGLE_BLOCK, preserve_interword_spaces: '1' });
     const recognized: string[] = [];
@@ -148,12 +189,10 @@ export async function extractBrowserPdf(file: Blob, settings: Settings): Promise
       const context = canvas.getContext('2d', { willReadFrequently: true });
       if (!context) throw new Error('El navegador no permite dibujar las páginas para OCR.');
       await timed(page.render({ canvas, canvasContext: context, viewport, background: '#ffffff' }).promise, Math.min(30_000, remaining()), 'No se pudo dibujar una página escaneada a tiempo.');
-      const result = await timed(ocrWorker.recognize(canvas), Math.min(45_000, remaining()), 'El reconocimiento de una página tardó demasiado. Divida el PDF o complete sus datos manualmente.');
+      const result = await timed(ocrWorker.recognize(canvas), Math.min(45_000, remaining()), 'El reconocimiento de una página tardó demasiado. Divida el PDF o vuelva a procesar una copia más legible.');
       recognized.push(result.data.text);
     }
-    const text = `${nativeText}\n\n${recognized.join('\n\f\n')}`;
-    const result = parseReportText(text, settings);
-    result.ocr = true;
+    const result = mergePdfReadings(nativeReading, parseReportText(recognized.join('\n\f\n'), settings), settings);
     result.warnings.unshift('Documento escaneado o mixto: OCR local en español aplicado. Todas las celdas requieren confirmación visual.');
     return result;
   } catch (error) {

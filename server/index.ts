@@ -14,7 +14,7 @@ import { createStudent, createDemoState } from '../shared/defaults.js';
 import { calculateStudent, validateSettings, cohortRecordApplies } from '../shared/calculations.js';
 import { normalizeCohort, isReportApproved } from '../shared/policy.js';
 import { migrateState } from '../shared/migrations.js';
-import { registerImportedReport, confirmReport, deleteReportAndStudent, linkAcademic, ReportWorkflowError } from '../shared/report-workflow.js';
+import { registerImportedReport, applyReprocessedReport, confirmReport, deleteReportAndStudent, linkAcademic, ReportWorkflowError } from '../shared/report-workflow.js';
 import { Store, CapacityError } from './store.js';
 import { extractPdf } from './pdf.js';
 import { buildWorkbook } from './export.js';
@@ -68,7 +68,7 @@ export function createApp(options: {dataDir?: string} = {}) {
     const cohort=normalizeCohort(student.grade,student.section);
     if(!cohort)throw new HttpError(400,'Solo se admiten los salones 2.º F, 3.º F y 4.º F.');
     student.grade=cohort.grade;student.section=cohort.section;
-    if(['code','name','grade','section'].some(field=>student[field as keyof Student]!==current[field as keyof Student]))throw new HttpError(409,'La identidad se corrige al revisar y confirmar la libreta PDF.');
+    if(['code','name','grade','section'].some(field=>student[field as keyof Student]!==current[field as keyof Student]))throw new HttpError(409,'Los datos del estudiante se obtienen automáticamente del PDF y no se editan en la ficha.');
     student.reportApproval=current.reportApproval;
     student.pdfIds=[...current.pdfIds];
     const evaluationFields=['academic','attendance','discipline','institutional','family','validated'] as const;
@@ -154,7 +154,7 @@ export function createApp(options: {dataDir?: string} = {}) {
             pdf.areas=[];
           }
           registerImportedReport(state,pdf);
-          if(!pdf.studentId)pdf.warnings.push('Confirme el estudiante correspondiente; no se ha realizado ninguna unión automática.');
+          if(!pdf.studentId)pdf.warnings.push('La lectura automática no reconoció todos los datos del estudiante. La libreta permanece sin confirmar.');
         }catch(error){state=store.read(ds);pdf.status='failed';pdf.warnings=[error instanceof Error?error.message:'No fue posible leer el PDF.'];}
         finally{await rm(dir,{recursive:true,force:true});}
       }
@@ -169,12 +169,28 @@ export function createApp(options: {dataDir?: string} = {}) {
     res.type('application/pdf').setHeader('Content-Disposition',`inline; filename="documento.pdf"; filename*=UTF-8''${encodeURIComponent(pdf.name)}`);
     res.setHeader('X-Content-Type-Options','nosniff');res.send(content);
   });
-  app.put('/api/pdfs/:id',(req,res)=>{
+  app.put('/api/pdfs/:id',async(req,res)=>{
     const ds=dataset(req),state=store.read(ds);unlocked(state);
     if(!req.body||typeof req.body!=='object')throw new HttpError(400,'Envíe una acción y un estudiante para actualizar el PDF.');
     const pdf=state.pdfs.find(p=>p.id===req.params.id);if(!pdf)throw new HttpError(404,'PDF no encontrado.');
     const action=req.body.action;
-    if(!['link','replace','validate'].includes(action))throw new HttpError(400,'Acción de PDF no válida.');
+    if(!['link','replace','validate','reprocess'].includes(action))throw new HttpError(400,'Acción de PDF no válida.');
+    if(action==='reprocess'){
+      if(!['pending','review','failed'].includes(pdf.status))throw new HttpError(409,'Esta versión ya está confirmada, duplicada o reemplazada.');
+      const content=store.file(ds,pdf.id);
+      if(!content)throw new HttpError(404,'No está disponible el PDF original para leerlo automáticamente.');
+      const directory=await mkdtemp(path.join(os.tmpdir(),'circulos-relectura-'));
+      try{
+        const source=path.join(directory,'original.pdf');
+        await writeFile(source,content);
+        const reading=await extractPdf(source,structuredClone(state.settings));
+        const latest=store.read(ds);unlocked(latest);
+        const current=latest.pdfs.find(record=>record.id===pdf.id);
+        if(!current||current.hash!==pdf.hash||!same(state.settings,latest.settings)||!same(current,pdf))throw new HttpError(409,'El documento o sus parámetros cambiaron durante la lectura automática. Vuelva a abrir la revisión.');
+        const updated=applyReprocessedReport(latest,pdf.id,reading);
+        store.save(ds,latest);res.json(updated);return;
+      }finally{await rm(directory,{recursive:true,force:true});}
+    }
     if(pdf.status==='failed'||pdf.status==='duplicate')throw new HttpError(400,'Un PDF fallido o duplicado no puede aplicarse a un expediente.');
     if(action==='validate'){
       const result=confirmReport(state,pdf.id,{identity:req.body.identity,confirmMismatch:req.body.confirmMismatch===true});

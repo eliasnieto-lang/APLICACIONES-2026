@@ -83,6 +83,81 @@ test('missing identity is not replaced by a different labelled field or a later 
   assert.equal(parseReportText('Estudiante:\nMATEMATICA', settings).extractedName, '');
 });
 
+test('reads no-colon SIAGIE student labels without borrowing school or DNI identifiers', () => {
+  for (const label of ['Código del estudiante', 'Código de estudiante', 'Código estudiante', 'Código del educando', 'Código del alumno', 'Cod. Estudiante', 'Código de matrícula']) {
+    const result = parseReportText(`INFORME DE PROGRESO DEL ESTUDIANTE
+Código modular 1234567
+DNI 87654321
+${label} 00012345678901
+Nombres y apellidos del estudiante ANA MARÍA PÉREZ GARCÍA
+Grado de estudios TERCER GRADO DE SECUNDARIA    Sección «F»
+Año escolar 2026`, settings);
+    assert.equal(result.extractedCode, '00012345678901', label);
+    assert.equal(result.extractedName, 'ANA MARÍA PÉREZ GARCÍA', label);
+    assert.equal(result.extractedGrade, 'TERCER GRADO DE SECUNDARIA', label);
+    assert.equal(result.extractedSection, 'F', label);
+    assert.equal(result.period, '2026', label);
+  }
+});
+
+test('reads wrapped identity labels followed by a distinct value line', () => {
+  const result = parseReportText(`INFORME DE PROGRESO DEL ESTUDIANTE
+Código modular
+1234567
+Código del
+estudiante
+00012345678901
+APELLIDOS Y
+NOMBRES DEL ESTUDIANTE
+PÉREZ GARCÍA ANA MARÍA
+Grado
+TERCERO
+Sección
+F
+Periodo
+2026`, settings);
+  assert.equal(result.extractedCode, '00012345678901');
+  assert.equal(result.extractedName, 'PÉREZ GARCÍA ANA MARÍA');
+  assert.equal(result.extractedGrade, 'TERCERO');
+  assert.equal(result.extractedSection, 'F');
+  assert.equal(result.period, '2026');
+});
+
+test('reads aligned header/value columns and preserves an empty student-code cell', () => {
+  const widths = [20, 26, 14, 38, 26, 12];
+  const row = (cells: string[]) => cells.map((cell, index) => cell.padEnd(widths[index] || 0)).join('');
+  const header = row(['Código modular', 'Código del educando', 'DNI', 'Apellidos y nombres', 'Grado', 'Sección', 'Año escolar']);
+  const values = ['1234567', '00012345678901', '87654321', 'PÉREZ GARCÍA ANA MARÍA', 'TERCERO', 'F', '2026'];
+  const result = parseReportText(`INFORME DE PROGRESO DEL ESTUDIANTE\n${header}\n${row(values)}`, settings);
+  assert.equal(result.extractedCode, '00012345678901');
+  assert.equal(result.extractedName, 'PÉREZ GARCÍA ANA MARÍA');
+  assert.equal(result.extractedGrade, 'TERCERO');
+  assert.equal(result.extractedSection, 'F');
+  assert.equal(result.period, '2026');
+  values[1] = '';
+  const missingCode = parseReportText(`${header}\n${row(values)}`, settings);
+  assert.equal(missingCode.extractedCode, '');
+  assert.equal(missingCode.extractedName, 'PÉREZ GARCÍA ANA MARÍA');
+  assert.equal(missingCode.extractedGrade, 'TERCERO');
+  assert.equal(missingCode.extractedSection, 'F');
+  const collapsed = parseReportText('Código estudiante Apellidos y nombres\n00012345678901 PÉREZ GARCÍA ANA MARÍA', settings);
+  assert.equal(collapsed.extractedCode, '');
+  assert.equal(collapsed.extractedName, '');
+});
+
+test('keeps conflicts and staff identity empty while preserving complete explicitly labelled values', () => {
+  const conflict = parseReportText('Código estudiante: AB-1\nCódigo estudiante: AB_1\nApellidos y nombres: Pérez Ana\nApellidos y nombres: López Rosa', settings);
+  assert.equal(conflict.extractedCode, '');
+  assert.equal(conflict.extractedName, '');
+  const staff = parseReportText('Apellidos y nombres del director: PÉREZ GARCÍA ANA\nNombres y apellidos del apoderado\nLÓPEZ RÍOS JOSÉ', settings);
+  assert.equal(staff.extractedName, '');
+  assert.equal(parseReportText('Código estudiante: OWNER-A\nEstudiante: Estudiante Real', settings).extractedName, 'Estudiante Real');
+  assert.equal(parseReportText('Código estudiante: ABCD', settings).extractedCode, 'ABCD');
+  const stacked = parseReportText('Código estudiante\nREC-review\nApellidos y nombres\nEstudiante Recuperado review', settings);
+  assert.equal(stacked.extractedCode, 'REC-review');
+  assert.equal(stacked.extractedName, 'Estudiante Recuperado review');
+});
+
 test('cohorts outside 2.º F, 3.º F and 4.º F remain visible and require correction', () => {
   for (const pair of ['Grado: 1\nSección: F', 'Grado: 3\nSección: A', 'Grado: 5\nSección: F', 'Grado: 2 primaria\nSección: F', 'Grado: 25\nSección: F']) {
     const result = parseReportText(pair, settings);
@@ -116,6 +191,36 @@ test('rows with extra cells are left blank instead of shifting the bimester orde
   const result = parseReportText('Matemática\nResuelve problemas de cantidad A B C A B', settings);
   assert.deepEqual(result.areas[0].grades[0], ['', '', '']);
   assert.ok(result.warnings.some(warning => warning.includes('no pudieron vincularse')));
+});
+
+test('recognizes wrapped uppercase DPCC and science area headings', () => {
+  const expanded: Settings = { ...settings, areas: [
+    ...settings.areas,
+    { id: 'dpcc', name: 'Desarrollo Personal, Ciudadanía y Cívica', group: 'dpcc', competencies: ['Construye su identidad', 'Convive y participa democráticamente'], eligible: true },
+    { id: 'science', name: 'Ciencia y Tecnología', group: 'science', competencies: ['Indaga mediante métodos científicos para construir sus conocimientos'], eligible: true },
+  ] };
+  const result = parseReportText(`DESARROLLO PERSONAL,
+CIUDADANÍA Y CÍVICA
+Construye su identidad AD A B
+Convive y participa democráticamente A B C
+CIENCIA Y
+TECNOLOGÍA
+Indaga mediante métodos científicos
+para construir sus conocimientos B AD A`, expanded);
+  assert.deepEqual(result.areas[1].grades, [['AD', 'A', 'B'], ['A', 'B', 'C']]);
+  assert.deepEqual(result.areas[2].grades, [['B', 'AD', 'A']]);
+});
+
+test('uses printed bimester positions when an aligned middle cell is empty', () => {
+  const heading = 'Competencias'.padEnd(52) + 'I'.padEnd(8) + 'II'.padEnd(8) + 'III'.padEnd(8) + 'IV';
+  const row = 'Resuelve problemas de cantidad'.padEnd(52) + 'A'.padEnd(8) + ''.padEnd(8) + 'AD'.padEnd(8) + 'C';
+  const result = parseReportText(`Matemática\n${heading}\n${row}`, settings);
+  assert.deepEqual(result.areas[0].grades[0], ['A', '', 'AD']);
+});
+
+test('an area outside the catalog cannot reuse the previous area competencies', () => {
+  const result = parseReportText('Matemática\nResuelve problemas de cantidad A B C\nINGLÉS\nResuelve problemas de regularidad AD AD AD', settings);
+  assert.deepEqual(result.areas[0].grades, [['A', 'B', 'C'], ['', '', '']]);
 });
 
 test('extracts a real PDF through poppler', async () => {

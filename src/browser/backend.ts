@@ -6,7 +6,7 @@ import { createDemoState, createStudent, defaultSettings } from '../../shared/de
 import { calculateStudent, cohortRecordApplies, validateSettings } from '../../shared/calculations';
 import { isReportApproved, normalizeCohort } from '../../shared/policy';
 import { migrateState } from '../../shared/migrations';
-import { confirmReport, deleteReportAndStudent, linkAcademic, registerImportedReport, ReportWorkflowError } from '../../shared/report-workflow';
+import { confirmReport, applyReprocessedReport, deleteReportAndStudent, linkAcademic, registerImportedReport, ReportWorkflowError } from '../../shared/report-workflow';
 import { buildWorkbook } from '../../server/export';
 import { backupSchema, newStudentSchema, semanticStudentErrors, settingsSchema, stateReferenceErrors, stateSchema, studentSchema } from '../../server/validation';
 import { setBrowserRuntime } from '../runtime';
@@ -231,7 +231,7 @@ async function install(): Promise<void> {
       const student = studentSchema.parse(rawStudent && typeof rawStudent === 'object' && !Array.isArray(rawStudent) ? { ...rawStudent, reportApproval: current.reportApproval } : rawStudent) as Student;
       if (student.id !== current.id) throw new HttpError(400, 'El identificador del estudiante no se puede modificar.');
       if (student.updatedAt !== current.updatedAt) throw new HttpError(409, 'El expediente cambió en otra pestaña. Recargue antes de guardar.');
-      if ((['code', 'name', 'grade', 'section'] as const).some(field => student[field] !== current[field])) throw new HttpError(400, 'Corrija la identidad del estudiante al revisar y confirmar su libreta PDF.');
+      if ((['code', 'name', 'grade', 'section'] as const).some(field => student[field] !== current[field])) throw new HttpError(400, 'Los datos del estudiante se obtienen automáticamente del PDF y no se editan en la ficha.');
       student.reportApproval = current.reportApproval ? structuredClone(current.reportApproval) : undefined;
       student.pdfIds = [...current.pdfIds]; student.createdAt = current.createdAt;
       student.history = [...current.history];
@@ -338,7 +338,16 @@ async function install(): Promise<void> {
       const body = raw as Record<string, unknown>, pdf = state.pdfs.find(value => value.id === decodeURIComponent(pdfMatch[1]));
       if (!pdf) throw new HttpError(404, 'PDF no encontrado.');
       const action = body.action;
-      if (!['link', 'replace', 'validate', 'confirm'].includes(String(action))) throw new HttpError(400, 'Acción de PDF no válida.');
+      if (!['link', 'replace', 'validate', 'confirm', 'reprocess'].includes(String(action))) throw new HttpError(400, 'Acción de PDF no válida.');
+      if (action === 'reprocess') {
+        if (!['pending', 'review', 'failed'].includes(pdf.status)) throw new HttpError(409, 'Esta versión ya está confirmada, duplicada o reemplazada.');
+        const original = (await readFiles(db, dataset)).get(pdf.id);
+        if (!original) throw new HttpError(404, 'No está disponible el PDF original para leerlo automáticamente.');
+        const reading = await extractBrowserPdf(original, structuredClone(state.settings));
+        const updated = applyReprocessedReport(state, pdf.id, reading);
+        await save(dataset, state, expected);
+        return json(updated);
+      }
       if (['failed', 'duplicate', 'replaced'].includes(pdf.status)) throw new HttpError(400, 'Un PDF fallido, duplicado o reemplazado no puede aplicarse a un expediente.');
       if (action === 'validate' || action === 'confirm') {
         let identity: { code: string; name: string; grade: string; section: string } | undefined;
