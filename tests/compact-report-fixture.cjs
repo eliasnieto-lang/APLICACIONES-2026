@@ -2,7 +2,7 @@
 // share the first competency's row, long labels wrap, and each grade is a
 // separately positioned PDF text item. The fourth printed bimester is excluded
 // from the I–III evaluation. No extraction or application behavior is mocked.
-function makeCompactPdf(settings, { code, name, grade, section = 'F', grades = ['C', 'B', 'A', 'AD'], additionalAreas = [] }) {
+function makeCompactPdf(settings, { code, name, grade, section = 'F', grades = ['C', 'B', 'A', 'AD'], gradesByArea = {}, additionalAreas = [] }) {
   const clean = value => String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[()\\]/g, '\\$&');
   const commands = [];
   const text = (value, x, y, size = 7.5) => commands.push(`BT /F1 ${size} Tf 1 0 0 1 ${x} ${y} Tm (${clean(value)}) Tj ET`);
@@ -39,7 +39,8 @@ function makeCompactPdf(settings, { code, name, grade, section = 'F', grades = [
       const height = Math.max(additionalAreas.length ? 20 : 25, printedLines * 10 + 9);
       if (index === 0) areaLines.forEach((value, offset) => text(value, 35, rowTop - 12 - offset * 10));
       competencyLines.forEach((value, offset) => text(value, 135, rowTop - 12 - offset * 10));
-      gradeCenters.forEach((x, column) => text(grades[column] ?? '', x, rowTop - 12, 8));
+      const rowGrades = gradesByArea[area.id]?.[index] ?? grades;
+      gradeCenters.forEach((x, column) => text(rowGrades[column] ?? '', x, rowTop - 12, 8));
       rowTop -= height;
       line(index === area.competencies.length - 1 ? 30 : 130, rowTop, 572, rowTop);
     }

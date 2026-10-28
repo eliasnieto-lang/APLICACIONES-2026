@@ -17,6 +17,7 @@ import { migrateState } from '../shared/migrations.js';
 import { resolveReportIdentity } from '../shared/filename-identity.js';
 import { registerImportedReport, identifyReport, applyReprocessedReport, applyRescannedGrades, confirmReport, deleteReportAndStudent, linkAcademic, ReportWorkflowError } from '../shared/report-workflow.js';
 import { ACADEMIC_CONTEST_LABEL, isAcademicContest } from '../shared/contests.js';
+import { hasActiveGrades } from '../shared/academic-policy.js';
 import { Store, CapacityError } from './store.js';
 import { extractPdf } from './pdf.js';
 import { buildWorkbook } from './export.js';
@@ -82,6 +83,7 @@ export function createApp(options: {dataDir?: string} = {}) {
     student.pdfIds=[...current.pdfIds];
     const evaluationFields=['academic','attendance','discipline','institutional','family','validated'] as const;
     if(!isReportApproved(current)&&evaluationFields.some(field=>!same(current[field],student[field])))throw new HttpError(409,'Revise y confirme la libreta PDF antes de editar los tres ámbitos de evaluación.');
+    for(const area of student.academic)if(!hasActiveGrades(area))area.validated=false;
     student.history=[...current.history];
     if(state.students.some(s=>s.id!==student.id&&s.code.toLocaleLowerCase()===student.code.toLocaleLowerCase()))throw new HttpError(409,'Ya existe un estudiante con ese código.');
     const academicChanged=!same(current.academic.map(a=>({areaId:a.areaId,grades:a.grades})),student.academic.map(a=>({areaId:a.areaId,grades:a.grades})));
@@ -97,7 +99,7 @@ export function createApp(options: {dataDir?: string} = {}) {
     if(commitmentsChanged)student.validated.commitment=false;
     checkErrors(semanticStudentErrors(student,state.settings));
     const result=calculateStudent(student,state.settings);
-    if(student.validated.academic&&result.a===null)throw new HttpError(400,'Complete todas las calificaciones antes de validar el ámbito académico.');
+    if(student.validated.academic&&result.a===null)throw new HttpError(400,'Complete y valide las calificaciones I–III de los cursos estudiados antes de validar el ámbito académico.');
     if(student.validated.performance&&result.b===null)throw new HttpError(400,'Complete asistencia y disciplina antes de validar desempeño.');
     if(student.validated.commitment&&result.c===null)throw new HttpError(400,'Complete y revise los compromisos antes de validar el ámbito C.');
     for(const field of ['code','name','grade','section','academic','attendance','discipline','institutional','family','validated'] as const){if(!same(current[field],student[field]))student.history.push(audit(field,current[field],student[field]));}
@@ -128,7 +130,7 @@ export function createApp(options: {dataDir?: string} = {}) {
         s.validated={academic:false,performance:false,commitment:false};s.attendance.validated=false;s.discipline.confirmed=false;
         s.institutional.forEach(c=>c.validated=false);s.family.forEach(c=>c.validated=false);
         const previousAcademic=structuredClone(s.academic);
-        s.academic=settings.areas.map(def=>{const old=s.academic.find(a=>a.areaId===def.id);const oldDefinition=state.settings.areas.find(a=>a.id===def.id);return{areaId:def.id,grades:def.competencies.map(name=>{const i=oldDefinition?.competencies.indexOf(name)??-1;return i>=0?old?.grades[i]?.slice(0,3)??['','','']:['','',''];}),validated:false};});
+        s.academic=settings.areas.map(def=>{const old=s.academic.find(a=>a.areaId===def.id);const oldDefinition=state.settings.areas.find(a=>a.id===def.id);return{areaId:def.id,grades:def.competencies.map(name=>{const i=oldDefinition?.competencies.indexOf(name)??-1;return i>=0?old?.grades[i]??['','','']:['','',''];}),validated:false};});
         if(!same(previousAcademic,s.academic))s.history.push(audit('Revisión de catálogo académico',previousAcademic,s.academic));
         syncExistingCohortRecords(s,settings);
         s.updatedAt=stamp();

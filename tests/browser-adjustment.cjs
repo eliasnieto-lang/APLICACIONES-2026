@@ -389,18 +389,33 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     const family = page.locator('section.detail-records').filter({ has: page.getByRole('heading', { name: 'Compromiso familiar', exact: true }) });
     await family.getByRole('button', { name: 'Agregar', exact: true }).click();
     const familyRecord = family.locator('.commitment-card').first();
+    const familyConfirmation = familyRecord.getByLabel('He revisado y confirmo este registro');
+    assert(await familyConfirmation.isDisabled(), 'No se confirma un compromiso familiar sin actividad, fecha y estado.');
     await familyRecord.getByLabel('Actividad o compromiso', { exact: true }).fill('Reunion familiar ficticia de octubre');
     await familyRecord.getByLabel('Fecha', { exact: true }).fill('2026-10-23');
-    await check(familyRecord.getByLabel('Exigible para este estudiante'));
+    assert(await familyRecord.getByLabel('Exigible para este estudiante').isChecked(), 'Un compromiso familiar agregado es exigible sin introducir un cuarto dato.');
+    assert(await familyConfirmation.isDisabled(), 'El estado del compromiso familiar es obligatorio.');
     await familyRecord.getByRole('button', { name: 'Cumplió', exact: true }).click();
-    await familyRecord.getByLabel('Evidencia documental · requerida para validar', { exact: true }).fill('Acta familiar ficticia FAMILIA-2026-23.');
-    await check(familyRecord.getByLabel('He revisado y confirmo este registro')); await saved();
+    assert(await familyConfirmation.isEnabled(), 'Actividad, fecha y estado permiten validar sin observación ni evidencia.');
+    await familyRecord.getByLabel('Fecha', { exact: true }).fill('');
+    assert(await familyConfirmation.isDisabled(), 'La fecha del compromiso familiar es obligatoria.');
+    await familyRecord.getByLabel('Fecha', { exact: true }).fill('2026-10-23');
+    await familyRecord.getByLabel('Actividad o compromiso', { exact: true }).fill('');
+    assert(await familyConfirmation.isDisabled(), 'La actividad del compromiso familiar es obligatoria.');
+    await familyRecord.getByLabel('Actividad o compromiso', { exact: true }).fill('Reunion familiar ficticia de octubre');
+    assert.equal(await familyRecord.getByLabel('Justificación / observación · opcional', { exact: true }).inputValue(), '');
+    assert.equal(await familyRecord.getByLabel('Evidencia documental · opcional', { exact: true }).inputValue(), '');
+    await check(familyConfirmation); await saved();
     await check(page.locator('section').filter({ has: page.getByRole('heading', { name: 'Validación final de compromiso', exact: true }) }).getByLabel('Revisado y validado')); await saved();
     const completed = await student(pupils[0].code);
     assert.deepEqual(completed.institutional.map(record => record.scope), ['local', 'regional', 'national']);
     assert(completed.institutional.every(record => record.eventType === 'academic_contest' && record.validated));
+    assert.equal(completed.family[0].validated, true);
+    assert.equal(completed.family[0].evidence, '');
+    assert.equal(completed.family[0].justification, '');
     assert.deepEqual(completed.validated, { academic: true, performance: true, commitment: true });
     assert.match(await metric('Participación institucional · PI').innerText(), /100[.,]00/);
+    assert.match(await metric('Compromiso familiar · CF').innerText(), /100[.,]00/);
     assert.match(await dimension('Compromiso').innerText(), /100[.,]00/);
     assert.match(await page.locator('.detail-total').innerText(), /84[.,]75/);
     assert.match(await page.locator('.detail-total').innerText(), /Validado para ranking/);
@@ -622,6 +637,152 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     await deleteImported(path.basename(allCoursesPath));
     assert.equal((await snapshot()).state.students.length, 3);
 
+    // The same ten printed subjects can include courses not studied during
+    // I–III. IV-only notes do not activate those courses or trigger OCR.
+    const blankCoursesPupil = { code: 'AREAS-VACIAS-F4-001', name: 'FERNANDEZ SOTO Rosa Elena', grade: 4 };
+    const blankCourseIds = ['matematica', 'arte-cultura', 'educacion-religiosa'];
+    const definitions = [...settings.areas, ...SUPPLEMENTAL_REPORT_AREAS];
+    const blankDefinitions = definitions.filter(area => blankCourseIds.includes(area.id));
+    const activeDefinitions = definitions.filter(area => !blankCourseIds.includes(area.id));
+    const blankGrades = Object.fromEntries(blankDefinitions.map(area => [area.id, area.competencies.map(() => ['', '', '', 'AD'])]));
+    const blankCoursesPath = path.join(directory, 'libreta-diez-areas-tres-no-cursadas.pdf');
+    await fs.writeFile(blankCoursesPath, makeCompactPdf(settings, { ...blankCoursesPupil, grades: ['A', 'A', 'A', 'AD'], gradesByArea: blankGrades, additionalAreas: SUPPLEMENTAL_REPORT_AREAS }));
+    await navigate('Importar libretas');
+    await upload([blankCoursesPath]);
+    const blankCoursesPdf = (await snapshot()).state.pdfs.find(pdf => pdf.name === path.basename(blankCoursesPath));
+    assert.equal(blankCoursesPdf.ocr, false, 'Las áreas no cursadas no provocan una lectura OCR de notas inexistentes.');
+    for (const definition of blankDefinitions) {
+      const area = blankCoursesPdf.areas.find(area => area.areaId === definition.id)
+        ?? blankCoursesPdf.supplementalAreas.find(area => area.definition.id === definition.id);
+      assert(area, 'El respaldo conserva las áreas impresas aunque no se cursaron.');
+      assert.deepEqual(area.grades, definition.competencies.map(() => ['', '', '']), 'IV no rellena los bimestres I–III.');
+    }
+    await review(path.basename(blankCoursesPath));
+    const blankCoursesPreview = page.locator('.import-grade-preview');
+    await blankCoursesPreview.locator('summary').click();
+    assert.equal(await blankCoursesPreview.locator('tbody tr').count(), 18);
+    for (const definition of blankDefinitions) assert(!(await blankCoursesPreview.innerText()).includes(definition.name), `${definition.name} sin notas I–III no aparece en la revisión.`);
+    assert.deepEqual(await blankCoursesPreview.locator('tbody tr td:not(:first-child)').allTextContents(), Array(54).fill('A'));
+    await startPdfTrace();
+    await confirm(path.basename(blankCoursesPath));
+    await tab('Académico').click();
+    assert.equal(await page.locator('.academic-table').count(), 7);
+    const blankCoursesAcademicNames = await page.locator('.detail-area h3').allTextContents();
+    for (const definition of blankDefinitions) assert(!blankCoursesAcademicNames.includes(definition.name), `${definition.name} sin notas I–III no aparece en Académico.`);
+    assert.deepEqual(blankCoursesAcademicNames, activeDefinitions.map(area => area.name));
+    assert.deepEqual(await page.locator('.grade-select').allTextContents(), Array(54).fill('A'));
+    assert.match(await metric('General · G').innerText(), /75[.,]00/, 'G usa solo las áreas cursadas y conserva su escala.');
+    assert.notEqual(await dimension('Académico').innerText(), 'Pendiente', 'Matemática sin cursar no bloquea las otras cuatro áreas de cálculo.');
+    assert.equal((await student(blankCoursesPupil.code)).validated.academic, true);
+    await tab('Desempeño').click();
+    await tab('Académico').click();
+    await saved();
+    assertRescanCalls(await stopPdfTrace(), blankCoursesPdf.id, 0);
+
+    // Manual validation remains available for complete recognized grades whose
+    // review flags were cleared in a restored backup. No note is transcribed.
+    const manualBackup = await backup();
+    const manualStudent = manualBackup.state.students.find(value => value.code === blankCoursesPupil.code);
+    const manualGradeMatrices = structuredClone(manualStudent.academic);
+    for (const area of manualStudent.academic) if (area.grades.flat().some(Boolean)) area.validated = false;
+    manualStudent.validated.academic = false;
+    const manualBackupPath = path.join(directory, 'respaldo-validacion-academica-manual.json');
+    await fs.writeFile(manualBackupPath, JSON.stringify(manualBackup));
+    await page.locator('input[type=file][accept*="application/json"]').setInputFiles(manualBackupPath);
+    await page.getByRole('dialog').getByRole('button', { name: 'Restaurar datos', exact: true }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    await startPdfTrace();
+    await openStudent(blankCoursesPupil.code, blankCoursesPupil.name);
+    await tab('Académico').click();
+    assert.equal((await student(blankCoursesPupil.code)).validated.academic, false);
+    const academicFinal = page.getByLabel('Académico revisado y validado', { exact: true });
+    assert(!await academicFinal.isChecked());
+    assert(await academicFinal.isDisabled(), 'La validación final espera la revisión manual de las áreas cursadas.');
+    for (const definition of settings.areas.filter(area => !blankCourseIds.includes(area.id))) {
+      const validation = page.getByLabel(`${definition.name}: área revisada y validada`, { exact: true });
+      assert(await validation.isEnabled());
+      assert(!await validation.isChecked());
+      await check(validation); await saved();
+    }
+    assert(await academicFinal.isEnabled(), 'Las cuatro áreas cursadas permiten confirmar A sin exigir Matemática.');
+    await check(academicFinal); await saved();
+    const manuallyValidated = await student(blankCoursesPupil.code);
+    assert.equal(manuallyValidated.validated.academic, true);
+    assert.deepEqual(manuallyValidated.academic.map(area => area.grades), manualGradeMatrices.map(area => area.grades), 'La validación manual conserva todas las notas y áreas vacías del respaldo.');
+    assert.match(await metric('General · G').innerText(), /75[.,]00/);
+    assert.notEqual(await dimension('Académico').innerText(), 'Pendiente');
+    assert.equal(await page.locator('.academic-table input, .academic-table select, .academic-table textarea, .academic-table [contenteditable=true]').count(), 0);
+    assertRescanCalls(await stopPdfTrace(), blankCoursesPdf.id, 0);
+    await deleteImported(path.basename(blankCoursesPath));
+    assert.equal((await snapshot()).state.students.length, 3);
+
+    // A single missing active note is a pending reading, so its course stays
+    // visible and its academic validation remains unavailable.
+    const partialPupil = { code: 'NOTA-PARCIAL-F4-001', name: 'VALDIVIA ROJAS Clara Sofia', grade: 4 };
+    const mathematics = settings.areas.find(area => area.id === 'matematica');
+    const partialMath = mathematics.competencies.map((_, index) => index === 0 ? ['A', '', 'A', 'AD'] : ['A', 'A', 'A', 'AD']);
+    const partialPath = path.join(directory, 'libreta-matematica-una-nota-pendiente.pdf');
+    await fs.writeFile(partialPath, makeCompactPdf(settings, { ...partialPupil, grades: ['A', 'A', 'A', 'AD'], gradesByArea: { matematica: partialMath } }));
+    await navigate('Importar libretas');
+    await upload([partialPath]);
+    await review(path.basename(partialPath));
+    const partialPreview = page.locator('.import-grade-preview');
+    await partialPreview.locator('summary').click();
+    assert.equal(await partialPreview.locator('tbody tr').count(), 15);
+    assert((await partialPreview.innerText()).includes(mathematics.name));
+    await startPdfTrace();
+    await confirm(path.basename(partialPath));
+    await poll(async () => (await student(partialPupil.code)).history.some(event => event.field === 'Actualización automática de notas desde el PDF original'), 'relectura de una nota faltante', 180000);
+    await page.getByRole('button', { name: 'Volver a escanear notas', exact: true }).waitFor();
+    await tab('Académico').click();
+    assert.equal(await page.locator('.academic-table').count(), 5);
+    assert.equal(await dimension('Académico').innerText(), 'Pendiente');
+    assert(await page.getByLabel(`${mathematics.name}: área revisada y validada`, { exact: true }).isDisabled(), 'Una nota faltante impide validar el área visible.');
+    assert.deepEqual((await student(partialPupil.code)).academic.find(area => area.areaId === 'matematica').grades[0], ['A', '', 'A']);
+    await tab('Desempeño').click();
+    await tab('Académico').click();
+    await saved();
+    const partialPdf = (await snapshot()).state.pdfs.find(pdf => pdf.name === path.basename(partialPath));
+    assertRescanCalls(await stopPdfTrace(), partialPdf.id);
+    await deleteImported(path.basename(partialPath));
+    assert.equal((await snapshot()).state.students.length, 3);
+
+    // Incident verification needs the recorded facts; measure and evidence are
+    // optional. An unapproved discount still keeps B pending after verification.
+    await openStudent(pupils[1].code, pupils[1].name);
+    await tab('Desempeño').click();
+    for (const [label, value] of [['Días lectivos del periodo', '200'], ['Días formalmente eximidos', '0'], ['Días asistidos', '200'], ['Ingresos puntuales', '200']]) await page.getByLabel(label).fill(value);
+    await check(page.getByLabel('He contrastado y validado la asistencia')); await saved();
+    await page.getByRole('button', { name: 'Agregar incidencia', exact: true }).click();
+    const incident = page.locator('.commitment-card').first();
+    const incidentConfirmation = incident.getByLabel('Incidencia verificada', { exact: true });
+    assert(await incidentConfirmation.isDisabled());
+    const unapprovedType = settings.disciplineTypes.find(type => !type.punctuality && type.discount == null);
+    assert(unapprovedType, 'La aceptación incluye una categoría cuyo descuento sigue pendiente de aprobación.');
+    await incident.getByRole('combobox').selectOption(unapprovedType.id);
+    await incident.getByLabel('Fecha', { exact: true }).fill('2026-10-24');
+    assert(await incidentConfirmation.isDisabled(), 'La descripción de la incidencia es obligatoria.');
+    await incident.getByLabel('Descripción de la incidencia', { exact: true }).fill('Incidencia ficticia registrada para verificar los datos mínimos.');
+    assert(await incidentConfirmation.isEnabled(), 'Categoría, fecha y descripción habilitan la verificación.');
+    await incident.getByLabel('Fecha', { exact: true }).fill('');
+    assert(await incidentConfirmation.isDisabled(), 'La fecha de la incidencia es obligatoria.');
+    await incident.getByLabel('Fecha', { exact: true }).fill('2026-10-24');
+    await incident.getByRole('combobox').selectOption('');
+    assert(await incidentConfirmation.isDisabled(), 'La categoría de la incidencia es obligatoria.');
+    await incident.getByRole('combobox').selectOption(unapprovedType.id);
+    assert.equal(await incident.getByLabel('Medida aplicada · opcional', { exact: true }).inputValue(), '');
+    assert.equal(await incident.getByLabel('Evidencia o referencia documental · opcional', { exact: true }).inputValue(), '');
+    await check(incidentConfirmation); await saved();
+    await check(page.getByLabel('Confirmo que el registro disciplinario está completo')); await saved();
+    const minimalIncidentStudent = await student(pupils[1].code);
+    assert.equal(minimalIncidentStudent.discipline.incidents[0].verified, true);
+    assert.equal(minimalIncidentStudent.discipline.incidents[0].measure, '');
+    assert.equal(minimalIncidentStudent.discipline.incidents[0].evidence, '');
+    assert.equal(minimalIncidentStudent.attendance.validated, true);
+    assert.equal(minimalIncidentStudent.discipline.confirmed, true);
+    assert.equal(await dimension('Desempeño').innerText(), 'Pendiente', 'La verificación de hechos no aprueba un descuento pendiente.');
+    assert(await page.locator('section').filter({ has: page.getByRole('heading', { name: 'Validación final de desempeño', exact: true }) }).getByLabel('Revisado y validado').isDisabled());
+
     // The provided filename is sufficient even when every native identity field
     // is absent. All 45 grade cells remain real native PDF text.
     const filenameCase = 'BOLETA_2do año F_Secundaria_SEGURA_CAMONES_ANDRES ADRIAN.pdf';
@@ -669,21 +830,21 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     await poll(async () => (await page.locator('tr').filter({ has: page.locator('.file-cell strong', { hasText: fallbackCase }) }).innerText()).includes('RAMIREZ FLORES NOMBRE MANUAL'), 'nombre manual visible antes de confirmar');
     await startPdfTrace();
     await confirm(fallbackCase);
-    await poll(async () => (await snapshot()).state.students.find(value => value.name === 'RAMIREZ FLORES NOMBRE MANUAL')?.history.some(event => event.field === 'Actualización automática de notas desde el PDF original'), 'relectura automática de la libreta incompleta', 180000);
     await page.getByRole('button', { name: 'Volver a escanear notas', exact: true }).waitFor();
     const fallbackStudent = (await snapshot()).state.students.find(value => value.name === 'RAMIREZ FLORES NOMBRE MANUAL');
     assert.equal(fallbackStudent.grade, '4.º de secundaria');assert(fallbackStudent.reportApproval);
-    assert.equal(fallbackStudent.validated.academic, false, 'La falta de notas deja A pendiente y permite abrir la ficha.');
+    assert.equal(fallbackStudent.validated.academic, true, 'El nombre manual confirma las cuatro áreas completas sin exigir un área no cursada.');
     assertBlankManual(fallbackStudent);
     for (const name of ['Académico', 'Desempeño', 'Compromiso']) assert(await tab(name).isEnabled());
     await tab('Académico').click();
-    assert.equal(await dimension('Académico').innerText(), 'Pendiente');
+    assert.notEqual(await dimension('Académico').innerText(), 'Pendiente');
+    assert.equal(await page.locator('.academic-table').count(), 4);
     assert.equal(await page.locator('.academic-table input, .academic-table select, .academic-table textarea, .academic-table [contenteditable=true]').count(), 0);
     await tab('Desempeño').click();
     assert.equal(await page.getByLabel('Días lectivos del periodo').inputValue(), '');
     await tab('Académico').click();
     await saved();
-    assertRescanCalls(await stopPdfTrace(), fallbackPdf.id);
+    assertRescanCalls(await stopPdfTrace(), fallbackPdf.id, 0);
     await deleteImported(fallbackCase);
     assert.equal((await snapshot()).state.students.length, 3);
 
@@ -720,6 +881,7 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     assert.deepEqual(requests.filter(request => /^https?:/.test(request.url) && new URL(request.url).origin !== new URL(appUrl).origin), [], 'No se descargan recursos externos.');
     assert.deepEqual(errors, [], 'Sin excepciones JavaScript.');
     const report = { passed: true, classrooms: ['2.º F', '3.º F', '4.º F'], rejectedClassroom: '5.º F', bimesters: ['I', 'II', 'III'], provisionalImport: true, automaticIdentityWithoutColons: true, editableFullNameConfirmDeleteReview: true, filenameIdentityBeforeConfirmation: true, filenameWithoutCodeOrYear: true, manualNameFallback: true, missingGradesRemainPending: true, existingPdfFilenameRecoveryWithoutOcr: true, recoveryPreservesManualRecords: true, mixedRasterHeaderNativeGrades: true, reportGate: true, automaticAcademicOnly: true, progression: { firstTwo: 1.5, third: 3, score: 93.75, academic: 58.75 }, compactFourBimesterPdf: true, automatic45NotesPreview: true, all10Courses78Notes: true, supplementalCoursesSurviveRescan: true, incompleteReportAutomaticRescanOnce: true, readOnlyAcademicNotes: true, activeOriginalRescanPreservesManualRecords: true, contestOnlyEventTypes: true, threeRequiredContestFields: true, contestScores: { local: 40, regional: 70, national: 100 }, bestCompletedContest: true, scores: { a: 58.75, b: 95.5, c: 100, total: (58.75 + 95.5 + 100) / 3 }, replacementAndDuplicateCascade: true, exactFileReimport: true, indexedDBPersistenceAfterRestart: true, standaloneInlineHtml: true, offlineOperations: true, httpRequestsAfterLoad: operationHttpRequests, downloads, pageErrors: errors, consoleErrors };
+    Object.assign(report, { blankCoursesExcludedFromPreviewAndScores: true, ivOnlyCoursesRemainInactive: true, blankRawGradesPreserved: true, blankCoursesDoNotTriggerRescan: true, manualAcademicValidationWithoutGradeEntry: true, partiallyReadCourseRemainsPending: true, threeRequiredIncidentFields: true, unapprovedDiscountRemainsPending: true, threeRequiredFamilyFields: true, optionalFamilyEvidence: true, familyScore: 100 });
     await fs.writeFile('/tmp/circulos-adjustment-result.json', JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
   } catch (error) {

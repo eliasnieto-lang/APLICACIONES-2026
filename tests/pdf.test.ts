@@ -330,7 +330,7 @@ test('all ten report subjects retain 78 scanned grades without changing the appr
   assert.ok(!report.warnings.some(warning => warning.includes('casillas del catálogo')));
 });
 
-test('only supplemental subjects printed in the report contribute to expected cells or returned definitions', () => {
+test('printed supplemental subjects retain their definitions and active courses contribute expected cells', () => {
   const rows = [compactHeading, ...compactSettings.areas.flatMap(area => area.competencies.map((competency, index) => compactRow(index === 0 ? area.name : '', competency, ['A', 'B', 'C', ''])))];
   const base = parseReportText(rows.join('\n'), compactSettings);
   assert.equal(base.supplementalAreas, undefined);
@@ -340,6 +340,48 @@ test('only supplemental subjects printed in the report contribute to expected ce
   assert.deepEqual(partial.supplementalAreas?.map(area => area.definition.id), ['educacion-fisica']);
   assert.deepEqual(partial.supplementalAreas?.[0].grades, [['', '', ''], ['AD', '', 'B'], ['', '', '']]);
   assert.ok(partial.warnings.some(warning => warning.includes('47 de 54')));
+});
+
+test('blank and IV-only supplemental courses retain source rows without adding missing active cells', () => {
+  for (const fourth of ['', 'AD']) {
+    const extras = SUPPLEMENTAL_REPORT_AREAS.filter(area => ['arte-cultura', 'educacion-religiosa'].includes(area.id));
+    const rows = [compactHeading, ...compactSettings.areas.flatMap(area => area.competencies.map((competency, index) =>
+      compactRow(index === 0 ? area.name : '', competency, ['A', 'B', 'C', '']))),
+    ...extras.flatMap(area => area.competencies.map((competency, index) =>
+      compactRow(index === 0 ? area.name : '', competency, ['', '', '', fourth])))];
+    const report = parseReportText(rows.join('\n'), compactSettings);
+    assert.equal(report.areas.flatMap(area => area.grades.flat()).filter(Boolean).length, 45);
+    assert.deepEqual(report.supplementalAreas?.map(area => area.definition.id), extras.map(area => area.id));
+    assert.ok(report.supplementalAreas?.every(area => area.grades.every(row => row.every(cell => cell === ''))));
+    assert.ok(!report.warnings.some(warning => warning.includes('casillas del catálogo') || warning.includes('No se reconocieron notas')));
+  }
+});
+
+test('an empty configured course is excluded while a partial active course keeps every competency expected', () => {
+  for (const fourth of ['', 'AD']) {
+    const rows = [compactHeading, ...compactSettings.areas.flatMap((area, areaIndex) => area.competencies.map((competency, index) =>
+      compactRow(index === 0 ? area.name : '', competency, areaIndex === 0 ? ['', '', '', fourth] : ['A', 'B', 'C', ''])))];
+    const complete = parseReportText(rows.join('\n'), compactSettings);
+    assert.deepEqual(complete.areas[0].grades, Array.from({ length: 4 }, () => ['', '', '']));
+    assert.equal(complete.areas.flatMap(area => area.grades.flat()).filter(Boolean).length, 33);
+    assert.ok(!complete.warnings.some(warning => warning.includes('casillas del catálogo')));
+    rows[5] = compactRow(compactSettings.areas[1].name, compactSettings.areas[1].competencies[0], ['', 'B', 'C', '']);
+    const partial = parseReportText(rows.join('\n'), compactSettings);
+    assert.deepEqual(partial.areas[1].grades[0], ['', 'B', 'C']);
+    assert.ok(partial.warnings.some(warning => warning.includes('32 de 33 casillas')));
+  }
+  const oneGrade = parseReportText(`${compactHeading}\n${compactRow('MATEMÁTICA', compactSettings.areas[0].competencies[0], ['', 'B', '', ''])}`, compactSettings);
+  assert.deepEqual(oneGrade.areas[0].grades[0], ['', 'B', '']);
+  assert.ok(oneGrade.warnings.some(warning => warning.includes('1 de 12 casillas')));
+});
+
+test('a report without active grades warns about unread courses without inventing missing catalog cells', () => {
+  const rows = [compactHeading, ...compactSettings.areas.flatMap(area => area.competencies.map((competency, index) =>
+    compactRow(index === 0 ? area.name : '', competency, ['', '', '', 'AD'])))];
+  const report = parseReportText(rows.join('\n'), compactSettings);
+  assert.ok(report.areas.every(area => area.grades.every(row => row.every(cell => cell === ''))));
+  assert.ok(report.warnings.some(warning => warning.includes('No se reconocieron notas en ningún curso de los bimestres I–III')));
+  assert.ok(!report.warnings.some(warning => warning.includes('casillas del catálogo')));
 });
 
 test('OCR whitespace artifacts are tolerated without substituting letters or matching an unrelated prefix', () => {

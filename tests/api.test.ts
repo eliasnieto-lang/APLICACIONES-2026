@@ -11,6 +11,8 @@ import { createStudent, defaultSettings } from '../shared/defaults.js';
 import { SUPPLEMENTAL_REPORT_AREAS } from '../shared/report-catalog.js';
 import { applyRescannedGrades } from '../shared/report-workflow.js';
 import type { ExtractedReport } from '../shared/pdf-parser.js';
+import { calculateStudent } from '../shared/calculations.js';
+import { hasActiveGrades } from '../shared/academic-policy.js';
 
 function reportPdf(code:string,name:string,omitArea='',grade='3',section='F',identityLayout:'inline'|'stacked'|'none'|'classroom'='inline',includeSupplemental=false) {
   const normalize=(text:string)=>text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[()\\]/g,'\\$&');
@@ -148,10 +150,84 @@ test('Confirmar por nombre de archivo abre la ficha y mantiene A pendiente si fa
   const h=await harness();try{
     const pdf=await upload(h,reportPdf('','','matematica','3','F','none'),'BOLETA_3ro año F_Secundaria_RIVERA_SOTO_ALBA.pdf');
     assert.equal(pdf.extractedName,'RIVERA SOTO ALBA');assert.equal(pdf.extractedCode,'');assert.equal(pdf.period,'');
+    const partial=await readState(h);partial.pdfs[0].areas.find(area=>area.areaId==='matematica')!.grades[0][0]='A';h.app.locals.store.save('real',partial);
     await confirm(h,pdf.id);
     const student=(await readState(h)).students[0];assert.equal(student.reportApproval?.pdfId,pdf.id);
     assert.equal(student.validated.academic,false);assert.equal(student.academic.find(area=>area.areaId==='matematica')!.validated,false);
     assert.equal(student.validated.performance,false);assert.equal(student.validated.commitment,false);
+  }finally{await h.close();}
+});
+
+test('Los cursos totalmente vacíos se ignoran al confirmar, guardar la validación manual y actualizar notas',async()=>{
+  const h=await harness();try{
+    const bytes=reportPdf('ACTIVE-ONLY','Estudiante Cursos Cursados','matematica'),pdf=await upload(h,bytes);
+    let student=(await readState(h)).students[0];
+    const forged={...student,reportApproval:{pdfId:pdf.id,approvedAt:new Date().toISOString()},validated:{...student.validated,academic:true}};
+    assert.equal((await h.request(`/api/students/${student.id}`,'PUT',forged)).status,409);
+    await confirm(h,pdf.id);
+    let state=await readState(h);student=state.students[0];
+    assert.equal(student.validated.academic,true);assert.equal(student.academic.find(area=>area.areaId==='matematica')!.validated,false);
+    assert.equal(calculateStudent(student,state.settings).a,75);
+    const settings={...state.settings,areas:[...state.settings.areas,{id:'extra-empty',name:'Curso no estudiado',group:'other',eligible:true,competencies:['Competencia adicional']} ]};
+    assert.equal((await h.request('/api/settings','PUT',settings)).status,200);
+    state=await readState(h);student=state.students[0];
+    const before=structuredClone(student.academic.map(area=>({areaId:area.areaId,grades:area.grades})));
+    for(const area of student.academic)area.validated=hasActiveGrades(area);
+    student.validated.academic=true;
+    let response=await h.request(`/api/students/${student.id}`,'PUT',student);
+    assert.equal(response.status,200,await response.clone().text());student=await response.json() as Student;
+    assert.equal(student.validated.academic,true);assert(student.academic.filter(hasActiveGrades).every(area=>area.validated));
+    assert(student.academic.filter(area=>!hasActiveGrades(area)).every(area=>!area.validated));
+    assert.deepEqual(student.academic.map(area=>({areaId:area.areaId,grades:area.grades})),before);
+    response=await h.request(`/api/pdfs/${pdf.id}`,'PUT',{action:'rescan-grades'});assert.equal(response.status,200,await response.clone().text());
+    state=await readState(h);student=state.students[0];assert.equal(student.validated.academic,true);
+    assert.equal(student.academic.find(area=>area.areaId==='extra-empty')!.validated,false);
+    assert.equal(calculateStudent(student,state.settings).a,75);
+    assert.deepEqual(Buffer.from(await(await h.request(`/api/pdfs/${pdf.id}/file`)).arrayBuffer()),bytes);
+    state.students[0].academic.find(area=>area.areaId==='extra-empty')!.validated=true;h.app.locals.store.save('real',state);
+    student=(await readState(h)).students[0];assert.equal(student.academic.find(area=>area.areaId==='extra-empty')!.validated,false,'Una validación histórica vacía se normaliza sin perder notas ni bloquear A.');
+    student.academic.find(area=>area.areaId==='comunicacion')!.grades[0][1]='';student.validated.academic=false;
+    student.academic.find(area=>area.areaId==='comunicacion')!.validated=false;
+    state=await readState(h);state.students[0]=student;h.app.locals.store.save('real',state);
+    const finalOnly={...student,validated:{...student.validated,academic:true}};
+    assert.equal((await h.request(`/api/students/${student.id}`,'PUT',finalOnly)).status,400,'Un curso con notas parciales impide la validación final.');
+    assert.equal((await h.request(`/api/students/${student.id}`,'PUT',{...student,academic:student.academic.map(area=>({...area,validated:hasActiveGrades(area)}))})).status,400,'Las notas parciales tampoco permiten validar el curso.');
+  }finally{await h.close();}
+});
+
+test('Una incidencia se verifica con categoría, fecha y descripción; medida y evidencia son opcionales',async()=>{
+  const h=await harness();try{
+    const pdf=await upload(h,reportPdf('INC-MIN','Estudiante Incidencias'));await confirm(h,pdf.id);
+    let state=await readState(h),student=state.students[0];
+    const category=state.settings.disciplineTypes.find(type=>!type.punctuality&&type.discount===null)!;assert(category);
+    const incident={id:'minimal-incident',typeId:category.id,date:'2026-10-18',description:'Descripción de la incidencia',verified:true};
+    let response=await h.request(`/api/students/${student.id}`,'PUT',{...student,discipline:{confirmed:true,incidents:[incident]}});
+    assert.equal(response.status,200,await response.clone().text());student=await response.json() as Student;
+    assert.equal(student.discipline.incidents[0].verified,true);assert.equal(student.discipline.incidents[0].measure,'');assert.equal(student.discipline.incidents[0].evidence,'');
+    state=await readState(h);assert.equal(state.settings.criteriaApproved,false);assert.equal(state.settings.disciplineTypes.find(type=>type.id===category.id)!.discount,null);
+    assert.equal(calculateStudent(student,state.settings).discipline,null,'Verificar el registro no aprueba el descuento pendiente.');
+    for(const invalid of [{...incident,typeId:''},{...incident,typeId:'unknown'},{...incident,date:''},{...incident,date:'2026-02-30'},{...incident,description:'  '}]){
+      response=await h.request(`/api/students/${student.id}`,'PUT',{...student,discipline:{confirmed:true,incidents:[invalid]}});
+      assert.equal(response.status,400,`Incidencia sin datos mínimos: ${JSON.stringify(invalid)}`);
+    }
+  }finally{await h.close();}
+});
+
+test('La familia valida nombre, fecha y estado sin exigir evidencia, observación ni condición exigible',async()=>{
+  const h=await harness();try{
+    const pdf=await upload(h,reportPdf('FAM-MIN','Estudiante Familia'));await confirm(h,pdf.id);
+    let student=(await readState(h)).students[0];
+    for(const status of ['fulfilled','missed','justified','na'] as const){
+      const family={id:`family-${status}`,name:'Reunión de familias',date:'2026-10-18',status,validated:true};
+      const response=await h.request(`/api/students/${student.id}`,'PUT',{...student,family:[family]});
+      assert.equal(response.status,200,await response.clone().text());student=await response.json() as Student;
+      assert.equal(student.family[0].validated,true);assert.equal(student.family[0].status,status);assert.equal(student.family[0].required,true);
+      assert.equal(student.family[0].evidence,'');assert.equal(student.family[0].justification,'');
+    }
+    const valid=student.family[0];
+    for(const invalid of [{...valid,name:''},{...valid,date:''},{...valid,date:'2026-02-30'},{...valid,status:'pending'}]){
+      assert.equal((await h.request(`/api/students/${student.id}`,'PUT',{...student,family:[invalid]})).status,400,`Compromiso sin datos mínimos: ${JSON.stringify(invalid)}`);
+    }
   }finally{await h.close();}
 });
 
@@ -226,7 +302,7 @@ test('Un concurso académico se valida con tipo, fecha y ubicación y conserva o
       assert.equal(response.status,400,`Debe impedir el concurso inválido: ${JSON.stringify(invalid)}`);
     }
     const family={...valid,id:'family',name:'',evidence:'',justification:'',required:false,status:'pending'};
-    assert.equal((await h.request(`/api/students/${student.id}`,'PUT',{...student,family:[family]})).status,400,'Las obligaciones familiares conservan nombre, estado, evidencia y observación.');
+    assert.equal((await h.request(`/api/students/${student.id}`,'PUT',{...student,family:[family]})).status,400,'Las obligaciones familiares requieren nombre, fecha y estado.');
     const legacy={...family,id:'legacy',eventType:undefined,scope:undefined};
     assert.equal((await h.request(`/api/students/${student.id}`,'PUT',{...student,institutional:[legacy]})).status,400,'Los registros antiguos conservan sus reglas hasta su clasificación.');
     const settings=(await readState(h)).settings;
@@ -301,10 +377,12 @@ test('Una nueva lectura parcial conserva notas del mismo original y descarta aju
     const uploaded=await upload(h,reportPdf('PARTIAL-1','Estudiante Lectura Parcial','','3','F','inline',true));await confirm(h,uploaded.id);
     const state=await readState(h),pdf=state.pdfs[0],student=state.students[0],scoringAreas=structuredClone(state.settings.areas);
     const reading:ExtractedReport={extractedCode:pdf.extractedCode,extractedName:pdf.extractedName,extractedGrade:pdf.extractedGrade,extractedSection:pdf.extractedSection,period:pdf.period,text:pdf.text,ocr:false,warnings:[],areas:structuredClone(pdf.areas),supplementalAreas:structuredClone(pdf.supplementalAreas)};
-    student.academic[0].grades[0][0]='AD';reading.areas[0].grades[0][0]='';reading.areas[0].grades[0][1]='B';pdf.ocr=true;
+    student.academic[0].grades[0][0]='AD';student.academic[0].grades[0].push('B');
+    reading.areas[0].grades[0][0]='';reading.areas[0].grades[0][1]='B';pdf.areas[1].grades[0].push('C');pdf.ocr=true;
     const extra=reading.supplementalAreas![0];extra.definition.competencies.reverse();extra.grades=extra.definition.competencies.map(()=>['','','']);extra.grades[0][1]='B';
     applyRescannedGrades(state,pdf.id,reading);
-    assert.deepEqual(student.academic[0].grades[0],['A','B','A']);assert.equal(student.validated.academic,true);assert.equal(pdf.ocr,true);
+    assert.deepEqual(student.academic[0].grades[0],['A','B','A','B']);assert.equal(student.validated.academic,true);assert.equal(pdf.ocr,true);
+    assert.equal(pdf.areas[1].grades[0][3],'C');assert.equal(student.academic[1].grades[0][3],'C','Actualizar I–III conserva la cuarta nota histórica en fuente y expediente.');
     assert.deepEqual(pdf.supplementalAreas![0].grades[0],['A','B','A']);assert(pdf.supplementalAreas!.every(area=>area.grades.every(row=>row.every(Boolean))),JSON.stringify(pdf.supplementalAreas));
     assert.deepEqual(state.settings.areas,scoringAreas);assert.equal(student.academic.length,5);
   }finally{await h.close();}
@@ -355,7 +433,7 @@ test('Reconfirmar identidad conserva ajustes académicos; reemplazar reinicia A 
     assert.equal((await h.request(`/api/pdfs/${prior.id}`,'PUT',{action:'validate'})).status,400);
     response=await h.request(`/api/pdfs/${replacement.id}`,'PUT',{action:'replace',studentId:student.id,replacesId:prior.id});assert.equal(response.status,200);
     await confirm(h,replacement.id);state=await readState(h);student=state.students[0];
-    assert.equal(student.reportApproval?.pdfId,replacement.id);assert.equal(student.validated.academic,false);
+    assert.equal(student.reportApproval?.pdfId,replacement.id);assert.equal(student.validated.academic,true);
     assert.equal(student.academic.find(area=>area.areaId==='matematica')!.validated,false);assert.equal(student.academic.find(area=>area.areaId==='ciencia')!.validated,true);
     assert.deepEqual(student.institutional,manual.institutional);assert.deepEqual(student.family,manual.family);
     assert.equal((await h.request(`/api/pdfs/${prior.id}/file`)).status,200);

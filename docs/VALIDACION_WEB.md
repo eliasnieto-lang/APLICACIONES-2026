@@ -1,5 +1,15 @@
 # Validación de la edición web
 
+## Áreas aplicables y validación mínima
+
+La versión vigente oculta e ignora las asignaturas sin ninguna nota AD/A/B/C de I–III. Las notas de IV por sí solas no hacen que un área sea cursada. Las asignaturas parcialmente registradas conservan sus pendientes. Los cursos y grupos no cursados se excluyen de promedios, progreso, escaneo automático y validaciones, sin borrar las filas originales.
+
+`npm test` aprobó **156 pruebas** y la construcción portátil pasó. La aceptación del navegador verificó una libreta compacta de diez cursos con Matemática, Arte y Religión vacíos en I–III (AD en IV): solo se muestran siete áreas, se conservan los datos originales, G/A permanecen en75 para los cursos cursados y no se ejecuta un reescaneo innecesario. También se comprobaron los controles manuales por área y final, su persistencia sin modificar notas y el caso parcial que debe permanecer visible y pendiente.
+
+Incidencias: categoría, fecha y descripción bastan para verificar, sin medida ni evidencia; los descuentos no aprobados continúan pendientes para el cálculo, sin impedir guardar la verificación. Familia: actividad, fecha y estado bastan para validar, sin justificación ni evidencia, y un nuevo registro cumplido produce CF100 con solo esos tres datos. Se conservaron la escala40/70/100 y los puntajes de referenciaA58,75/B95,50/C100/total84,75.
+
+La aceptación terminó sin errores JavaScript, de consola ni solicitudes HTTP durante las operaciones. Se mantuvieron los escenarios previos de notas45/78, respaldos, restauración, eliminación, reimportación, persistencia y reescaneo.
+
 ## Concursos académicos y notas escaneadas
 
 La versión vigente valida participación institucional con solo tipo de evento, fecha y ubicación/puesto. Ofrece únicamente concursos académicos locales (40), regionales (70) y nacionales (100); PI toma el mejor resultado. Los demás datos son opcionales.

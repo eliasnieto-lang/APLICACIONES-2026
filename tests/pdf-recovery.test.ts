@@ -67,16 +67,41 @@ test('filename identity skips metadata OCR while missing grades still require re
 
 const englishGrades = SUPPLEMENTAL_REPORT_AREAS[0].competencies.map((competency, index) => `${competency} ${index ? 'A B AD' : 'AD B C'}`).join('\n');
 
-test('only detected additional subjects contribute missing cells to automatic recovery', () => {
+test('only active additional subjects contribute missing cells to automatic recovery', () => {
   const base = `${identity}\n${grades}`;
   assert.equal(needsPdfRecovery(parseReportText(base, settings)), false, 'absent additional subjects are not missing data');
-  const incomplete = parseReportText(`${base}\nCompetencias Bimestre I II III IV\nINGLES\n${SUPPLEMENTAL_REPORT_AREAS[0].competencies[0]} A - C`, settings);
+  const incomplete = parseReportText(`${base}\nCompetencias Bimestre I II III IV\nINGLES\n${SUPPLEMENTAL_REPORT_AREAS[0].competencies[0]} A - C -`, settings);
   assert.equal(incomplete.supplementalAreas?.length, 1);
   assert.equal(needsPdfRecovery(incomplete), true);
   assert.equal(needsRenderedGradeRecovery(incomplete, settings), true);
   const complete = parseReportText(`${base}\nINGLES\n${englishGrades}`, settings);
   assert.equal(needsPdfRecovery(complete), false);
   assert.equal(needsRenderedGradeRecovery(complete, settings, true), false);
+});
+
+test('blank and IV-only courses do not trigger grade OCR alongside a complete active course', () => {
+  const reportSettings = { ...settings, areas: [...settings.areas, defaultSettings.areas.find(area => area.group === 'science')!] };
+  const science = reportSettings.areas[1];
+  const report = parseReportText(`${identity}\nCompetencias Bimestre I II III IV\n${science.name}\n${science.competencies.map(competency => `${competency} A B C -`).join('\n')}\nARTE Y CULTURA\nEDUCACION RELIGIOSA`, reportSettings);
+  assert.deepEqual(report.areas[0].grades, [['', '', ''], ['', '', '']]);
+  assert.equal(report.supplementalAreas?.length, 2, 'blank printed courses remain available in the source reading');
+  assert.equal(needsPdfRecovery(report), false);
+  assert.equal(needsRenderedGradeRecovery(report, reportSettings), false);
+  assert.equal(needsRenderedGradeRecovery(report, reportSettings, true), false);
+  report.areas[0].grades.forEach(row => row.push('AD'));
+  report.supplementalAreas?.forEach(area => area.grades.forEach(row => row.push('AD')));
+  assert.equal(needsPdfRecovery(report), false, 'a grade in IV does not activate a course');
+  report.areas[1].grades[0][0] = '';
+  assert.equal(needsPdfRecovery(report), true, 'one missing cell in an active course still needs recovery');
+  assert.equal(needsRenderedGradeRecovery(report, reportSettings), true);
+});
+
+test('no active courses retain the unread-report recovery fallback and a dedicated warning', () => {
+  const report = parseReportText(`${identity}\nCompetencias Bimestre I II III IV\nMATEMATICA\nResuelve problemas de cantidad - - - AD`, settings);
+  assert.equal(needsPdfRecovery(report), true);
+  assert.equal(needsRenderedGradeRecovery(report, settings), true);
+  assert.ok(report.warnings.some(warning => warning.includes('No se reconocieron notas')));
+  assert.ok(!report.warnings.some(warning => warning.includes('0 de 6')));
 });
 
 test('independent OCR fills a missing identity without making repeated native grade rows conflict', () => {
@@ -224,6 +249,31 @@ test('an actual compact native PDF also supplies all printed additional subject 
     assert.equal([...result.areas, ...(result.supplementalAreas || [])].flatMap(area => area.grades.flat()).filter(Boolean).length, 78);
     for (const area of result.supplementalAreas || []) for (const row of area.grades) assert.deepEqual(row, ['C', 'B', 'A']);
     assert.equal(needsPdfRecovery(result), false);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test('native reports keep blank source courses without missing-cell warnings or grade OCR', async () => {
+  const { makeCompactPdf } = createRequire(import.meta.url)('./compact-report-fixture.cjs');
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'circulos-inactive-courses-'));
+  try {
+    for (const scenario of [
+      { name: 'blank-art-religion', additionalAreas: SUPPLEMENTAL_REPORT_AREAS.filter(area => ['arte-cultura', 'educacion-religiosa'].includes(area.id)), mathInactive: false, fourth: '' },
+      { name: 'blank-additional-subjects', additionalAreas: SUPPLEMENTAL_REPORT_AREAS, mathInactive: false, fourth: '' },
+      { name: 'iv-only-courses', additionalAreas: SUPPLEMENTAL_REPORT_AREAS, mathInactive: true, fourth: 'AD' },
+    ]) {
+      const inactive = [...scenario.additionalAreas, ...(scenario.mathInactive ? [defaultSettings.areas[0]] : [])];
+      const gradesByArea = Object.fromEntries(inactive.map(area => [area.id, area.competencies.map(() => ['', '', '', scenario.fourth])]));
+      const file = path.join(directory, `${scenario.name}.pdf`);
+      await writeFile(file, makeCompactPdf(defaultSettings, { code: 'SC-001', name: 'Ana Perez', grade: '3', additionalAreas: scenario.additionalAreas, gradesByArea }));
+      const result = await extractPdf(file, defaultSettings);
+      assert.equal(result.ocr, false, scenario.name);
+      assert.equal(result.areas.flatMap(area => area.grades.flat()).filter(Boolean).length, scenario.mathInactive ? 33 : 45, scenario.name);
+      assert.equal(result.supplementalAreas?.length, scenario.additionalAreas.length);
+      assert.ok(result.supplementalAreas?.every(area => area.grades.every(row => row.every(cell => cell === ''))));
+      assert.ok(!result.warnings.some(warning => warning.includes('casillas del catálogo')), scenario.name);
+      assert.equal(needsPdfRecovery(result), false, scenario.name);
+      assert.equal(needsRenderedGradeRecovery(result, defaultSettings, true), false, scenario.name);
+    }
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

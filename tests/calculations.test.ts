@@ -5,6 +5,8 @@ import { createDemoState, createStudent, defaultSettings } from '../shared/defau
 import type { AppState, CohortRecord, Commitment, PdfRecord, Settings, Student } from '../shared/types';
 import { ACTIVE_BIMESTERS, ALLOWED_COHORTS, cohortKey, isReportApproved, normalizeCohort } from '../shared/policy';
 import { migrateState } from '../shared/migrations';
+import { activeAreas, hasActiveGrades, isAreaComplete } from '../shared/academic-policy';
+import { commitmentRequiredFields, incidentRequiredFields } from '../shared/record-validation';
 
 const approved = (): Settings => {
   const settings = structuredClone(defaultSettings);
@@ -95,6 +97,85 @@ test('Área con más competencias no pesa más; Ciencias y Letras mantienen grup
   assert.equal(result.r, 82.5);
   assert.ok(Math.abs(result.a! - (80 * .4 + 82.5 * .4 + 80 * .2)) < 1e-12);
 });
+test('Un curso sin notas I–III queda fuera de promedios, avance y pendientes sin borrar IV', () => {
+  const settings = approved();
+  const student = complete(settings);
+  const math = student.academic.find(area => area.areaId === 'matematica')!;
+  math.grades.forEach(row => { row.splice(0, row.length, '', '', '', 'AD'); });
+  math.validated = false;
+  const original = structuredClone(student);
+  const result = calculateStudent(student, settings);
+  assert.equal(hasActiveGrades(math), false);
+  assert.equal(activeAreas(student, settings).length, 4);
+  assert.equal('matematica' in result.areaAverages, false);
+  for (const field of ['g', 'r', 'p', 'a'] as const) assert.equal(result[field], 75, field);
+  assert.equal(result.s1, 3);
+  assert.equal(result.s2, 3);
+  assert.equal(result.pa, 100);
+  assert.equal(result.academicComplete, true);
+  assert.equal(result.eligible, true);
+  assert.ok(result.pending.every(message => !message.includes('Matemática') && !message.includes('notas del')));
+  assert.deepEqual(student, original);
+  student.academic = student.academic.filter(area => area.areaId !== 'matematica');
+  assert.deepEqual(calculateStudent(student, settings), result);
+  assert.equal(settings.areas.filter(area => area.eligible).length, 5);
+});
+test('Un curso parcialmente cargado sigue exigiendo todas sus competencias I–III', () => {
+  const settings = approved();
+  const student = complete(settings);
+  const math = student.academic.find(area => area.areaId === 'matematica')!;
+  math.grades[0][2] = '';
+  assert.equal(hasActiveGrades(math), true);
+  assert.equal(isAreaComplete(settings.areas[0], math), false);
+  const result = calculateStudent(student, settings);
+  assert.equal(result.a, null);
+  assert.equal(result.r, null);
+  assert.equal(result.science, null);
+  assert.equal(result.letters, 3);
+  assert.equal(result.s2, null);
+  assert.equal(result.academicComplete, false);
+  assert.ok(result.pa < 100);
+  assert.ok(result.pending.includes('Faltan 1 notas del III bimestre.'));
+  assert.equal(result.eligible, false);
+  math.grades[0][2] = 'A';
+  assert.equal(isAreaComplete(settings.areas[0], math), true);
+});
+test('R usa el grupo cursado completo cuando Ciencias o Letras carece de notas', () => {
+  for (const scienceOnly of [true, false]) {
+    for (const scienceWeight of [.6, 0, 1]) {
+      const settings = approved(); settings.scienceWeight = scienceWeight;
+      const student = complete(settings);
+      student.academic.forEach(area => {
+        const isScience = ['matematica', 'ciencia'].includes(area.areaId);
+        const grade = isScience === scienceOnly ? area.areaId === 'matematica' ? 'AD' : 'A' : '';
+        area.grades.forEach(row => row.fill(grade));
+        area.validated = isScience === scienceOnly;
+      });
+      const result = calculateStudent(student, settings);
+      const expected = scienceOnly ? 87.5 : 75;
+      assert.equal(result.science, scienceOnly ? 3.5 : null);
+      assert.equal(result.letters, scienceOnly ? null : 3);
+      for (const field of ['g', 'r', 'p', 'a'] as const) assert.equal(result[field], expected, field);
+      assert.equal(result.pa, 100);
+      assert.equal(result.eligible, true);
+    }
+  }
+});
+test('Sin ningún curso con notas activas no se inventa A ni avance académico', () => {
+  const settings = approved();
+  const student = complete(settings);
+  student.academic.forEach(area => area.grades.forEach(row => { row.splice(0, row.length, '', '', '', 'AD'); }));
+  const original = structuredClone(student);
+  const result = calculateStudent(student, settings);
+  for (const field of ['g', 'r', 'p', 'a', 's1', 's2', 'science', 'letters', 'total'] as const) assert.equal(result[field], null, field);
+  assert.equal(result.pa, 0);
+  assert.equal(result.academicComplete, false);
+  assert.deepEqual(result.areaAverages, {});
+  assert.equal(result.eligible, false);
+  assert.deepEqual(rankStudents([student], settings), []);
+  assert.ok(result.pending.every(message => !message.startsWith('Validar área:') && !message.includes('notas del')));
+  assert.deepEqual(student, original);
+});
 test('Datos completos sin confirmación final no participan en ranking', () => {
   const settings = approved();
   const student = complete(settings);
@@ -159,17 +240,34 @@ test('Disciplina nunca baja de0', () => {
   student.discipline.incidents = Array.from({ length: 10 }, (_, i) => ({ ...student.discipline.incidents[0], id: String(i) }));
   assert.equal(calculateStudent(student, settings).discipline, 0);
 });
-test('Incidencia verificada sin medida documentada sigue pendiente', () => {
+test('Una incidencia verificada necesita categoría, fecha y descripción; medida y evidencia son opcionales', () => {
   const settings = approved();
   const student = complete(settings);
   student.discipline.incidents[0].measure = '';
+  student.discipline.incidents[0].evidence = '';
   const result = calculateStudent(student, settings);
-  assert.equal(result.discipline, null);
-  assert.equal(result.b, null);
-  assert.equal(result.eligible, false);
-  assert.ok(result.pending.some(p => p.includes('medida')));
-  student.discipline.incidents[0].measure = 'Acuerdo formativo documentado';
-  assert.equal(calculateStudent(student, settings).discipline, 85);
+  assert.deepEqual(incidentRequiredFields(student.discipline.incidents[0], settings.disciplineTypes), []);
+  assert.equal(result.discipline, 85);
+  assert.equal(result.b, 89.5);
+  assert.equal(result.eligible, true);
+  settings.disciplineTypes.find(type => type.id === 'grave')!.discount = null;
+  assert.deepEqual(incidentRequiredFields(student.discipline.incidents[0], settings.disciplineTypes), []);
+  const pendingDiscount = calculateStudent(student, settings);
+  assert.equal(pendingDiscount.discipline, null);
+  assert.equal(pendingDiscount.eligible, false);
+  assert.ok(pendingDiscount.pending.some(message => message.includes('descuento aprobado')));
+});
+test('Una incidencia con categoría desconocida, fecha imposible o descripción vacía sigue pendiente', () => {
+  const settings = approved();
+  for (const patch of [{ typeId: '' }, { typeId: 'desconocida' }, { date: '' }, { date: '2026-02-30' }, { description: '   ' }]) {
+    const student = complete(settings);
+    Object.assign(student.discipline.incidents[0], patch);
+    const result = calculateStudent(student, settings);
+    assert.ok(incidentRequiredFields(student.discipline.incidents[0], settings.disciplineTypes).length);
+    assert.equal(result.discipline, null);
+    assert.equal(result.b, null);
+    assert.equal(result.eligible, false);
+  }
 });
 test('Justificados y no exigibles se excluyen sin asignar0/100 a un componente N/A', () => {
   const settings = approved();
@@ -194,14 +292,14 @@ test('Justificados y no exigibles se excluyen sin asignar0/100 a un componente N
   assert.equal(result.c, null);
   assert.equal(result.eligible, false);
 });
-test('Sin registros no significa No aplica; una fila No aplica necesita justificación y validación', () => {
+test('Sin registros no significa No aplica; una fila No aplica necesita sus datos mínimos y validación', () => {
   const settings = approved(); settings.naPolicy = 'other_component'; settings.naPolicyApproved = true;
   const student = complete(settings); student.institutional = [];
   assert.equal(calculateStudent(student, settings).c, null);
   assert.equal(calculateStudent(student, settings).participationNA, false);
   student.institutional = [{ ...records('Acta de no aplicabilidad', 1, 1)[0], status: 'na', justification: '' }];
-  assert.equal(calculateStudent(student, settings).c, null);
-  student.institutional[0].justification = 'No aplica según acta de cohorte';
+  assert.equal(calculateStudent(student, settings).c, 90);
+  assert.equal(calculateStudent(student, settings).eligible, true);
   student.institutional[0].validated = false;
   const result = calculateStudent(student, settings);
   assert.equal(result.c, 90);
@@ -334,7 +432,7 @@ test('Los eventos comunes no aplicables no se exigen; omitidos o [] conservan co
   delete settings.cohortRecords;
   assert.equal(calculateStudent(student, settings).c, 83);
 });
-test('Convocatoria común N/A sigue exigiendo su fila, justificación y validación', () => {
+test('Convocatoria común N/A conserva su vinculación y validación con justificación opcional', () => {
   const settings = approved();
   settings.cohortRecords = [commonEvent({ required: false })];
   const student = complete(settings);
@@ -346,7 +444,8 @@ test('Convocatoria común N/A sigue exigiendo su fila, justificación y validaci
   assert.ok(calculateStudent(student, settings).pc < 100);
   event.validated = true;
   event.justification = '';
-  assert.equal(calculateStudent(student, settings).c, null);
+  event.evidence = '';
+  assert.equal(calculateStudent(student, settings).eligible, true);
 });
 test('Pauta común valida ids únicos, nombre y fechas reales', () => {
   const settings = approved(); settings.cohortRecords = [commonEvent()];
@@ -358,55 +457,62 @@ test('Pauta común valida ids únicos, nombre y fechas reales', () => {
     assert.ok(validateSettings(settings).some(e => e.includes('fecha válida')));
   }
 });
-test('Cumplimiento sin evidencia documentada no produce C ni PC100 ni ranking', () => {
+test('La evidencia es opcional en compromisos familiares e institucionales históricos', () => {
   const settings = approved();
   for (const kind of ['institutional', 'family'] as const) {
     const student = complete(settings);
     student[kind][0].evidence = '   ';
+    student[kind][0].justification = '';
     const result = calculateStudent(student, settings);
-    assert.equal(result.c, null);
-    assert.equal(result.total, null);
-    assert.ok(result.pc < 100);
-    assert.ok(result.progress < 100);
-    assert.equal(result.eligible, false);
-    assert.ok(result.pending.some(p => p.includes('falta evidencia')));
-    student[kind][0].evidence = 'Acta de asistencia y cumplimiento';
-    assert.equal(calculateStudent(student, settings).eligible, true);
+    assert.equal(result.c, 83);
+    assert.equal(result.pc, 100);
+    assert.equal(result.progress, 100);
+    assert.equal(result.eligible, true);
+    assert.ok(result.pending.every(message => !message.includes('evidencia') && !message.includes('justificación')));
   }
 });
-test('Un registro no exigible necesita justificación y evidencia para su validación', () => {
+test('Un registro no exigible conserva su exclusión con justificación y evidencia opcionales', () => {
   const settings = approved();
   const student = complete(settings);
   student.institutional[0].required = false;
-  let result = calculateStudent(student, settings);
-  assert.equal(result.c, null);
-  assert.ok(result.pc < 100);
-  assert.ok(result.pending.some(p => p.includes('falta justificación')));
-  student.institutional[0].justification = 'Dispensa aprobada de convocatoria';
-  result = calculateStudent(student, settings);
-  assert.ok(result.c !== null);
-  assert.equal(result.eligible, true);
+  student.institutional[0].justification = '';
   student.institutional[0].evidence = '';
-  result = calculateStudent(student, settings);
-  assert.equal(result.c, null);
-  assert.ok(result.pc < 100);
+  const result = calculateStudent(student, settings);
+  assert.equal(result.participation, 100 * 7 / 9);
+  assert.equal(result.pc, 100);
+  assert.equal(result.eligible, true);
 });
 
-test('Un incumplimiento sin observación ni evidencia queda pendiente de evaluación', () => {
-  const settings = approved(); const student = complete(settings);
-  student.institutional[0].status = 'missed';
-  student.institutional[0].justification = '';
-  let result = calculateStudent(student, settings);
-  assert.equal(result.c, null);
-  assert.ok(result.pc < 100);
-  assert.ok(result.pending.some(message => message.includes('falta justificación')));
-  student.institutional[0].justification = 'No asistió al concurso convocado';
-  student.institutional[0].evidence = '';
-  result = calculateStudent(student, settings);
-  assert.equal(result.c, null);
-  assert.ok(result.pending.some(message => message.includes('falta evidencia')));
-  student.institutional[0].evidence = 'Lista de asistencia firmada';
-  assert.equal(calculateStudent(student, settings).eligible, true);
+test('Estados cumplido, incumplido, justificado y N/A no exigen evidencia ni justificación', () => {
+  const settings = approved();
+  for (const kind of ['institutional', 'family'] as const) {
+    for (const status of ['fulfilled', 'missed', 'justified', 'na'] as const) {
+      const student = complete(settings);
+      Object.assign(student[kind][0], { status, justification: '', evidence: '' });
+      const original = structuredClone(student);
+      const result = calculateStudent(student, settings);
+      assert.deepEqual(commitmentRequiredFields(student[kind][0]), []);
+      assert.ok(result.c !== null);
+      assert.equal(result.pc, 100);
+      assert.equal(result.eligible, true);
+      assert.deepEqual(student, original);
+    }
+  }
+});
+test('Nombre, fecha real y estado siguen siendo obligatorios en compromisos familiares e históricos', () => {
+  const settings = approved();
+  for (const kind of ['institutional', 'family'] as const) {
+    for (const patch of [{ name: '   ' }, { date: '' }, { date: '2026-02-30' }, { status: 'pending' as const }]) {
+      const student = complete(settings);
+      Object.assign(student[kind][0], patch, { evidence: '', justification: '' });
+      const result = calculateStudent(student, settings);
+      assert.ok(commitmentRequiredFields(student[kind][0]).length);
+      assert.equal(result.c, null);
+      assert.ok(result.pc < 100);
+      assert.equal(result.eligible, false);
+      assert.deepEqual(rankStudents([student], settings), []);
+    }
+  }
 });
 
 test('Solo se normalizan los grados completos de 2.º F, 3.º F y 4.º F de secundaria', () => {

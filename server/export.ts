@@ -3,6 +3,7 @@ import type { AppState } from '../shared/types.js';
 import { calculateStudent, rankStudents } from '../shared/calculations.js';
 import { ACTIVE_BIMESTERS, normalizeCohort } from '../shared/policy.js';
 import { CONTEST_SCOPE_OPTIONS } from '../shared/contests.js';
+import { hasActiveGrades } from '../shared/academic-policy.js';
 
 export async function buildWorkbook(state: AppState, filters: {grade?:string;section?:string} = {}) {
   const workbook=new ExcelJS.Workbook();
@@ -24,9 +25,9 @@ export async function buildWorkbook(state: AppState, filters: {grade?:string;sec
       state.settings.performanceWeights.attendance,state.settings.performanceWeights.discipline,state.settings.commitmentWeights.participation,state.settings.commitmentWeights.family,
       pdfs.length?pdfs.map(p=>`${p.name} | SHA-256 ${p.hash} | ${p.status}`).join('\n'):'Registro manual revisado',
       JSON.stringify(s.attendance),JSON.stringify(s.discipline),JSON.stringify(s.institutional),JSON.stringify(s.family),JSON.stringify(s.history),
-      ...ACTIVE_BIMESTERS.map((_,period)=>JSON.stringify(s.academic.map(area=>({areaId:area.areaId,grades:area.grades.map(row=>row[period]??'')})))),
+      ...ACTIVE_BIMESTERS.map((_,period)=>JSON.stringify(s.academic.filter(hasActiveGrades).map(area=>({areaId:area.areaId,grades:area.grades.map(row=>row[period]??'')})))),
       JSON.stringify(s.institutional.map(record=>({id:record.id,name:record.name,placement:record.placement??''}))),
-      JSON.stringify(s.institutional.map(record=>({id:record.id,name:record.name,representingSchool:record.representingSchool??null}))),JSON.stringify(pdfs.flatMap(pdf=>pdf.supplementalAreas??[]))]);
+      JSON.stringify(s.institutional.map(record=>({id:record.id,name:record.name,representingSchool:record.representingSchool??null}))),JSON.stringify(pdfs.flatMap(pdf=>pdf.supplementalAreas??[]).filter(hasActiveGrades))]);
   }
   const pending=workbook.addWorksheet('PENDIENTES');
   pending.addRow(['Código','Estudiante','Grado','Sección','Avance (%)','PA (%)','PB (%)','PC (%)','Estado','Dimensiones y validaciones pendientes']);
@@ -41,7 +42,7 @@ export async function buildWorkbook(state: AppState, filters: {grade?:string;sec
     ['Fórmula total','(A + B + C) / 3; sin sustitución de dimensiones faltantes'],
     ['Regla de empate','Posición compartida al coincidir el total presentado con dos decimales'],
     ['Cohorte comparable','Grado y sección; posiciones independientes por cohorte'],
-    ['Salones admitidos','2.º F, 3.º F y 4.º F'],['Bimestres evaluados','I, II y III'],['Progresión','Promedio I–II comparado con III'],
+    ['Salones admitidos','2.º F, 3.º F y 4.º F'],['Bimestres evaluados','I, II y III'],['Áreas aplicables','Solo áreas con al menos una nota válida de I–III; las totalmente vacías o con solo IV se excluyen.'],['Validación manual académica','Confirma las notas reconocidas de las áreas aplicables completas; no agrega calificaciones.'],['Mínimo de incidencia','Categoría, fecha y descripción. Medida y evidencia opcionales.'],['Mínimo de compromiso familiar','Actividad, fecha y estado. Observación y evidencia opcionales.'],['Progresión','Promedio I–II comparado con III'],
     ['Filtro grado',filters.grade||'Todos'],['Filtro sección',filters.section||'Todas'],
     ['Criterios institucionales aprobados',state.settings.criteriaApproved?'Sí':'No'],
     ['Evaluación cerrada',state.settings.closed?'Sí':'No'],

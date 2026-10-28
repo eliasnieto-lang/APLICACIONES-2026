@@ -4,6 +4,7 @@ import { ACTIVE_BIMESTERS, normalizeCohort } from './policy.js';
 import { applyFilenameIdentity, resolveReportIdentity } from './filename-identity.js';
 import type { AppState, Grade, PdfRecord, Settings, Student } from './types.js';
 import { reportWarnings, type ExtractedReport } from './pdf-parser.js';
+import { activeAreas, hasActiveGrades, isAreaComplete } from './academic-policy.js';
 
 type Identity = NonNullable<PdfRecord['confirmedIdentity']>;
 const stamp = () => new Date().toISOString();
@@ -53,13 +54,13 @@ function matchingStudents(state: AppState, identity: Identity): Student[] {
     : state.students.filter(candidate => sameNameAndCohort(candidate, identity));
 }
 
-/** Copies only the three active periods. Manual attendance, discipline and commitments are retained. */
+/** Copies active periods and retains historical grades. Manual B/C records are retained. */
 export function linkAcademic(student: Student, pdf: PdfRecord, settings: Settings, replace = true): void {
   const before = structuredClone(student.academic);
   student.academic = settings.areas.map(def => {
     const source = pdf.areas.find(area => area.areaId === def.id);
     const old = replace ? undefined : student.academic.find(area => area.areaId === def.id);
-    return { areaId: def.id, grades: def.competencies.map((_, index) => ACTIVE_BIMESTERS.map((__, period) => {
+    return { areaId: def.id, grades: def.competencies.map((_, index) => Array.from({ length: Math.max(ACTIVE_BIMESTERS.length, source?.grades[index]?.length ?? 0, old?.grades[index]?.length ?? 0) }, (__, period) => {
       const value = source?.grades[index]?.[period] ?? old?.grades[index]?.[period] ?? '';
       return (['AD', 'A', 'B', 'C', ''].includes(value) ? value : '') as Grade;
     })), validated: false };
@@ -198,12 +199,12 @@ export function applyRescannedGrades(state: AppState, pdfId: string, reading: Ex
   pdf.areas = state.settings.areas.map(def => {
     const source = reading.areas.find(area => area.areaId === def.id);
     const previous = pdf.areas.find(area => area.areaId === def.id);
-    const grades = def.competencies.map((_, index) => ACTIVE_BIMESTERS.map((__, period) => {
+    const grades = def.competencies.map((_, index) => Array.from({ length: Math.max(ACTIVE_BIMESTERS.length, source?.grades[index]?.length ?? 0, previous?.grades[index]?.length ?? 0) }, (__, period) => {
       const recognized = source?.grades[index]?.[period];
       const retained = previous?.grades[index]?.[period];
       return gradeFromDocument(recognized, retained);
     }));
-    return { areaId: def.id, grades, validated: grades.length > 0 && grades.every(row => row.length === ACTIVE_BIMESTERS.length && row.every(Boolean)) };
+    return { areaId: def.id, grades, validated: isAreaComplete(def, { grades }) };
   });
   const supplemental = reading.supplementalAreas ?? [];
   const previousSupplemental = pdf.supplementalAreas ?? [];
@@ -215,7 +216,7 @@ export function applyRescannedGrades(state: AppState, pdfId: string, reading: Ex
       return { definition: structuredClone(area.definition), grades: area.definition.competencies.map(competency => {
         const sourceIndex = source?.definition.competencies.indexOf(competency) ?? -1;
         const previousIndex = previous?.definition.competencies.indexOf(competency) ?? -1;
-        return ACTIVE_BIMESTERS.map((_, period) => gradeFromDocument(sourceIndex >= 0 ? source?.grades[sourceIndex]?.[period] : undefined, previousIndex >= 0 ? previous?.grades[previousIndex]?.[period] : undefined));
+        return Array.from({ length: Math.max(ACTIVE_BIMESTERS.length, sourceIndex >= 0 ? source?.grades[sourceIndex]?.length ?? 0 : 0, previousIndex >= 0 ? previous?.grades[previousIndex]?.length ?? 0 : 0) }, (_, period) => gradeFromDocument(sourceIndex >= 0 ? source?.grades[sourceIndex]?.[period] : undefined, previousIndex >= 0 ? previous?.grades[previousIndex]?.[period] : undefined));
       }) };
     });
   }
@@ -224,7 +225,15 @@ export function applyRescannedGrades(state: AppState, pdfId: string, reading: Ex
   const initialSummary = new Set(reportWarnings(reading, state.settings));
   pdf.warnings = [...new Set([...reading.warnings.filter(warning => !initialSummary.has(warning)), ...reportWarnings(pdf, state.settings)])];
   student.academic = structuredClone(pdf.areas);
-  const eligible = state.settings.areas.filter(area => area.eligible);
+  for (const area of student.academic) {
+    const previous = before.find(candidate => candidate.areaId === area.areaId);
+    area.grades.forEach((row, competency) => {
+      for (let period = ACTIVE_BIMESTERS.length; period < (previous?.grades[competency]?.length ?? 0); period++) {
+        row[period] ??= previous!.grades[competency][period];
+      }
+    });
+  }
+  const eligible = activeAreas(student, state.settings);
   student.validated.academic = eligible.length > 0 && eligible.every(def => student.academic.find(area => area.areaId === def.id)?.validated === true);
   student.updatedAt = stamp();
   audit(student, 'Actualización automática de notas desde el PDF original', before, student.academic);
@@ -279,10 +288,14 @@ export function confirmReport(state: AppState, pdfId: string, options: { identit
   pdf.studentId = student.id;
   if (!preserveAcademic) {
     linkAcademic(student, pdf, state.settings);
-    for (const area of student.academic) area.validated = area.grades.length > 0 && area.grades.every(row => row.length === ACTIVE_BIMESTERS.length && row.every(Boolean));
-    const eligibleAreas = state.settings.areas.filter(area => area.eligible);
+    for (const area of student.academic) {
+      const definition = state.settings.areas.find(candidate => candidate.id === area.areaId);
+      area.validated = Boolean(definition && isAreaComplete(definition, area));
+    }
+    const eligibleAreas = activeAreas(student, state.settings);
     student.validated.academic = eligibleAreas.length > 0 && eligibleAreas.every(def => student!.academic.find(area => area.areaId === def.id)?.validated === true);
   }
+  for (const area of student.academic) if (!hasActiveGrades(area)) area.validated = false;
   pdf.status = 'validated';
   student.reportApproval = { pdfId: pdf.id, approvedAt: stamp() };
   student.updatedAt = stamp();

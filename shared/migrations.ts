@@ -2,7 +2,8 @@ import type { AppState, PdfRecord, Student } from './types';
 import { isReportApproved, normalizeCohort } from './policy';
 import { applyFilenameIdentity, parseReportFilename, resolveReportIdentity } from './filename-identity';
 import { registerImportedReport } from './report-workflow';
-import { ACADEMIC_CONTEST_LABEL } from './contests';
+import { ACADEMIC_CONTEST_LABEL, isAcademicContest } from './contests';
+import { hasActiveGrades } from './academic-policy';
 
 const identityKey = (value: string): string => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('es');
 const validTimestamp = (value: string | undefined): value is string => Boolean(value?.trim() && Number.isFinite(Date.parse(value)));
@@ -39,6 +40,7 @@ export function migrateState(state: AppState): AppState {
     if (cohort) { student.grade = cohort.grade; student.section = cohort.section; }
   }
   for (const pdf of result.pdfs) {
+    for (const area of pdf.areas) if (!hasActiveGrades(area)) area.validated = false;
     const priorName = pdf.extractedName;
     applyFilenameIdentity(pdf);
     const filename = parseReportFilename(pdf.name);
@@ -59,6 +61,16 @@ export function migrateState(state: AppState): AppState {
     if (!pdf.studentId && ['pending', 'review'].includes(pdf.status) && filename.name && normalizeCohort(filename.grade, filename.section)) registerImportedReport(result, pdf);
   }
   for (const student of result.students) {
+    for (const area of student.academic) if (!hasActiveGrades(area)) area.validated = false;
+    for (const incident of student.discipline.incidents) {
+      incident.measure ??= '';
+      incident.evidence ??= '';
+    }
+    for (const record of [...student.institutional, ...student.family]) {
+      record.justification ??= '';
+      record.evidence ??= '';
+      record.required ??= isAcademicContest(record) ? false : true;
+    }
     student.pdfIds = [...new Set([...student.pdfIds, ...result.pdfs.filter(pdf => pdf.studentId === student.id).map(pdf => pdf.id)])].filter(id => result.pdfs.some(pdf => pdf.id === id && pdf.studentId === student.id));
     if (upgrading) student.validated.academic = false;
 

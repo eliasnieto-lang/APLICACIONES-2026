@@ -133,16 +133,19 @@ test('Los estados explícitos justificado y No aplica conservan la regla común 
   assert.equal(result.eligible, true);
 });
 
-test('La evidencia y las condiciones de los compromisos familiares permanecen obligatorias', () => {
+test('Un compromiso familiar conserva sus campos mínimos con evidencia y justificación opcionales', () => {
   const config = settings();
   const student = complete(config);
   // Even a typed-looking entry in the family array follows family rules.
   student.family = [contest({ id: 'familia', name: 'Reunión familiar', required: true })];
   const result = calculateStudent(student, config);
   assert.equal(result.participation, 40);
-  assert.equal(result.family, null);
-  assert.equal(result.c, null);
-  assert.ok(result.pending.some(message => message.includes('Compromiso familiar') && message.includes('falta evidencia')));
+  assert.equal(result.family, 100);
+  assert.equal(result.c, 58);
+  assert.equal(result.pc, 100);
+  assert.equal(result.eligible, true);
+  student.family[0].name = '';
+  assert.equal(calculateStudent(student, config).family, null);
 });
 
 test('Los registros históricos conservan la fórmula anterior sin convertirse por su nombre', () => {
@@ -157,7 +160,8 @@ test('Los registros históricos conservan la fórmula anterior sin convertirse p
   assert.equal(result.eligible, true);
   assert.deepEqual(student.institutional, before);
   student.institutional[0].evidence = '';
-  assert.equal(calculateStudent(student, config).participation, null);
+  assert.equal(calculateStudent(student, config).participation, 80);
+  assert.equal(calculateStudent(student, config).eligible, true);
 });
 
 test('Mezclar registros históricos y concursos nuevos requiere clasificar los históricos expresamente', () => {

@@ -1,6 +1,7 @@
 import type { AcademicArea, Grade, Settings, SupplementalArea } from './types.js';
 import { ACTIVE_BIMESTERS, normalizeCohort } from './policy.js';
 import { SUPPLEMENTAL_REPORT_AREAS } from './report-catalog.js';
+import { hasActiveGrades } from './academic-policy.js';
 
 export interface ExtractedReport {
   extractedCode: string;
@@ -163,10 +164,18 @@ export function reportWarnings(report: Pick<ExtractedReport, 'extractedCode' | '
   else if (!normalizeCohort(report.extractedGrade, report.extractedSection)) warnings.push('El aula reconocida no corresponde a 2.º F, 3.º F o 4.º F. Revise el PDF original antes de confirmar.');
   if (!report.period) warnings.push('Año de la libreta no reconocido; confirme que corresponde al periodo de evaluación.');
   else if (Number(report.period) !== settings.year - 1) warnings.push(`La libreta indica ${report.period}; se esperaba ${settings.year - 1}. Revise el periodo.`);
-  const expected = settings.areas.reduce((sum, area) => sum + area.competencies.length * ACTIVE_BIMESTERS.length, 0)
-    + (report.supplementalAreas || []).reduce((sum, area) => sum + area.definition.competencies.length * ACTIVE_BIMESTERS.length, 0);
-  const recognized = [...report.areas, ...(report.supplementalAreas || [])].reduce((sum, area) => sum + area.grades.reduce((total, row) => total + row.filter(Boolean).length, 0), 0);
-  if (recognized < expected) warnings.push(`Se reconocieron ${recognized} de ${expected} casillas del catálogo. Reintente el escaneo con una copia legible del PDF.`);
+  const courses = [
+    ...settings.areas.flatMap(definition => {
+      const input = report.areas.find(area => area.areaId === definition.id);
+      return input && hasActiveGrades(input) ? [{ definition, grades: input.grades }] : [];
+    }),
+    ...(report.supplementalAreas || []).filter(hasActiveGrades),
+  ];
+  const expected = courses.reduce((sum, area) => sum + area.definition.competencies.length * ACTIVE_BIMESTERS.length, 0);
+  const recognized = courses.reduce((sum, area) => sum + area.grades.reduce((total, row) =>
+    total + ACTIVE_BIMESTERS.filter((_, index) => ['AD', 'A', 'B', 'C'].includes(row[index] || '')).length, 0), 0);
+  if (!courses.length) warnings.push('No se reconocieron notas en ningún curso de los bimestres I–III. Reintente el escaneo con una copia legible del PDF.');
+  else if (recognized < expected) warnings.push(`Se reconocieron ${recognized} de ${expected} casillas del catálogo. Reintente el escaneo con una copia legible del PDF.`);
   return warnings;
 }
 

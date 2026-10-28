@@ -1,10 +1,19 @@
 import { REPORT_REVIEW_WARNING, reportWarnings, type ExtractedReport } from './pdf-parser.js';
-import { normalizeCohort } from './policy.js';
+import { ACTIVE_BIMESTERS, normalizeCohort } from './policy.js';
+import { hasActiveGrades } from './academic-policy.js';
 import type { Grade, Settings } from './types.js';
 
 const metadataFields = ['extractedCode', 'extractedName', 'extractedGrade', 'extractedSection', 'period'] as const;
 const gradeTables = (report: ExtractedReport) => [...report.areas, ...(report.supplementalAreas || [])];
 const labelKey = (value: string) => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+/** Empty courses are not taken; an entirely unread report still needs recovery. */
+function needsGradeRecovery(report: ExtractedReport): boolean {
+  const tables = gradeTables(report);
+  const active = tables.filter(hasActiveGrades);
+  return (active.length ? active : tables).some(area => area.grades.some(row =>
+    ACTIVE_BIMESTERS.some((_, index) => !['AD', 'A', 'B', 'C'].includes(row[index] || ''))));
+}
 
 export interface PositionedPdfText {
   text: string;
@@ -50,12 +59,12 @@ export function layoutPdfText(items: PositionedPdfText[]): string {
 /** Image recognition is useful only while a labelled field or a catalog cell is missing. */
 export function needsPdfRecovery(report: ExtractedReport, requireMetadata = true): boolean {
   return requireMetadata && metadataFields.some(field => !report[field].trim())
-    || gradeTables(report).some(area => area.grades.some(row => row.some(cell => !cell)));
+    || needsGradeRecovery(report);
 }
 
 /** Vector outlines and unusable font mappings can hide grades without any raster image. */
 export function needsRenderedGradeRecovery(report: ExtractedReport, settings: Settings, forceGrades = false): boolean {
-  if (!gradeTables(report).some(area => area.grades.some(row => row.some(cell => !cell)))) return false;
+  if (!needsGradeRecovery(report)) return false;
   if (forceGrades) return true;
   const text = report.text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ');
   const hasTable = /\b(?:bimestres?|calificaciones?)\b/.test(text) && /\bcompetencias?\b/.test(text);

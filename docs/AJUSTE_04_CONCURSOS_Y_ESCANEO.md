@@ -1,5 +1,7 @@
 # Concursos académicos y lectura completa de las notas
 
+El ajuste posterior [AJUSTE_05_AREAS_Y_VALIDACION.md](AJUSTE_05_AREAS_Y_VALIDACION.md) excluye cursos totalmente vacíos y simplifica las incidencias y los compromisos familiares.
+
 Esta modificación incorpora las dos correcciones más recientes del usuario.
 
 ## Participación institucional

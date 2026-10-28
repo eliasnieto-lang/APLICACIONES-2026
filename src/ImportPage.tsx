@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import { UploadCloud, Files, FileText, CircleCheck, CircleAlert, LoaderCircle, Eye, ExternalLink, Plus, Trash2, X } from 'lucide-react';
 import type { Dataset, PdfRecord, Settings, Student } from '../shared/types';
 import { ACTIVE_BIMESTERS, normalizeCohort } from '../shared/policy';
+import { hasActiveGrades } from '../shared/academic-policy';
+import { reportWarnings } from '../shared/pdf-parser';
 import { resolveReportIdentity } from '../shared/filename-identity';
 
 interface Props {
@@ -17,11 +19,12 @@ const displayReadWarning = (warning: string) => warning
   .replace(/:\s*complete la identidad antes de vincular\.?/i, '. La lectura automática no pudo completar la identificación.')
   .replace(/:\s*complételos comparando con el PDF original\.?/i, '. La lectura automática no pudo completar la identificación.')
   .replace(/:\s*confirme el aula comparando con el PDF original\.?/i, '. La lectura automática no pudo reconocer el aula.');
-const reviewWarnings = (pdf: PdfRecord, name = reportIdentity(pdf).name) => {
+const reviewWarnings = (pdf: PdfRecord, name = reportIdentity(pdf).name, settings: Settings) => {
   const identity = reportIdentity(pdf);
   const hasName = recognizedValue(name);
   const hasClassroom = Boolean(normalizeCohort(identity.grade, identity.section));
-  return pdf.warnings.filter(warning => {
+  const warnings = [...pdf.warnings.filter(warning => !/^Se reconocieron \d+ de \d+ casillas|^No se reconocieron notas/.test(warning)), ...reportWarnings(pdf, settings).filter(warning => /^Se reconocieron \d+ de \d+ casillas|^No se reconocieron notas/.test(warning))];
+  return warnings.filter(warning => {
     if (/c[oó]digo|a[ñn]o de la libreta no reconocido|revise el per[ií]odo|confirme que corresponde al per[ií]odo/i.test(warning)) return false;
     if (hasName && /apellidos y nombres.*no reconocid/i.test(warning)) return false;
     if (hasClassroom && /grado o secci[oó]n no reconocid|aula reconocida no corresponde/i.test(warning)) return false;
@@ -50,11 +53,11 @@ export default function ImportPage({ pdfs, students, settings, dataset, onRefres
   const [nameDrafts, setNameDrafts] = useState<Record<string, string>>({});
   const selected = pdfs.find(p => p.id === selectedId);
   const identity = selected ? reportIdentity(selected) : null;
-  const previewAreas = selected ? [...selected.areas.map(area => ({ ...area, definition: settings.areas.find(item => item.id === area.areaId) })), ...(selected.supplementalAreas || []).map(area => ({ ...area, areaId: area.definition.id }))] : [];
+  const previewAreas = selected ? [...selected.areas.map(area => ({ ...area, definition: settings.areas.find(item => item.id === area.areaId) })), ...(selected.supplementalAreas || []).map(area => ({ ...area, areaId: area.definition.id }))].filter(area => hasActiveGrades(area)) : [];
   const draftName = selected ? nameDrafts[selected.id] ?? identity?.name ?? '' : '';
   const cohort = identity && normalizeCohort(identity.grade, identity.section);
   const identityComplete = Boolean(recognizedValue(draftName) && cohort);
-  const selectedWarnings = selected ? reviewWarnings(selected, draftName) : [];
+  const selectedWarnings = selected ? reviewWarnings(selected, draftName, settings) : [];
   const reviewLocked = busy || uploading || settings.closed || !selected || !['pending', 'review'].includes(selected.status);
   const url = (path: string) => `${path}${path.includes('?') ? '&' : '?'}dataset=${dataset}`;
   const select = (pdf: PdfRecord) => {
@@ -183,7 +186,7 @@ export default function ImportPage({ pdfs, students, settings, dataset, onRefres
     </section>
     {queue.length > 0 && <section className="card"><div className="card-header"><h2>Cola de procesamiento</h2><span className="muted">{queue.filter(item => item.state === 'done').length} procesados · {queue.filter(item => item.state === 'pending' || item.state === 'processing').length} pendientes · {queue.filter(item => item.state === 'failed').length} fallidos</span></div><div className="import-queue">{queue.map(item => <div key={item.id} className="import-queue-row">{item.state === 'processing' ? <LoaderCircle className="spin" size={16}/> : item.state === 'done' ? <CircleCheck size={16}/> : item.state === 'failed' ? <CircleAlert size={16}/> : <FileText size={16}/>}<span>{item.name}</span><span className="muted">{item.state === 'processing' ? 'Extrayendo texto / OCR…' : item.state === 'pending' ? 'En espera' : item.state === 'done' ? 'Procesado' : item.error}</span></div>)}</div></section>}
     <section className="card"><div className="card-header"><div><h2>Documentos importados <span className="count-badge">{pdfs.length}</span></h2><p className="muted">Comprueba los apellidos y nombres reconocidos desde el archivo, corrígelos si hace falta y confirma la libreta.</p></div></div>
-      {pdfs.length === 0 ? <div className="empty-state"><FileText size={32}/><h3>Aún no hay libretas</h3><p>La primera carga aparecerá aquí con su estado y observaciones.</p></div> : <div className="table-wrap"><table><thead><tr><th>Documento</th><th>Estudiante reconocido</th><th>Estado</th><th>Lectura</th><th></th></tr></thead><tbody>{[...pdfs].reverse().map(pdf => <tr key={pdf.id} className={pdf.id === selectedId ? 'selected' : ''}><td><div className="file-cell"><FileText size={18}/><div><strong>{pdf.name}</strong><small className="muted">{(pdf.size / 1024).toFixed(0)} KB · {new Date(pdf.uploadedAt).toLocaleDateString('es-PE')}</small></div></div></td><td>{(nameDrafts[pdf.id] ?? reportIdentity(pdf).name) || 'Nombre por revisar'}<small className="muted">{normalizeCohort(reportIdentity(pdf).grade, reportIdentity(pdf).section)?.label || 'Aula por revisar'}</small></td><td><span className={`badge ${pdf.status === 'validated' ? 'success' : pdf.status === 'failed' ? 'danger' : 'warning'}`}>{labels[pdf.status]}</span></td><td><span className="muted">{pdf.ocr ? 'OCR' : 'Texto'} · {reviewWarnings(pdf, nameDrafts[pdf.id]).length} observaciones</span></td><td><button className="button small secondary" onClick={() => select(pdf)}><Eye size={15}/>Revisar</button></td></tr>)}</tbody></table></div>}
+      {pdfs.length === 0 ? <div className="empty-state"><FileText size={32}/><h3>Aún no hay libretas</h3><p>La primera carga aparecerá aquí con su estado y observaciones.</p></div> : <div className="table-wrap"><table><thead><tr><th>Documento</th><th>Estudiante reconocido</th><th>Estado</th><th>Lectura</th><th></th></tr></thead><tbody>{[...pdfs].reverse().map(pdf => <tr key={pdf.id} className={pdf.id === selectedId ? 'selected' : ''}><td><div className="file-cell"><FileText size={18}/><div><strong>{pdf.name}</strong><small className="muted">{(pdf.size / 1024).toFixed(0)} KB · {new Date(pdf.uploadedAt).toLocaleDateString('es-PE')}</small></div></div></td><td>{(nameDrafts[pdf.id] ?? reportIdentity(pdf).name) || 'Nombre por revisar'}<small className="muted">{normalizeCohort(reportIdentity(pdf).grade, reportIdentity(pdf).section)?.label || 'Aula por revisar'}</small></td><td><span className={`badge ${pdf.status === 'validated' ? 'success' : pdf.status === 'failed' ? 'danger' : 'warning'}`}>{labels[pdf.status]}</span></td><td><span className="muted">{pdf.ocr ? 'OCR' : 'Texto'} · {reviewWarnings(pdf, nameDrafts[pdf.id], settings).length} observaciones</span></td><td><button className="button small secondary" onClick={() => select(pdf)}><Eye size={15}/>Revisar</button></td></tr>)}</tbody></table></div>}
     </section>
     {selected && <section className="card import-review" aria-busy={busy}><div className="card-header"><div><p className="eyebrow">REVISIÓN DE LIBRETA</p><h2>{selected.name}</h2></div><span className={`badge ${selected.status === 'validated' ? 'success' : 'warning'}`}>{labels[selected.status]}</span></div>
       <div className="import-review-grid"><div className="import-original"><a className="button secondary small" href={documentUrl(selected.id, dataset)} target="_blank" rel="noreferrer"><ExternalLink size={15}/>Abrir PDF original</a><iframe title={`Documento original: ${selected.name}`} src={documentUrl(selected.id, dataset)}/></div>

@@ -1,6 +1,8 @@
 import type { CohortRecord, Commitment, Settings, Student } from './types';
 import { ACTIVE_BIMESTERS, cohortKey, isReportApproved, normalizeCohort } from './policy';
 import { ACADEMIC_CONTEST_LABEL, contestPoints, contestRequiredFields, isAcademicContest } from './contests';
+import { activeAreas, hasActiveGrades } from './academic-policy';
+import { commitmentRequiredFields, incidentRequiredFields, isValidRecordDate } from './record-validation';
 
 export interface StudentResult {
   a: number | null; b: number | null; c: number | null; total: number | null;
@@ -18,7 +20,6 @@ const mean = (values: number[]): number | null => values.length ? values.reduce(
 const present = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
 const count = (value: unknown): value is number => present(value) && Number.isInteger(value) && value >= 0;
 const percent = (part: number, total: number) => total > 0 ? 100 * part / total : 0;
-const validDate = (value: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 export const cohortRecordApplies = (record: CohortRecord, student: Pick<Student, 'grade' | 'section'>): boolean => {
   const grade = record.grade.trim();
   const section = record.section.trim().toUpperCase();
@@ -53,7 +54,7 @@ export function validateSettings(settings: Settings): string[] {
   if (!['pending', 'other_component'].includes(settings.naPolicy)) errors.push('La regla de No aplica no es válida.');
   const cohortRecords = settings.cohortRecords ?? [];
   if (new Set(cohortRecords.map(record => record.id)).size !== cohortRecords.length) errors.push('Las convocatorias comunes deben tener identificadores únicos.');
-  if (cohortRecords.some(record => !record.id.trim() || !record.name.trim() || !validDate(record.date) || !['institutional', 'family'].includes(record.kind) || typeof record.required !== 'boolean')) errors.push('Cada convocatoria común necesita identificador, nombre, fecha válida, ámbito y condición exigible.');
+  if (cohortRecords.some(record => !record.id.trim() || !record.name.trim() || !isValidRecordDate(record.date) || !['institutional', 'family'].includes(record.kind) || typeof record.required !== 'boolean')) errors.push('Cada convocatoria común necesita identificador, nombre, fecha válida, ámbito y condición exigible.');
   return errors;
 }
 
@@ -76,13 +77,11 @@ function commitmentResult(records: Commitment[], label: string, pending: string[
     const template = record.catalogId ? templates.find(template => template.id === record.catalogId) : undefined;
     const catalogValid = !record.catalogId || Boolean(template && records.filter(r => r.catalogId === record.catalogId).length === 1 && template.name.trim() === record.name.trim() && template.date === record.date && template.required === record.required);
     if (!catalogValid) pending.push(`${label}: revisar vinculación y datos de convocatoria común ${record.name || record.catalogId}.`);
-    const needsJustification = !record.required || ['missed', 'justified', 'na'].includes(record.status);
-    const hasEvidence = Boolean(record.evidence?.trim());
-    const dataValid = Boolean(catalogValid && record.name.trim() && validDate(record.date) && ['fulfilled', 'missed', 'justified', 'na'].includes(record.status) && hasEvidence && (!needsJustification || record.justification.trim()));
+    const missingFields = commitmentRequiredFields(record);
+    const dataValid = catalogValid && missingFields.length === 0;
     if (!dataValid) {
       complete = false;
-      const details = [needsJustification && !record.justification.trim() ? 'falta justificación' : '', !hasEvidence ? 'falta evidencia' : ''].filter(Boolean);
-      pending.push(`${label}: completar ${record.name || 'registro sin nombre'}${details.length ? ` (${details.join('; ')})` : ''}.`);
+      pending.push(`${label}: completar ${record.name || 'registro sin nombre'}${missingFields.length ? ` (${missingFields.join('; ')})` : ''}.`);
     } else if (!record.validated) pending.push(`${label}: validar ${record.name}.`);
     if (dataValid && record.validated) valid++;
   }
@@ -127,7 +126,7 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
   pending.push(...configErrors);
   const reportApproved = isReportApproved(student);
   if (!reportApproved) {
-    const noData = student.academic.every(area => area.grades.every(row => row.every(value => !value))) && Object.values(student.attendance).every(value => value === null || value === false) && !student.discipline.confirmed && !student.discipline.incidents.length && !student.institutional.length && !student.family.length;
+    const noData = student.academic.every(area => !hasActiveGrades(area)) && Object.values(student.attendance).every(value => value === null || value === false) && !student.discipline.confirmed && !student.discipline.incidents.length && !student.institutional.length && !student.family.length;
     pending.push('Confirmar la identidad y la lectura de una libreta PDF antes de evaluar Académico, Desempeño y Compromiso.');
     return {
       a: null, b: null, c: null, total: null, g: null, r: null, p: null,
@@ -137,10 +136,10 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
       pa: 0, pb: 0, pc: 0, progress: 0,
       academicComplete: false, performanceComplete: false, commitmentComplete: false,
       eligible: false, status: noData ? 'SIN INICIAR' : 'PENDIENTE DE LIBRETA', pending,
-      areaAverages: Object.fromEntries(settings.areas.filter(area => area.eligible).map(area => [area.id, null])),
+      areaAverages: Object.fromEntries(activeAreas(student, settings).map(area => [area.id, null])),
     };
   }
-  const eligibleAreas = settings.areas.filter(a => a.eligible);
+  const eligibleAreas = activeAreas(student, settings);
   const areaAverages: Record<string, number | null> = {};
   const bimestersByArea: Record<string, (number | null)[]> = {};
   let expectedGrades = 0;
@@ -171,18 +170,20 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
     if (missingByBimester[b]) pending.push(`Faltan ${missingByBimester[b]} notas del ${label} bimestre.`);
   });
   const academicComplete = expectedGrades > 0 && enteredGrades === expectedGrades;
+  if (!expectedGrades) pending.push('Académico: registrar notas de al menos un área cursada en los bimestres I–III.');
   const allAreaValues = eligibleAreas.map(a => areaAverages[a.id]);
   const g = allAreaValues.length && allAreaValues.every(present) ? 25 * mean(allAreaValues as number[])! : null;
   const grouped = (groups: string[]) => {
-    const values = groups.map(group => {
-      const area = eligibleAreas.find(a => a.group === group);
-      return area ? areaAverages[area.id] : null;
-    });
-    return values.every(present) ? mean(values as number[]) : null;
+    const values = eligibleAreas.filter(area => groups.includes(area.group)).map(area => areaAverages[area.id]);
+    return values.length && values.every(present) ? mean(values as number[]) : null;
   };
   const science = grouped(['math', 'science']);
   const letters = grouped(['communication', 'social', 'dpcc']);
-  const r = science !== null && letters !== null ? 25 * (settings.scienceWeight * science + (1 - settings.scienceWeight) * letters) : null;
+  const hasScience = eligibleAreas.some(area => ['math', 'science'].includes(area.group));
+  const hasLetters = eligibleAreas.some(area => ['communication', 'social', 'dpcc'].includes(area.group));
+  const r = hasScience && hasLetters
+    ? science !== null && letters !== null ? 25 * (settings.scienceWeight * science + (1 - settings.scienceWeight) * letters) : null
+    : hasScience && science !== null ? 25 * science : hasLetters && letters !== null ? 25 * letters : null;
   const semester = (indices: number[]) => {
     const values = eligibleAreas.map(area => {
       const b = indices.map(i => bimestersByArea[area.id][i]);
@@ -213,9 +214,11 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
   if (!student.discipline.confirmed) pending.push('Disciplina sin validar: confirmar Sin incidencias o revisar el registro.');
   for (const incident of student.discipline.incidents) {
     const type = settings.disciplineTypes.find(t => t.id === incident.typeId);
-    if (!type || !incident.verified || !incident.date || !incident.description.trim() || !incident.measure?.trim() || !incident.evidence.trim()) {
+    const missingFields = incidentRequiredFields(incident, settings.disciplineTypes);
+    if (missingFields.length || !incident.verified) {
       disciplineValid = false;
-      pending.push(`Revisar incidencia ${type?.name || 'sin categoría'}: faltan verificación, fecha, descripción, medida o evidencia.`);
+      const details = [...missingFields, ...(!incident.verified ? ['verificación'] : [])];
+      pending.push(`Revisar incidencia ${type?.name || 'sin categoría'}: completar ${details.join('; ')}.`);
     }
     if (type && !type.punctuality) {
       if (type.discount === null || !present(type.discount) || type.discount < 0 || type.discount > 100) {

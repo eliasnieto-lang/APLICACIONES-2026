@@ -3,6 +3,8 @@ import type { Student, Settings, AppState } from '../shared/types.js';
 import { normalizeCohort } from '../shared/policy.js';
 import { resolveReportIdentity } from '../shared/filename-identity.js';
 import { contestRequiredFields, isAcademicContest } from '../shared/contests.js';
+import { hasActiveGrades, isAreaComplete } from '../shared/academic-policy.js';
+import { commitmentRequiredFields, incidentRequiredFields } from '../shared/record-validation.js';
 
 const text = z.string().max(2000);
 const id = z.string().min(1).max(150);
@@ -11,8 +13,8 @@ const grade = z.enum(['AD', 'A', 'B', 'C', '']);
 const areaDefinition = z.object({ id, name: z.string().min(1).max(200), group: z.enum(['math','science','communication','social','dpcc','other']), competencies: z.array(z.string().min(1).max(500)).min(1).max(100), eligible: z.boolean() });
 const academic = z.object({ areaId: id, grades: z.array(z.array(grade).min(3).max(4)).max(100), validated: z.boolean() });
 const attendance = z.object({ required: count, attended: count, punctual: count, exempted: count, validated: z.boolean() });
-const incident = z.object({ id, typeId: z.string().max(150), date: text, description: text, measure: text, evidence: text, verified: z.boolean() });
-const commitment = z.object({ id, catalogId: id.optional(), name: text, date: text, required: z.boolean(), status: z.enum(['pending','fulfilled','missed','justified','na']), justification: text, evidence: text, validated: z.boolean(), placement: text.optional(), representingSchool: z.boolean().optional(), eventType: z.literal('academic_contest').optional(), scope: z.enum(['local','regional','national']).optional() });
+const incident = z.object({ id, typeId: z.string().max(150), date: text, description: text, measure: text.default(''), evidence: text.default(''), verified: z.boolean() });
+const commitment = z.object({ id, catalogId: id.optional(), name: text, date: text, required: z.boolean().default(true), status: z.enum(['pending','fulfilled','missed','justified','na']), justification: text.default(''), evidence: text.default(''), validated: z.boolean(), placement: text.optional(), representingSchool: z.boolean().optional(), eventType: z.literal('academic_contest').optional(), scope: z.enum(['local','regional','national']).optional() });
 const contestCommitment = commitment.extend({ eventType: z.literal('academic_contest'), name: text.default(''), required: z.boolean().default(false), status: z.enum(['pending','fulfilled','missed','justified','na']).default('pending'), justification: text.default(''), evidence: text.default('') });
 const history = z.object({ id, date: text, field: text, before: z.string().max(100000), after: z.string().max(100000) });
 export const studentSchema = z.object({
@@ -62,13 +64,14 @@ export function semanticStudentErrors(student: Student, settings: Settings): str
   for (const area of student.academic) {
     const def = settings.areas.find(v=>v.id===area.areaId);
     if (!def || def.competencies.length !== area.grades.length) errors.push('Las áreas y competencias deben corresponder al catálogo vigente.');
-    if (area.validated && area.grades.some(row=>row.slice(0,3).some(v=>!v))) errors.push('No se puede validar un área con calificaciones vacías en I, II o III.');
+    if (def && hasActiveGrades(area) && area.validated && !isAreaComplete(def, area)) errors.push('No se puede validar un área con calificaciones vacías en I, II o III.');
   }
   if (new Set(student.discipline.incidents.map(v=>v.id)).size !== student.discipline.incidents.length) errors.push('Hay incidencias duplicadas.');
   for (const incident of student.discipline.incidents) {
     const type=settings.disciplineTypes.find(v=>v.id===incident.typeId);
     if (!type && (incident.typeId.trim() || incident.verified)) errors.push('La categoría disciplinaria no existe en el catálogo.');
-    if (incident.verified && (!/^\d{4}-\d{2}-\d{2}$/.test(incident.date) || !incident.description.trim() || !incident.measure.trim() || !incident.evidence.trim())) errors.push('Una incidencia verificada necesita fecha, descripción, medida y evidencia.');
+    const missing = incidentRequiredFields(incident, settings.disciplineTypes);
+    if (incident.verified && missing.length) errors.push(`Una incidencia verificada necesita ${missing.join(', ')}.`);
   }
   for (const record of [...student.institutional,...student.family]) {
     const contest = student.institutional.includes(record) && isAcademicContest(record);
@@ -76,8 +79,8 @@ export function semanticStudentErrors(student: Student, settings: Settings): str
       const missing = contestRequiredFields(record);
       if (record.validated && missing.length) errors.push(`Un concurso académico validado necesita ${missing.join(', ')}.`);
     } else {
-      if (record.validated && (record.status==='pending' || !record.name.trim() || !/^\d{4}-\d{2}-\d{2}$/.test(record.date) || !record.evidence.trim())) errors.push('Un compromiso validado necesita nombre, fecha, estado y evidencia documental.');
-      if (record.validated && (!record.required || ['missed','justified','na'].includes(record.status)) && !record.justification.trim()) errors.push('Los registros no cumplidos, justificados, no exigibles o No aplica requieren una observación o justificación.');
+      const missing = commitmentRequiredFields(record);
+      if (record.validated && missing.length) errors.push(`Un compromiso validado necesita ${missing.join(', ')}.`);
     }
     if(record.catalogId && !contest){
       const criterion=settings.cohortRecords?.find(c=>c.id===record.catalogId);

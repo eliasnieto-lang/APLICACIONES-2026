@@ -9,6 +9,7 @@ import { migrateState } from '../../shared/migrations';
 import { resolveReportIdentity } from '../../shared/filename-identity';
 import { confirmReport, identifyReport, applyReprocessedReport, applyRescannedGrades, deleteReportAndStudent, linkAcademic, registerImportedReport, ReportWorkflowError } from '../../shared/report-workflow';
 import { ACADEMIC_CONTEST_LABEL, isAcademicContest } from '../../shared/contests';
+import { hasActiveGrades } from '../../shared/academic-policy';
 import { buildWorkbook } from '../../server/export';
 import { backupSchema, newStudentSchema, semanticStudentErrors, settingsSchema, stateReferenceErrors, stateSchema, studentSchema } from '../../server/validation';
 import { setBrowserRuntime } from '../runtime';
@@ -239,6 +240,7 @@ async function install(): Promise<void> {
       student.pdfIds = [...current.pdfIds]; student.createdAt = current.createdAt;
       student.history = [...current.history];
       if (!isReportApproved(current) && (['academic', 'attendance', 'discipline', 'institutional', 'family', 'validated'] as const).some(field => !same(current[field], student[field]))) throw new HttpError(409, 'Confirme primero la libreta PDF para habilitar los ámbitos A, B y C.');
+      for (const area of student.academic) if (!hasActiveGrades(area)) area.validated = false;
       if (state.students.some(value => value.id !== student.id && value.code.toLocaleLowerCase() === student.code.toLocaleLowerCase())) throw new HttpError(409, 'Ya existe un estudiante con ese código.');
       const academicChanged = !same(current.academic.map(area => ({ areaId: area.areaId, grades: area.grades })), student.academic.map(area => ({ areaId: area.areaId, grades: area.grades })));
       if (academicChanged) { student.validated.academic = false; for (const area of student.academic) { const old = current.academic.find(value => value.areaId === area.areaId); if (!old || !same(old.grades, area.grades)) area.validated = false; } }
@@ -253,7 +255,7 @@ async function install(): Promise<void> {
       syncCohortRecords(student, state.settings);
       checkErrors(semanticStudentErrors(student, state.settings));
       const result = calculateStudent(student, state.settings);
-      if (student.validated.academic && result.a === null) throw new HttpError(400, 'Complete todas las calificaciones antes de validar el ámbito académico.');
+      if (student.validated.academic && result.a === null) throw new HttpError(400, 'Complete y valide las calificaciones I–III de los cursos estudiados antes de validar el ámbito académico.');
       if (student.validated.performance && result.b === null) throw new HttpError(400, 'Complete asistencia y disciplina antes de validar desempeño.');
       if (student.validated.commitment && result.c === null) throw new HttpError(400, 'Complete y revise los compromisos antes de validar el ámbito C.');
       for (const field of ['code', 'name', 'grade', 'section', 'academic', 'attendance', 'discipline', 'institutional', 'family', 'validated'] as const) if (!same(current[field], student[field])) student.history.push(audit(field, current[field], student[field]));
