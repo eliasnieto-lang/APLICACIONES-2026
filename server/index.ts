@@ -12,6 +12,9 @@ import { ZodError } from 'zod';
 import type { AppState, Dataset, HistoryEntry, PdfRecord, Student } from '../shared/types.js';
 import { createStudent, createDemoState } from '../shared/defaults.js';
 import { calculateStudent, validateSettings, cohortRecordApplies } from '../shared/calculations.js';
+import { normalizeCohort, isReportApproved } from '../shared/policy.js';
+import { migrateState } from '../shared/migrations.js';
+import { registerImportedReport, confirmReport, deleteReportAndStudent, linkAcademic, ReportWorkflowError } from '../shared/report-workflow.js';
 import { Store, CapacityError } from './store.js';
 import { extractPdf } from './pdf.js';
 import { buildWorkbook } from './export.js';
@@ -25,30 +28,13 @@ const dataset=(req:Request):Dataset=>{ const v=req.query.dataset??'real'; if(v!=
 const unlocked=(state:AppState)=>{if(state.settings.closed) throw new HttpError(423,'La evaluación está cerrada. Reábrala en Parámetros antes de modificar registros.');};
 const checkErrors=(errors:string[])=>{if(errors.length) throw new HttpError(400,errors[0],errors);};
 const findStudent=(state:AppState,id:string)=>{const student=state.students.find(s=>s.id===id);if(!student) throw new HttpError(404,'Estudiante no encontrado.');return student;};
-const linkAcademic=(student:Student,pdf:PdfRecord,replace=false)=>{
-  const before=structuredClone(student.academic);
-  if(replace)for(const area of student.academic){area.grades=area.grades.map(row=>row.map(()=>''));area.validated=false;}
-  const useful=pdf.areas.filter(a=>a.grades.some(row=>row.some(Boolean)));
-  for(const area of useful){const target=student.academic.find(a=>a.areaId===area.areaId);if(target){target.grades=structuredClone(area.grades);target.validated=false;}}
-  student.validated.academic=false;
-  student.history.push(audit(`Importación PDF: ${pdf.name}`,before,student.academic));
-  if(!student.pdfIds.includes(pdf.id))student.pdfIds.push(pdf.id);
-  student.updatedAt=stamp();
-};
-function syncCohortRecords(student:Student,settings:AppState['settings']) {
+function syncExistingCohortRecords(student:Student,settings:AppState['settings']) {
   const before={institutional:structuredClone(student.institutional),family:structuredClone(student.family)};
-  const criteria=settings.cohortRecords??[];
-  for(const kind of ['institutional','family'] as const){
-    const records=student[kind];
-    for(const record of records){
-      if(!record.catalogId)continue;
-      const criterion=criteria.find(c=>c.id===record.catalogId&&c.kind===kind&&cohortRecordApplies(c,student));
-      if(!criterion){record.catalogId=undefined;record.required=false;record.status='na';record.justification=`Criterio común retirado o no aplicable a la cohorte. ${record.justification}`.trim();record.validated=false;continue;}
-      if(record.name!==criterion.name||record.date!==criterion.date||record.required!==criterion.required){record.name=criterion.name;record.date=criterion.date;record.required=criterion.required;record.validated=false;}
-    }
-    for(const criterion of criteria.filter(c=>c.kind===kind&&cohortRecordApplies(c,student))){
-      if(!records.some(record=>record.catalogId===criterion.id))records.push({id:randomUUID(),catalogId:criterion.id,name:criterion.name,date:criterion.date,required:criterion.required,status:'pending',justification:'',evidence:'',validated:false});
-    }
+  for(const kind of ['institutional','family'] as const)for(const record of student[kind]){
+    if(!record.catalogId)continue;
+    const criterion=settings.cohortRecords?.find(value=>value.id===record.catalogId&&value.kind===kind&&cohortRecordApplies(value,student));
+    if(!criterion){delete record.catalogId;record.validated=false;continue;}
+    if(record.name!==criterion.name||record.date!==criterion.date||record.required!==criterion.required){record.name=criterion.name;record.date=criterion.date;record.required=criterion.required;record.validated=false;}
   }
   const after={institutional:student.institutional,family:student.family};
   if(!same(before,after)){student.validated.commitment=false;student.history.push(audit('Sincronización de criterios comunes de cohorte',before,after));}
@@ -67,16 +53,26 @@ export function createApp(options: {dataDir?: string} = {}) {
   app.post('/api/students',(req,res)=>{
     const ds=dataset(req),state=store.read(ds);unlocked(state);
     const input=newStudentSchema.parse(req.body);
+    const cohort=normalizeCohort(input.grade,input.section);
+    if(!cohort)throw new HttpError(400,'Solo se admiten los salones 2.º F, 3.º F y 4.º F.');
     if(state.students.some(s=>s.code.toLocaleLowerCase()===input.code.toLocaleLowerCase()))throw new HttpError(409,'Ya existe un estudiante con ese código.');
-    const student=createStudent(input,state.settings);student.history=[audit('Creación de expediente','',input)];
+    const student=createStudent({...input,grade:cohort.grade,section:cohort.section},state.settings);student.history=[audit('Creación de expediente','',input)];
     state.students.push(student);store.save(ds,state);res.status(201).json(student);
   });
   app.put('/api/students/:id',(req,res)=>{
     const ds=dataset(req),state=store.read(ds);unlocked(state);
     const current=findStudent(state,String(req.params.id));
-    const student=studentSchema.parse(req.body) as Student;
+    const student=studentSchema.parse({...req.body,reportApproval:current.reportApproval}) as Student;
     if(student.id!==current.id)throw new HttpError(400,'El identificador del estudiante no se puede modificar.');
     if(student.updatedAt!==current.updatedAt)throw new HttpError(409,'El expediente cambió en otra pestaña. Recargue antes de guardar.');
+    const cohort=normalizeCohort(student.grade,student.section);
+    if(!cohort)throw new HttpError(400,'Solo se admiten los salones 2.º F, 3.º F y 4.º F.');
+    student.grade=cohort.grade;student.section=cohort.section;
+    if(['code','name','grade','section'].some(field=>student[field as keyof Student]!==current[field as keyof Student]))throw new HttpError(409,'La identidad se corrige al revisar y confirmar la libreta PDF.');
+    student.reportApproval=current.reportApproval;
+    student.pdfIds=[...current.pdfIds];
+    const evaluationFields=['academic','attendance','discipline','institutional','family','validated'] as const;
+    if(!isReportApproved(current)&&evaluationFields.some(field=>!same(current[field],student[field])))throw new HttpError(409,'Revise y confirme la libreta PDF antes de editar los tres ámbitos de evaluación.');
     student.history=[...current.history];
     if(state.students.some(s=>s.id!==student.id&&s.code.toLocaleLowerCase()===student.code.toLocaleLowerCase()))throw new HttpError(409,'Ya existe un estudiante con ese código.');
     const academicChanged=!same(current.academic.map(a=>({areaId:a.areaId,grades:a.grades})),student.academic.map(a=>({areaId:a.areaId,grades:a.grades})));
@@ -90,11 +86,6 @@ export function createApp(options: {dataDir?: string} = {}) {
     if(disciplineChanged)student.validated.performance=false;
     const commitmentsChanged=!same(current.institutional,student.institutional)||!same(current.family,student.family);
     if(commitmentsChanged)student.validated.commitment=false;
-    for(const record of [...student.institutional,...student.family])if(record.catalogId){
-      const criterion=state.settings.cohortRecords?.find(c=>c.id===record.catalogId);
-      if(!criterion||record.name.trim()!==criterion.name.trim()||record.date!==criterion.date||record.required!==criterion.required)throw new HttpError(409,'El nombre, fecha y condición exigible de los criterios comunes se editan en Parámetros. Recargue la ficha para mantener la pauta de la cohorte.');
-    }
-    syncCohortRecords(student,state.settings);
     checkErrors(semanticStudentErrors(student,state.settings));
     const result=calculateStudent(student,state.settings);
     if(student.validated.academic&&result.a===null)throw new HttpError(400,'Complete todas las calificaciones antes de validar el ámbito académico.');
@@ -120,16 +111,16 @@ export function createApp(options: {dataDir?: string} = {}) {
     if(settings.closed&&!settings.criteriaApproved)throw new HttpError(400,'Apruebe los criterios institucionales antes de cerrar la evaluación.');
     if(settings.closed&&criteriaChanged)throw new HttpError(400,'Guarde los cambios de parámetros y revise los expedientes antes de cerrar la evaluación.');
     const availableCategories=new Set(settings.disciplineTypes.map(type=>type.id));
-    if(state.students.some(s=>s.discipline.incidents.some(i=>!availableCategories.has(i.typeId))))throw new HttpError(400,'No se puede retirar una categoría disciplinaria utilizada en expedientes. Conserve la categoría o reasigne las incidencias antes de retirarla.');
+    if(state.students.some(s=>s.discipline.incidents.some(i=>(i.verified||i.typeId.trim())&&!availableCategories.has(i.typeId))))throw new HttpError(400,'No se puede retirar una categoría disciplinaria utilizada en expedientes. Conserve la categoría o reasigne las incidencias antes de retirarla.');
     if(criteriaChanged){
       for(const s of state.students){
         s.history.push(audit('Cambio de parámetros institucionales',state.settings,settings));
         s.validated={academic:false,performance:false,commitment:false};s.attendance.validated=false;s.discipline.confirmed=false;
         s.institutional.forEach(c=>c.validated=false);s.family.forEach(c=>c.validated=false);
         const previousAcademic=structuredClone(s.academic);
-        s.academic=settings.areas.map(def=>{const old=s.academic.find(a=>a.areaId===def.id);const oldDefinition=state.settings.areas.find(a=>a.id===def.id);return{areaId:def.id,grades:def.competencies.map(name=>{const i=oldDefinition?.competencies.indexOf(name)??-1;return i>=0?old?.grades[i]??['','','','']:['','','',''];}),validated:false};});
+        s.academic=settings.areas.map(def=>{const old=s.academic.find(a=>a.areaId===def.id);const oldDefinition=state.settings.areas.find(a=>a.id===def.id);return{areaId:def.id,grades:def.competencies.map(name=>{const i=oldDefinition?.competencies.indexOf(name)??-1;return i>=0?old?.grades[i]?.slice(0,3)??['','','']:['','',''];}),validated:false};});
         if(!same(previousAcademic,s.academic))s.history.push(audit('Revisión de catálogo académico',previousAcademic,s.academic));
-        syncCohortRecords(s,settings);
+        syncExistingCohortRecords(s,settings);
         s.updatedAt=stamp();
       }
     }
@@ -148,7 +139,7 @@ export function createApp(options: {dataDir?: string} = {}) {
       let state=store.read(ds);unlocked(state);
       const duplicate=state.pdfs.find(p=>p.hash===hash&&p.status!=='duplicate');
       const pdf:PdfRecord={id:randomUUID(),name:path.basename(file.originalname).slice(0,300),hash,size:file.size,uploadedAt:stamp(),status:'review',studentId:null,extractedCode:'',extractedName:'',extractedGrade:'',extractedSection:'',period:'',text:'',ocr:false,warnings:[],areas:[]};
-      if(duplicate){pdf.status='duplicate';pdf.studentId=duplicate.studentId;pdf.warnings=[`Contenido duplicado de ${duplicate.name}. No se han sobrescrito las calificaciones.`];}
+      if(duplicate){pdf.status='duplicate';pdf.studentId=duplicate.studentId;pdf.warnings=[`Contenido duplicado de ${duplicate.name}. No se han sobrescrito las calificaciones.`];const student=state.students.find(s=>s.id===pdf.studentId);if(student)student.pdfIds.push(pdf.id);}
       else if(!file.buffer.subarray(0,1024).includes(Buffer.from('%PDF-'))){pdf.status='failed';pdf.warnings=['El archivo no contiene un documento PDF válido.'];}
       else {
         const dir=await mkdtemp(path.join(os.tmpdir(),'circulos-pdf-'));
@@ -162,12 +153,7 @@ export function createApp(options: {dataDir?: string} = {}) {
             pdf.warnings.push('Los parámetros cambiaron durante la lectura. Revise el documento con el catálogo vigente antes de aplicar notas.');
             pdf.areas=[];
           }
-          // Exact code is the only automatic identity match. Name similarity never merges records.
-          if(pdf.extractedCode){
-            let student=state.students.find(s=>s.code.toLocaleLowerCase()===pdf.extractedCode.toLocaleLowerCase());
-            if(!student&&pdf.extractedName){student=createStudent({code:pdf.extractedCode,name:pdf.extractedName,grade:pdf.extractedGrade||'Por revisar',section:pdf.extractedSection||'—'},state.settings);state.students.push(student);}
-            if(student){pdf.studentId=student.id;if(!student.pdfIds.length)linkAcademic(student,pdf);else{student.pdfIds.push(pdf.id);pdf.warnings.push('El estudiante ya tiene una libreta: confirme el reemplazo para aplicar las nuevas calificaciones.');}}
-          }
+          registerImportedReport(state,pdf);
           if(!pdf.studentId)pdf.warnings.push('Confirme el estudiante correspondiente; no se ha realizado ninguna unión automática.');
         }catch(error){state=store.read(ds);pdf.status='failed';pdf.warnings=[error instanceof Error?error.message:'No fue posible leer el PDF.'];}
         finally{await rm(dir,{recursive:true,force:true});}
@@ -190,11 +176,16 @@ export function createApp(options: {dataDir?: string} = {}) {
     const action=req.body.action;
     if(!['link','replace','validate'].includes(action))throw new HttpError(400,'Acción de PDF no válida.');
     if(pdf.status==='failed'||pdf.status==='duplicate')throw new HttpError(400,'Un PDF fallido o duplicado no puede aplicarse a un expediente.');
+    if(action==='validate'){
+      const result=confirmReport(state,pdf.id,{identity:req.body.identity,confirmMismatch:req.body.confirmMismatch===true});
+      store.save(ds,state);res.json(result.pdf);return;
+    }
     const student=findStudent(state,req.body.studentId||pdf.studentId);
+    if(!normalizeCohort(student.grade,student.section))throw new HttpError(400,'El estudiante debe pertenecer a 2.º F, 3.º F o 4.º F.');
     if(pdf.extractedCode&&pdf.extractedCode.toLocaleLowerCase()!==student.code.toLocaleLowerCase()&&req.body.confirmMismatch!==true)throw new HttpError(409,'El código extraído no coincide. Confirme la reasignación antes de unir los registros.');
-    if(action==='link'||action==='replace'){
+    {
       const old=pdf.studentId?state.students.find(s=>s.id===pdf.studentId):null;
-      if(old&&old.id!==student.id){old.pdfIds=old.pdfIds.filter(id=>id!==pdf.id);old.validated.academic=false;old.updatedAt=stamp();old.history.push(audit('Reasignación de PDF',pdf.name,student.code));}
+      if(old&&old.id!==student.id){old.pdfIds=old.pdfIds.filter(id=>id!==pdf.id);if(old.reportApproval?.pdfId===pdf.id)delete old.reportApproval;old.validated.academic=false;old.academic.forEach(area=>area.validated=false);old.updatedAt=stamp();old.history.push(audit('Reasignación de PDF',pdf.name,student.code));}
       const prior=state.pdfs.find(p=>p.id===req.body.replacesId);
       const existing=state.pdfs.filter(p=>p.studentId===student.id&&p.id!==pdf.id&&!['duplicate','failed','replaced'].includes(p.status));
       if(existing.length&&action==='link')throw new HttpError(409,'El estudiante ya tiene una libreta. Seleccione Reemplazar para conservar trazabilidad.');
@@ -202,12 +193,15 @@ export function createApp(options: {dataDir?: string} = {}) {
         if(!prior||prior.studentId!==student.id||prior.id===pdf.id)throw new HttpError(400,'Seleccione la libreta anterior del mismo estudiante.');
         prior.status='replaced';pdf.replacesId=prior.id;
       }
-      pdf.studentId=student.id;pdf.status='review';linkAcademic(student,pdf,action==='replace');
-    }else{
-      if(pdf.studentId!==student.id)throw new HttpError(400,'Vincule primero el PDF al estudiante.');
-      pdf.status='validated';student.history.push(audit('Lectura PDF confirmada',pdf.name,'Lectura revisada por el operador'));student.updatedAt=stamp();
+      pdf.studentId=student.id;pdf.status='review';linkAcademic(student,pdf,state.settings,true);
     }
     store.save(ds,state);res.json(pdf);
+  });
+  app.delete('/api/pdfs/:id',(req,res)=>{
+    const ds=dataset(req),state=store.read(ds);unlocked(state);
+    const result=deleteReportAndStudent(state,String(req.params.id));
+    store.transaction(()=>{store.deleteFiles(ds,result.deletedPdfIds);store.save(ds,state);});
+    res.json({deleted:true,...result});
   });
   app.get('/api/records/template',(_req,res)=>res.type('text/csv').attachment('plantilla_asistencia.csv').send('\uFEFFcodigo,dias,eximidos,asistencias,puntuales\nEJEMPLO-001,200,0,190,171\n'));
   app.post('/api/records/import',upload.single('file'),async(req,res)=>{
@@ -231,6 +225,7 @@ export function createApp(options: {dataDir?: string} = {}) {
       const code=String(row.codigo??'').trim();
       const s=state.students.find(s=>s.code.toLocaleLowerCase()===code.toLocaleLowerCase());
       if(!s){errors.push(`Fila ${index+2}: código ${code||'(vacío)'} no encontrado.`);return;}
+      if(!isReportApproved(s)){errors.push(`Fila ${index+2}: confirme la libreta PDF de ${code} antes de importar asistencia.`);return;}
       if(seen.has(s.id)){errors.push(`Fila ${index+2}: código repetido; no se aplicó esta fila.`);return;}seen.add(s.id);
       const values=['dias','eximidos','asistencias','puntuales'].map(key=>row[key]===undefined||row[key]===null||String(row[key]).trim()===''?null:Number(row[key]));
       if(values.some(v=>v===null||!Number.isInteger(v)||v<0||v>10000)){errors.push(`Fila ${index+2}: complete los cuatro conteos con enteros válidos.`);return;}
@@ -250,6 +245,10 @@ export function createApp(options: {dataDir?: string} = {}) {
   app.post('/api/restore',(req,res)=>{
     const ds=dataset(req);unlocked(store.read(ds));const backup=backupSchema.parse(req.body);
     if(backup.dataset!==ds)throw new HttpError(400,'El respaldo corresponde a otra base. Cambie a Datos reales o Demostración antes de restaurarlo.');
+    const legacyDuplicateLinks=backup.state.settings.workflowVersion!==2&&backup.state.pdfs.every(pdf=>!pdf.studentId||backup.state.students.find(student=>student.id===pdf.studentId)?.pdfIds.includes(pdf.id)||pdf.status==='duplicate');
+    const rawReferenceErrors=stateReferenceErrors(backup.state).filter(error=>!legacyDuplicateLinks||error!=='El vínculo del PDF no aparece en el expediente del estudiante.');
+    checkErrors(rawReferenceErrors);
+    backup.state=migrateState(backup.state);
     checkErrors([...validateSettings(backup.state.settings),...stateReferenceErrors(backup.state)]);
     if(backup.state.settings.closed&&!backup.state.settings.criteriaApproved)throw new HttpError(400,'El respaldo contiene una evaluación cerrada sin criterios aprobados.');
     const ids=new Set(backup.files.map(f=>f.id));
@@ -270,6 +269,7 @@ export function createApp(options: {dataDir?: string} = {}) {
   app.use('/api',(_req,res)=>res.status(404).json({error:'Ruta de API no encontrada.'}));
   app.use((error:unknown,_req:Request,res:Response,_next:NextFunction)=>{
     if(error instanceof HttpError){res.status(error.status).json({error:error.message,details:error.details});return;}
+    if(error instanceof ReportWorkflowError){res.status(error.status).json({error:error.message});return;}
     if(error instanceof ZodError){res.status(400).json({error:'Los datos no tienen el formato esperado.',details:error.issues.map(i=>`${i.path.join('.')}: ${i.message}`)});return;}
     if(error instanceof multer.MulterError){res.status(413).json({error:'La carga excede el límite: hasta 50 PDF por lote y 20 MB por archivo.'});return;}
     if(error instanceof CapacityError){res.status(413).json({error:error.message});return;}

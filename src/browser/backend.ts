@@ -4,6 +4,9 @@ import { ZodError } from 'zod';
 import type { AppState, Dataset, HistoryEntry, PdfRecord, Settings, Student } from '../../shared/types';
 import { createDemoState, createStudent, defaultSettings } from '../../shared/defaults';
 import { calculateStudent, cohortRecordApplies, validateSettings } from '../../shared/calculations';
+import { isReportApproved, normalizeCohort } from '../../shared/policy';
+import { migrateState } from '../../shared/migrations';
+import { confirmReport, deleteReportAndStudent, linkAcademic, registerImportedReport, ReportWorkflowError } from '../../shared/report-workflow';
 import { buildWorkbook } from '../../server/export';
 import { backupSchema, newStudentSchema, semanticStudentErrors, settingsSchema, stateReferenceErrors, stateSchema, studentSchema } from '../../server/validation';
 import { setBrowserRuntime } from '../runtime';
@@ -34,19 +37,6 @@ const fileRange = (dataset: Dataset) => IDBKeyRange.bound(`${dataset}:`, `${data
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
 const attachment = (body: BodyInit, type: string, name: string) => new Response(body, { headers: { 'Content-Type': type, 'Cache-Control': 'no-store', 'Content-Disposition': `attachment; filename="${name.replace(/[^\w.-]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(name)}` } });
 
-function linkAcademic(student: Student, pdf: PdfRecord, replacementSettings?: Settings) {
-  const before = structuredClone(student.academic);
-  if (replacementSettings) student.academic = replacementSettings.areas.map(area => ({ areaId: area.id, grades: area.competencies.map(() => ['', '', '', '']), validated: false }));
-  for (const area of pdf.areas.filter(value => value.grades.some(row => row.some(Boolean)))) {
-    const target = student.academic.find(value => value.areaId === area.areaId);
-    if (target) { target.grades = structuredClone(area.grades); target.validated = false; }
-  }
-  student.validated.academic = false;
-  student.history.push(audit(`Importación PDF: ${pdf.name}`, before, student.academic));
-  if (!student.pdfIds.includes(pdf.id)) student.pdfIds.push(pdf.id);
-  student.updatedAt = stamp();
-}
-
 function syncCohortRecords(student: Student, settings: Settings) {
   const before = { institutional: structuredClone(student.institutional), family: structuredClone(student.family) };
   const criteria = settings.cohortRecords ?? [];
@@ -55,20 +45,14 @@ function syncCohortRecords(student: Student, settings: Settings) {
     for (const record of records) {
       if (!record.catalogId) continue;
       const criterion = criteria.find(value => value.id === record.catalogId && value.kind === kind && cohortRecordApplies(value, student));
-      if (!criterion) { record.catalogId = undefined; record.required = false; record.status = 'na'; record.justification = `Criterio común retirado o no aplicable a la cohorte. ${record.justification}`.trim(); record.validated = false; continue; }
+      if (!criterion) { delete record.catalogId; record.validated = false; continue; }
       if (record.name !== criterion.name || record.date !== criterion.date || record.required !== criterion.required) { record.name = criterion.name; record.date = criterion.date; record.required = criterion.required; record.validated = false; }
-    }
-    for (const criterion of criteria.filter(value => value.kind === kind && cohortRecordApplies(value, student))) {
-      if (!records.some(record => record.catalogId === criterion.id)) records.push({ id: uuid(), catalogId: criterion.id, name: criterion.name, date: criterion.date, required: criterion.required, status: 'pending', justification: '', evidence: '', validated: false });
     }
   }
   const after = { institutional: student.institutional, family: student.family };
   if (!same(before, after)) { student.validated.commitment = false; student.history.push(audit('Sincronización de criterios comunes de cohorte', before, after)); }
 }
 
-function requestValue<T>(request: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
-}
 function transactionDone(transaction: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => { transaction.oncomplete = () => resolve(); transaction.onabort = () => reject(transaction.error ?? new Error('Se canceló el guardado local.')); transaction.onerror = () => { /* onabort provides the final result. */ }; });
 }
@@ -86,13 +70,23 @@ async function initialize(db: IDBDatabase) {
   const done = transactionDone(transaction), store = transaction.objectStore('state');
   for (const dataset of ['real', 'demo'] as const) {
     const request = store.get(dataset);
-    request.onsuccess = () => { if (request.result === undefined) store.put(dataset === 'real' ? { students: [], settings: structuredClone(defaultSettings), pdfs: [] } : createDemoState(), dataset); };
+    request.onsuccess = () => {
+      const existing = request.result as AppState | undefined;
+      const state = migrateState(existing ?? (dataset === 'real' ? { students: [], settings: structuredClone(defaultSettings), pdfs: [] } : createDemoState()));
+      if (!existing || !same(existing, state)) store.put(state, dataset);
+    };
   }
   await done;
 }
 async function readState(db: IDBDatabase, dataset: Dataset): Promise<AppState> {
-  const transaction = db.transaction('state', 'readonly'), done = transactionDone(transaction);
-  const state = await requestValue<AppState>(transaction.objectStore('state').get(dataset));
+  const transaction = db.transaction('state', 'readwrite'), done = transactionDone(transaction), store = transaction.objectStore('state');
+  let state: AppState | undefined;
+  const request = store.get(dataset);
+  request.onsuccess = () => {
+    if (!request.result) return;
+    state = migrateState(request.result as AppState);
+    if (!same(request.result, state)) store.put(state, dataset);
+  };
   await done;
   if (!state) throw new HttpError(500, 'No se encontró la base local. Recargue la aplicación.');
   return state;
@@ -110,8 +104,16 @@ function fileEntries(store: IDBObjectStore, dataset: Dataset): Promise<[string, 
   });
 }
 async function readSnapshot(db: IDBDatabase, dataset: Dataset): Promise<{ state: AppState; files: Map<string, Blob> }> {
-  const transaction = db.transaction(['state', 'files'], 'readonly'), done = transactionDone(transaction);
-  const [state, files] = await Promise.all([requestValue<AppState>(transaction.objectStore('state').get(dataset)), fileEntries(transaction.objectStore('files'), dataset), done]);
+  const transaction = db.transaction(['state', 'files'], 'readwrite'), done = transactionDone(transaction), store = transaction.objectStore('state');
+  let state: AppState | undefined;
+  const request = store.get(dataset);
+  request.onsuccess = () => {
+    if (!request.result) return;
+    state = migrateState(request.result as AppState);
+    if (!same(request.result, state)) store.put(state, dataset);
+  };
+  const [files] = await Promise.all([fileEntries(transaction.objectStore('files'), dataset), done]);
+  if (!state) throw new HttpError(500, 'No se encontró la base local. Recargue la aplicación.');
   return { state, files: new Map(files) };
 }
 async function sha256(blob: Blob): Promise<string> {
@@ -162,10 +164,11 @@ async function install(): Promise<void> {
     }).catch(() => {});
   });
 
-  async function save(dataset: Dataset, state: AppState, expected: string, additions = new Map<string, Blob>(), replace = false) {
+  async function save(dataset: Dataset, state: AppState, expected: string, additions = new Map<string, Blob>(), replace = false, removals = new Set<string>()) {
     stateSchema.parse(state);
     checkErrors([...validateSettings(state.settings), ...stateReferenceErrors(state)]);
     const previousFiles = await readFiles(db, dataset), resultingFiles = replace ? new Map<string, Blob>() : new Map(previousFiles);
+    for (const id of removals) resultingFiles.delete(id);
     for (const [id, blob] of additions) resultingFiles.set(id, blob);
     const payload = JSON.stringify(state), envelope = JSON.stringify({ format: 'circulos-backup', version: 1, dataset, createdAt: stamp(), state: null, files: [] });
     const bytes = new TextEncoder().encode(payload).length + new TextEncoder().encode(envelope).length - 4 + Array.from(resultingFiles, ([id, blob]) => new TextEncoder().encode(JSON.stringify({ id, content: '' })).length + 4 * Math.ceil(blob.size / 3)).reduce((sum, size) => sum + size, 0) + Math.max(0, resultingFiles.size - 1);
@@ -177,12 +180,15 @@ async function install(): Promise<void> {
     current.onsuccess = () => {
       if (JSON.stringify(current.result) !== expected) { conflict = true; transaction.abort(); return; }
       if (replace) for (const id of previousFiles.keys()) files.delete(fileKey(dataset, id));
+      for (const id of removals) files.delete(fileKey(dataset, id));
       for (const [id, blob] of additions) files.put(blob, fileKey(dataset, id));
       states.put(state, dataset);
     };
     try { await done; } catch (error) { if (conflict) throw new HttpError(409, 'Los datos cambiaron en otra pestaña. Recargue antes de guardar.'); throw error; }
     if (replace || additions.size) registerFiles(dataset, additions, replace);
-    if (replace || additions.size) channel?.postMessage({ dataset, changed: [...additions.keys()], removed: replace ? [...previousFiles.keys()].filter(id => !additions.has(id)) : [] });
+    const removed = [...new Set([...(replace ? previousFiles.keys() : []), ...removals])].filter(id => !additions.has(id));
+    for (const id of removed) documentUrls.delete(fileKey(dataset, id));
+    if (replace || additions.size || removed.length) channel?.postMessage({ dataset, changed: [...additions.keys()], removed });
   }
 
   async function bodyJson(input: RequestInfo | URL, init?: RequestInit): Promise<unknown> {
@@ -210,6 +216,9 @@ async function install(): Promise<void> {
     if (method === 'POST' && path === '/api/students') {
       unlocked(state);
       const newInput = newStudentSchema.parse(await bodyJson(input, init));
+      const cohort = normalizeCohort(newInput.grade, newInput.section);
+      if (!cohort) throw new HttpError(400, 'Solo se admiten estudiantes de 2.º F, 3.º F y 4.º F de secundaria.');
+      newInput.grade = cohort.grade; newInput.section = cohort.section;
       if (state.students.some(student => student.code.toLocaleLowerCase() === newInput.code.toLocaleLowerCase())) throw new HttpError(409, 'Ya existe un estudiante con ese código.');
       const student = createStudent(newInput, state.settings); student.history = [audit('Creación de expediente', '', newInput)];
       state.students.push(student); await save(dataset, state, expected); return json(student, 201);
@@ -218,10 +227,15 @@ async function install(): Promise<void> {
     if (studentMatch && method === 'PUT') {
       unlocked(state);
       const current = findStudent(state, decodeURIComponent(studentMatch[1]));
-      const student = studentSchema.parse(await bodyJson(input, init)) as Student;
+      const rawStudent = await bodyJson(input, init);
+      const student = studentSchema.parse(rawStudent && typeof rawStudent === 'object' && !Array.isArray(rawStudent) ? { ...rawStudent, reportApproval: current.reportApproval } : rawStudent) as Student;
       if (student.id !== current.id) throw new HttpError(400, 'El identificador del estudiante no se puede modificar.');
       if (student.updatedAt !== current.updatedAt) throw new HttpError(409, 'El expediente cambió en otra pestaña. Recargue antes de guardar.');
+      if ((['code', 'name', 'grade', 'section'] as const).some(field => student[field] !== current[field])) throw new HttpError(400, 'Corrija la identidad del estudiante al revisar y confirmar su libreta PDF.');
+      student.reportApproval = current.reportApproval ? structuredClone(current.reportApproval) : undefined;
+      student.pdfIds = [...current.pdfIds]; student.createdAt = current.createdAt;
       student.history = [...current.history];
+      if (!isReportApproved(current) && (['academic', 'attendance', 'discipline', 'institutional', 'family', 'validated'] as const).some(field => !same(current[field], student[field]))) throw new HttpError(409, 'Confirme primero la libreta PDF para habilitar los ámbitos A, B y C.');
       if (state.students.some(value => value.id !== student.id && value.code.toLocaleLowerCase() === student.code.toLocaleLowerCase())) throw new HttpError(409, 'Ya existe un estudiante con ese código.');
       const academicChanged = !same(current.academic.map(area => ({ areaId: area.areaId, grades: area.grades })), student.academic.map(area => ({ areaId: area.areaId, grades: area.grades })));
       if (academicChanged) { student.validated.academic = false; for (const area of student.academic) { const old = current.academic.find(value => value.areaId === area.areaId); if (!old || !same(old.grades, area.grades)) area.validated = false; } }
@@ -259,13 +273,13 @@ async function install(): Promise<void> {
       if (settings.closed && !settings.criteriaApproved) throw new HttpError(400, 'Apruebe los criterios institucionales antes de cerrar la evaluación.');
       if (settings.closed && criteriaChanged) throw new HttpError(400, 'Guarde los cambios de parámetros y revise los expedientes antes de cerrar la evaluación.');
       const available = new Set(settings.disciplineTypes.map(value => value.id));
-      if (state.students.some(student => student.discipline.incidents.some(incident => !available.has(incident.typeId)))) throw new HttpError(400, 'No se puede retirar una categoría disciplinaria utilizada en expedientes. Conserve la categoría o reasigne las incidencias antes de retirarla.');
+      if (state.students.some(student => student.discipline.incidents.some(incident => (incident.typeId.trim() || incident.verified) && !available.has(incident.typeId)))) throw new HttpError(400, 'No se puede retirar una categoría disciplinaria utilizada en expedientes. Conserve la categoría o reasigne las incidencias antes de retirarla.');
       if (criteriaChanged) for (const student of state.students) {
         student.history.push(audit('Cambio de parámetros institucionales', state.settings, settings));
         student.validated = { academic: false, performance: false, commitment: false }; student.attendance.validated = false; student.discipline.confirmed = false;
         student.institutional.forEach(record => { record.validated = false; }); student.family.forEach(record => { record.validated = false; });
         const previous = structuredClone(student.academic);
-        student.academic = settings.areas.map(definition => { const old = student.academic.find(area => area.areaId === definition.id), oldDefinition = state.settings.areas.find(area => area.id === definition.id); return { areaId: definition.id, grades: definition.competencies.map(name => { const index = oldDefinition?.competencies.indexOf(name) ?? -1; return index >= 0 ? old?.grades[index] ?? ['', '', '', ''] : ['', '', '', '']; }), validated: false }; });
+        student.academic = settings.areas.map(definition => { const old = student.academic.find(area => area.areaId === definition.id), oldDefinition = state.settings.areas.find(area => area.id === definition.id); return { areaId: definition.id, grades: definition.competencies.map(name => { const index = oldDefinition?.competencies.indexOf(name) ?? -1; return index >= 0 ? old?.grades[index] ?? ['', '', ''] : ['', '', '']; }), validated: false }; });
         if (!same(previous, student.academic)) student.history.push(audit('Revisión de catálogo académico', previous, student.academic));
         syncCohortRecords(student, settings); student.updatedAt = stamp();
       }
@@ -274,7 +288,7 @@ async function install(): Promise<void> {
     }
     if (method === 'POST' && path === '/api/demo/reset') {
       if (dataset !== 'demo') throw new HttpError(400, 'El reinicio solo está permitido para datos ficticios.');
-      const demo = createDemoState(); await save(dataset, demo, expected, new Map(), true); return json(demo);
+      const demo = migrateState(createDemoState()); await save(dataset, demo, expected, new Map(), true); return json(demo);
     }
     if (method === 'POST' && path === '/api/pdfs') {
       unlocked(state);
@@ -286,18 +300,16 @@ async function install(): Promise<void> {
       for (const file of files) {
         const hash = await sha256(file), duplicate = state.pdfs.find(pdf => pdf.hash === hash && pdf.status !== 'duplicate');
         const pdf: PdfRecord = { id: uuid(), name: file.name.replace(/\\/g, '/').split('/').at(-1)!.slice(0, 300) || 'documento.pdf', hash, size: file.size, uploadedAt: stamp(), status: 'review', studentId: null, extractedCode: '', extractedName: '', extractedGrade: '', extractedSection: '', period: '', text: '', ocr: false, warnings: [], areas: [] };
-        if (duplicate) { pdf.status = 'duplicate'; pdf.studentId = duplicate.studentId; pdf.warnings = [`Contenido duplicado de ${duplicate.name}. No se han sobrescrito las calificaciones.`]; }
+        if (duplicate) {
+          pdf.status = 'duplicate'; pdf.studentId = duplicate.studentId; pdf.warnings = [`Contenido duplicado de ${duplicate.name}. No se han sobrescrito las calificaciones.`];
+          const student = state.students.find(value => value.id === pdf.studentId);
+          if (student && !student.pdfIds.includes(pdf.id)) { student.pdfIds.push(pdf.id); student.updatedAt = stamp(); }
+        }
         else if (!new TextDecoder('latin1').decode(await file.slice(0, 1024).arrayBuffer()).includes('%PDF-')) { pdf.status = 'failed'; pdf.warnings = ['El archivo no contiene un documento PDF válido.']; }
         else {
           try {
             Object.assign(pdf, await extractBrowserPdf(file, structuredClone(state.settings)));
-            // Only an exact student code can link records automatically. Every reading needs review.
-            if (pdf.extractedCode) {
-              let student = state.students.find(value => value.code.toLocaleLowerCase() === pdf.extractedCode.toLocaleLowerCase());
-              if (!student && pdf.extractedName) { student = createStudent({ code: pdf.extractedCode, name: pdf.extractedName, grade: pdf.extractedGrade || 'Por definir', section: pdf.extractedSection || '—' }, state.settings); state.students.push(student); }
-              if (student) { pdf.studentId = student.id; if (!student.pdfIds.length) linkAcademic(student, pdf); else { student.pdfIds.push(pdf.id); student.updatedAt = stamp(); pdf.warnings.push('El estudiante ya tiene una libreta: confirme el reemplazo para aplicar las nuevas calificaciones.'); } }
-            }
-            if (!pdf.studentId) pdf.warnings.push('Confirme el estudiante correspondiente; no se ha realizado ninguna unión automática.');
+            registerImportedReport(state, pdf);
           } catch (error) { pdf.status = 'failed'; pdf.warnings = [error instanceof Error ? error.message : 'No fue posible leer el PDF.']; }
         }
         state.pdfs.push(pdf); additions.set(pdf.id, file.slice(0, file.size, 'application/pdf')); processed.push(pdf);
@@ -313,6 +325,12 @@ async function install(): Promise<void> {
       return new Response(file, { headers: { 'Content-Type': 'application/pdf', 'Cache-Control': 'no-store', 'Content-Disposition': `inline; filename="documento.pdf"; filename*=UTF-8''${encodeURIComponent(pdf.name)}`, 'X-Content-Type-Options': 'nosniff' } });
     }
     const pdfMatch = path.match(/^\/api\/pdfs\/([^/]+)$/);
+    if (method === 'DELETE' && pdfMatch) {
+      unlocked(state);
+      const removed = deleteReportAndStudent(state, decodeURIComponent(pdfMatch[1]));
+      await save(dataset, state, expected, new Map(), false, new Set(removed.deletedPdfIds));
+      return json({ deleted: true, ...removed });
+    }
     if (method === 'PUT' && pdfMatch) {
       unlocked(state);
       const raw = await bodyJson(input, init);
@@ -320,9 +338,21 @@ async function install(): Promise<void> {
       const body = raw as Record<string, unknown>, pdf = state.pdfs.find(value => value.id === decodeURIComponent(pdfMatch[1]));
       if (!pdf) throw new HttpError(404, 'PDF no encontrado.');
       const action = body.action;
-      if (!['link', 'replace', 'validate'].includes(String(action))) throw new HttpError(400, 'Acción de PDF no válida.');
+      if (!['link', 'replace', 'validate', 'confirm'].includes(String(action))) throw new HttpError(400, 'Acción de PDF no válida.');
       if (['failed', 'duplicate', 'replaced'].includes(pdf.status)) throw new HttpError(400, 'Un PDF fallido, duplicado o reemplazado no puede aplicarse a un expediente.');
+      if (action === 'validate' || action === 'confirm') {
+        let identity: { code: string; name: string; grade: string; section: string } | undefined;
+        if (body.identity !== undefined) {
+          if (!body.identity || typeof body.identity !== 'object' || Array.isArray(body.identity)) throw new HttpError(400, 'Complete el código, nombre, grado y sección de la libreta.');
+          const value = body.identity as Record<string, unknown>;
+          if (['code', 'name', 'grade', 'section'].some(field => typeof value[field] !== 'string')) throw new HttpError(400, 'Complete el código, nombre, grado y sección de la libreta.');
+          identity = { code: value.code as string, name: value.name as string, grade: value.grade as string, section: value.section as string };
+        }
+        const confirmed = confirmReport(state, pdf.id, { identity, confirmMismatch: body.confirmMismatch === true });
+        await save(dataset, state, expected); return json(confirmed.pdf);
+      }
       const student = findStudent(state, typeof body.studentId === 'string' && body.studentId ? body.studentId : pdf.studentId ?? '');
+      if (!normalizeCohort(student.grade, student.section)) throw new HttpError(400, 'La libreta debe corresponder a 2.º F, 3.º F o 4.º F de secundaria.');
       if (pdf.extractedCode && pdf.extractedCode.toLocaleLowerCase() !== student.code.toLocaleLowerCase() && body.confirmMismatch !== true) throw new HttpError(409, 'El código extraído no coincide. Confirme la reasignación antes de unir los registros.');
       if (action === 'link' || action === 'replace') {
         const old = pdf.studentId ? state.students.find(value => value.id === pdf.studentId) : undefined;
@@ -330,11 +360,8 @@ async function install(): Promise<void> {
         const existing = state.pdfs.filter(value => value.studentId === student.id && value.id !== pdf.id && !['duplicate', 'failed', 'replaced'].includes(value.status));
         if (existing.length && action === 'link') throw new HttpError(409, 'El estudiante ya tiene una libreta. Seleccione Reemplazar para conservar trazabilidad.');
         if (action === 'replace') { if (!prior || prior.studentId !== student.id || prior.id === pdf.id) throw new HttpError(400, 'Seleccione la libreta anterior del mismo estudiante.'); prior.status = 'replaced'; pdf.replacesId = prior.id; }
-        if (old && old.id !== student.id) { old.pdfIds = old.pdfIds.filter(id => id !== pdf.id); old.validated.academic = false; old.updatedAt = stamp(); old.history.push(audit('Reasignación de PDF', pdf.name, student.code)); }
-        pdf.studentId = student.id; pdf.status = 'review'; linkAcademic(student, pdf, action === 'replace' ? state.settings : undefined);
-      } else {
-        if (pdf.studentId !== student.id) throw new HttpError(400, 'Vincule primero el PDF al estudiante.');
-        pdf.status = 'validated'; student.history.push(audit('Lectura PDF confirmada', pdf.name, 'Lectura revisada por el operador')); student.updatedAt = stamp();
+        if (old && old.id !== student.id) { old.pdfIds = old.pdfIds.filter(id => id !== pdf.id); if (old.reportApproval?.pdfId === pdf.id) delete old.reportApproval; old.validated.academic = false; old.academic.forEach(area => { area.validated = false; }); old.updatedAt = stamp(); old.history.push(audit('Reasignación de PDF', pdf.name, student.code)); }
+        pdf.studentId = student.id; pdf.status = 'review'; linkAcademic(student, pdf, state.settings, true);
       }
       await save(dataset, state, expected); return json(pdf);
     }
@@ -360,6 +387,7 @@ async function install(): Promise<void> {
         const row = Object.fromEntries(Object.entries(raw).map(([key, value]) => [key.trim().toLowerCase(), value])), code = String(row.codigo ?? '').trim();
         const student = state.students.find(value => value.code.toLocaleLowerCase() === code.toLocaleLowerCase());
         if (!student) { errors.push(`Fila ${index + 2}: código ${code || '(vacío)'} no encontrado.`); return; }
+        if (!isReportApproved(student)) { errors.push(`Fila ${index + 2}: confirme primero la libreta PDF de ${code} para importar asistencia.`); return; }
         if (seen.has(student.id)) { errors.push(`Fila ${index + 2}: código repetido; no se aplicó esta fila.`); return; } seen.add(student.id);
         const values = ['dias', 'eximidos', 'asistencias', 'puntuales'].map(key => row[key] === undefined || row[key] === null || String(row[key]).trim() === '' ? null : Number(row[key]));
         if (values.some(value => value === null || !Number.isInteger(value) || value < 0 || value > 10000)) { errors.push(`Fila ${index + 2}: complete los cuatro conteos con enteros válidos.`); return; }
@@ -386,23 +414,28 @@ async function install(): Promise<void> {
       unlocked(state);
       const backup = backupSchema.parse(await bodyJson(input, init));
       if (backup.dataset !== dataset) throw new HttpError(400, 'El respaldo corresponde a otra base. Cambie a Datos reales o Demostración antes de restaurarlo.');
-      checkErrors([...validateSettings(backup.state.settings), ...stateReferenceErrors(backup.state)]);
-      if (backup.state.settings.closed && !backup.state.settings.criteriaApproved) throw new HttpError(400, 'El respaldo contiene una evaluación cerrada sin criterios aprobados.');
+      const missingLinks = backup.state.pdfs.filter(pdf => pdf.studentId && !backup.state.students.find(student => student.id === pdf.studentId)?.pdfIds.includes(pdf.id));
+      const legacyDuplicateLinks = backup.state.settings.workflowVersion !== 2 && missingLinks.every(pdf => pdf.status === 'duplicate');
+      checkErrors(stateReferenceErrors(backup.state).filter(error => !legacyDuplicateLinks || error !== 'El vínculo del PDF no aparece en el expediente del estudiante.'));
+      const restored = migrateState(backup.state);
+      checkErrors([...validateSettings(restored.settings), ...stateReferenceErrors(restored)]);
+      if (restored.settings.closed && !restored.settings.criteriaApproved) throw new HttpError(400, 'El respaldo contiene una evaluación cerrada sin criterios aprobados.');
       const ids = new Set(backup.files.map(file => file.id));
-      if (ids.size !== backup.files.length || backup.state.pdfs.some(pdf => !ids.has(pdf.id))) throw new HttpError(400, 'El respaldo no incluye todos los PDF originales.');
+      if (ids.size !== backup.files.length || restored.pdfs.some(pdf => !ids.has(pdf.id))) throw new HttpError(400, 'El respaldo no incluye todos los PDF originales.');
       const files = new Map<string, Blob>();
       for (const file of backup.files) {
-        const content = fromBase64(file.content), pdf = backup.state.pdfs.find(value => value.id === file.id);
+        const content = fromBase64(file.content), pdf = restored.pdfs.find(value => value.id === file.id);
         if (!pdf || content.size !== pdf.size || await sha256(content) !== pdf.hash) throw new HttpError(400, 'La integridad de un PDF del respaldo no es válida.');
         files.set(file.id, content);
       }
-      await save(dataset, backup.state, expected, files, true); return json({ restored: true, students: backup.state.students.length, pdfs: files.size });
+      await save(dataset, restored, expected, files, true); return json({ restored: true, students: restored.students.length, pdfs: files.size });
     }
     throw new HttpError(404, 'Ruta de API no encontrada.');
   }
 
   function failure(error: unknown): Response {
     if (error instanceof HttpError) return json({ error: error.message, details: error.details }, error.status);
+    if (error instanceof ReportWorkflowError) return json({ error: error.message }, error.status);
     if (error instanceof ZodError) return json({ error: 'Los datos no tienen el formato esperado.', details: error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`) }, 400);
     if (error instanceof SyntaxError) return json({ error: 'El archivo JSON no es válido.' }, 400);
     if (error instanceof DOMException && ['QuotaExceededError', 'NS_ERROR_DOM_QUOTA_REACHED'].includes(error.name)) return json({ error: 'El navegador no tiene espacio suficiente. Descargue un respaldo y libere almacenamiento o reduzca el tamaño de los PDF. Los datos anteriores se conservaron.' }, 413);

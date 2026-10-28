@@ -1,25 +1,31 @@
 import ExcelJS from 'exceljs';
 import type { AppState } from '../shared/types.js';
 import { calculateStudent, rankStudents } from '../shared/calculations.js';
+import { ACTIVE_BIMESTERS, normalizeCohort } from '../shared/policy.js';
 
 export async function buildWorkbook(state: AppState, filters: {grade?:string;section?:string} = {}) {
   const workbook=new ExcelJS.Workbook();
   workbook.creator='Colegio Albert Einstein · Círculos';
   workbook.created=new Date();
-  const students=state.students.filter(s=>(!filters.grade||s.grade===filters.grade)&&(!filters.section||s.section===filters.section));
+  const requestedCohort=filters.grade?normalizeCohort(filters.grade,filters.section||'F'):null;
+  const students=state.students.filter(s=>{const cohort=normalizeCohort(s.grade,s.section);return cohort&&(!filters.grade||cohort.grade===requestedCohort?.grade)&&(!filters.section||cohort.section===filters.section.trim().toUpperCase());});
   const ranked=rankStudents(students,state.settings);
   const ranking=workbook.addWorksheet('RANKING');
   ranking.addRow(['Puesto','Código','Estudiante','Grado','Sección','Académico A','Desempeño B','Compromiso C','Promedio TOTAL','Avance (%)','Estado','Cohorte']);
   for (const {student:s,result:r,position,cohort} of ranked) ranking.addRow([position,s.code,s.name,s.grade,s.section,r.a,r.b,r.c,r.total,r.progress,r.status,cohort]);
   const detail=workbook.addWorksheet('DETALLE');
-  detail.addRow(['Código','Estudiante','G','R','P','Ciencias (1–4)','Letras (1–4)','S1','S2','Asistencia (%)','Puntualidad (%)','AP','Disciplina','Participación PI','Familia CF','Peso G','Peso R','Peso P','Peso AP','Peso D','Peso PI','Peso CF','Origen académico','Asistencia registrada','Incidencias verificadas','Participación registrada','Familia registrada','Historial de ajustes']);
-  for (const {student:s,result:r} of ranked) {
+  detail.addRow(['Código','Estudiante','G','R','P','Ciencias (1–4)','Letras (1–4)','Promedio I–II','Promedio III','Asistencia (%)','Puntualidad (%)','AP','Disciplina','Participación PI','Familia CF','Peso G','Peso R','Peso P','Peso AP','Peso D','Peso PI','Peso CF','Origen académico','Asistencia registrada','Incidencias verificadas','Participación registrada','Familia registrada','Historial de ajustes',...ACTIVE_BIMESTERS.map(period=>`Calificaciones ${period}`),'Puesto en concursos','Representación del colegio']);
+  for (const s of students) {
+    const r=calculateStudent(s,state.settings);
     const pdfs=state.pdfs.filter(p=>s.pdfIds.includes(p.id));
     detail.addRow([s.code,s.name,r.g,r.r,r.p,r.science,r.letters,r.s1,r.s2,r.attendance,r.punctuality,r.ap,r.discipline,r.participation,r.family,
       state.settings.academicWeights.general,state.settings.academicWeights.specialized,state.settings.academicWeights.progress,
       state.settings.performanceWeights.attendance,state.settings.performanceWeights.discipline,state.settings.commitmentWeights.participation,state.settings.commitmentWeights.family,
       pdfs.length?pdfs.map(p=>`${p.name} | SHA-256 ${p.hash} | ${p.status}`).join('\n'):'Registro manual revisado',
-      JSON.stringify(s.attendance),JSON.stringify(s.discipline),JSON.stringify(s.institutional),JSON.stringify(s.family),JSON.stringify(s.history)]);
+      JSON.stringify(s.attendance),JSON.stringify(s.discipline),JSON.stringify(s.institutional),JSON.stringify(s.family),JSON.stringify(s.history),
+      ...ACTIVE_BIMESTERS.map((_,period)=>JSON.stringify(s.academic.map(area=>({areaId:area.areaId,grades:area.grades.map(row=>row[period]??'')})))),
+      JSON.stringify(s.institutional.map(record=>({id:record.id,name:record.name,placement:record.placement??''}))),
+      JSON.stringify(s.institutional.map(record=>({id:record.id,name:record.name,representingSchool:record.representingSchool??null})))]);
   }
   const pending=workbook.addWorksheet('PENDIENTES');
   pending.addRow(['Código','Estudiante','Grado','Sección','Avance (%)','PA (%)','PB (%)','PC (%)','Estado','Dimensiones y validaciones pendientes']);
@@ -34,6 +40,7 @@ export async function buildWorkbook(state: AppState, filters: {grade?:string;sec
     ['Fórmula total','(A + B + C) / 3; sin sustitución de dimensiones faltantes'],
     ['Regla de empate','Posición compartida al coincidir el total presentado con dos decimales'],
     ['Cohorte comparable','Grado y sección; posiciones independientes por cohorte'],
+    ['Salones admitidos','2.º F, 3.º F y 4.º F'],['Bimestres evaluados','I, II y III'],['Progresión','Promedio I–II comparado con III'],
     ['Filtro grado',filters.grade||'Todos'],['Filtro sección',filters.section||'Todas'],
     ['Criterios institucionales aprobados',state.settings.criteriaApproved?'Sí':'No'],
     ['Evaluación cerrada',state.settings.closed?'Sí':'No'],

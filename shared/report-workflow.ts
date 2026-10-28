@@ -1,0 +1,178 @@
+import { createStudent } from './defaults.js';
+import { cohortRecordApplies } from './calculations.js';
+import { ACTIVE_BIMESTERS, normalizeCohort } from './policy.js';
+import type { AppState, Grade, PdfRecord, Settings, Student } from './types.js';
+
+type Identity = NonNullable<PdfRecord['confirmedIdentity']>;
+const stamp = () => new Date().toISOString();
+const codeKey = (code: string) => code.trim().toLocaleLowerCase();
+const nameKey = (name: string) => name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+const audit = (student: Student, field: string, before: unknown, after: unknown) => student.history.push({ id: globalThis.crypto.randomUUID(), date: stamp(), field, before: typeof before === 'string' ? before : JSON.stringify(before), after: typeof after === 'string' ? after : JSON.stringify(after) });
+
+export class ReportWorkflowError extends Error {
+  constructor(public status: number, message: string) { super(message); }
+}
+
+function identityOf(pdf: PdfRecord): Identity {
+  return pdf.confirmedIdentity ?? { code: pdf.extractedCode, name: pdf.extractedName, grade: pdf.extractedGrade, section: pdf.extractedSection };
+}
+
+function normalizeIdentity(input: Identity): Identity | null {
+  if (!input || typeof input.code !== 'string' || typeof input.name !== 'string') return null;
+  const code = input.code.trim(), name = input.name.trim().replace(/\s+/g, ' ');
+  const cohort = normalizeCohort(input.grade, input.section);
+  if (!code || code.length > 100 || !name || name.length > 200 || !cohort) return null;
+  return { code, name, grade: cohort.grade, section: cohort.section };
+}
+
+function sameIdentity(student: Student, identity: Identity): boolean {
+  const cohort = normalizeCohort(student.grade, student.section);
+  return codeKey(student.code) === codeKey(identity.code) && nameKey(student.name) === nameKey(identity.name) && cohort?.grade === identity.grade && cohort.section === identity.section;
+}
+
+/** Copies only the three active periods. Manual attendance, discipline and commitments are retained. */
+export function linkAcademic(student: Student, pdf: PdfRecord, settings: Settings, replace = true): void {
+  const before = structuredClone(student.academic);
+  student.academic = settings.areas.map(def => {
+    const source = pdf.areas.find(area => area.areaId === def.id);
+    const old = replace ? undefined : student.academic.find(area => area.areaId === def.id);
+    return { areaId: def.id, grades: def.competencies.map((_, index) => ACTIVE_BIMESTERS.map((__, period) => {
+      const value = source?.grades[index]?.[period] ?? old?.grades[index]?.[period] ?? '';
+      return (['AD', 'A', 'B', 'C', ''].includes(value) ? value : '') as Grade;
+    })), validated: false };
+  });
+  student.validated.academic = false;
+  delete student.reportApproval;
+  if (!student.pdfIds.includes(pdf.id)) student.pdfIds.push(pdf.id);
+  student.updatedAt = stamp();
+  audit(student, `Importación PDF: ${pdf.name}`, before, student.academic);
+}
+
+function detachReport(state: AppState, pdf: PdfRecord, targetId: string): void {
+  const prior = state.students.find(student => student.id === pdf.studentId && student.id !== targetId);
+  if (prior) {
+    prior.pdfIds = prior.pdfIds.filter(id => id !== pdf.id);
+    if (prior.reportApproval?.pdfId === pdf.id) {
+      delete prior.reportApproval;
+      prior.validated.academic = false;
+      prior.academic.forEach(area => { area.validated = false; });
+    }
+    prior.updatedAt = stamp();
+    audit(prior, 'Reasignación de PDF', pdf.name, targetId);
+  }
+}
+
+function supersedeReports(state: AppState, pdf: PdfRecord, student: Student): void {
+  const active = state.pdfs.filter(prior => prior.id !== pdf.id && prior.studentId === student.id && (prior.status === 'validated' || prior.status === 'review' || prior.status === 'pending'));
+  for (const prior of active) prior.status = 'replaced';
+  if (!pdf.replacesId && active.length) pdf.replacesId = active[active.length - 1].id;
+}
+
+/** An incomplete or unsupported identity stays in the import queue for explicit correction. */
+export function registerImportedReport(state: AppState, pdf: PdfRecord): Student | null {
+  if (pdf.status === 'failed' || pdf.status === 'duplicate') return null;
+  const identity = normalizeIdentity(identityOf(pdf));
+  if (!identity) {
+    pdf.status = 'review';
+    pdf.warnings.push('Revise código, nombre y aula: solo se admiten 2.º F, 3.º F y 4.º F.');
+    return null;
+  }
+  let student = state.students.find(candidate => codeKey(candidate.code) === codeKey(identity.code));
+  if (student && !sameIdentity(student, identity)) {
+    pdf.warnings.push('El código corresponde a un expediente con otra identidad. Confirme la identidad antes de aplicar la libreta.');
+    return null;
+  }
+  if (!student) {
+    student = createStudent(identity, state.settings);
+    audit(student, 'Creación desde PDF', '', identity);
+    state.students.push(student);
+  }
+  supersedeReports(state, pdf, student);
+  pdf.studentId = student.id;
+  pdf.status = 'review';
+  linkAcademic(student, pdf, state.settings);
+  return student;
+}
+
+export function confirmReport(state: AppState, pdfId: string, options: { identity?: Identity; confirmMismatch?: boolean } = {}): { pdf: PdfRecord; student: Student } {
+  const pdf = state.pdfs.find(record => record.id === pdfId);
+  if (!pdf) throw new ReportWorkflowError(404, 'PDF no encontrado.');
+  if (pdf.status === 'failed' || pdf.status === 'duplicate' || pdf.status === 'replaced') throw new ReportWorkflowError(400, 'Un PDF fallido, duplicado o reemplazado no puede confirmarse.');
+  const identity = normalizeIdentity(options.identity ?? identityOf(pdf));
+  if (!identity) throw new ReportWorkflowError(400, 'Complete código, nombre y un aula válida: 2.º F, 3.º F o 4.º F.');
+  const linked = state.students.find(student => student.id === pdf.studentId);
+  const existing = state.students.find(student => codeKey(student.code) === codeKey(identity.code));
+  let student = linked ?? existing;
+  if (existing && existing.id !== linked?.id) {
+    if ((!sameIdentity(existing, identity) || linked) && options.confirmMismatch !== true) throw new ReportWorkflowError(409, 'La identidad corresponde a otro expediente. Confirme la reasignación antes de aplicar la libreta.');
+    student = existing;
+  }
+  if (linked && !options.identity && !sameIdentity(linked, identity) && options.confirmMismatch !== true) throw new ReportWorkflowError(409, 'La identidad extraída no coincide. Revise y confirme la reasignación.');
+  if (!student) {
+    student = createStudent(identity, state.settings);
+    state.students.push(student);
+    audit(student, 'Creación desde PDF confirmado', '', identity);
+  }
+  const preserveAcademic = student.id === linked?.id && pdf.status === 'validated' && student.reportApproval?.pdfId === pdf.id;
+  const priorIdentity = { code: student.code, name: student.name, grade: student.grade, section: student.section };
+  detachReport(state, pdf, student.id);
+  Object.assign(student, identity);
+  const priorCommitments = { institutional: structuredClone(student.institutional), family: structuredClone(student.family) };
+  let detachedCommitment = false;
+  for (const kind of ['institutional', 'family'] as const) for (const record of student[kind]) {
+    if (!record.catalogId) continue;
+    const criterion = state.settings.cohortRecords?.find(candidate => candidate.id === record.catalogId && candidate.kind === kind && cohortRecordApplies(candidate, student));
+    if (!criterion) { delete record.catalogId; record.validated = false; detachedCommitment = true; }
+  }
+  if (detachedCommitment) {
+    student.validated.commitment = false;
+    audit(student, 'Desvinculación de pauta tras confirmar identidad', priorCommitments, { institutional: student.institutional, family: student.family });
+  }
+  pdf.confirmedIdentity = identity;
+  supersedeReports(state, pdf, student);
+  pdf.studentId = student.id;
+  if (!preserveAcademic) {
+    linkAcademic(student, pdf, state.settings);
+    for (const area of student.academic) area.validated = area.grades.length > 0 && area.grades.every(row => row.length === ACTIVE_BIMESTERS.length && row.every(Boolean));
+    const eligibleAreas = state.settings.areas.filter(area => area.eligible);
+    student.validated.academic = eligibleAreas.length > 0 && eligibleAreas.every(def => student!.academic.find(area => area.areaId === def.id)?.validated === true);
+  }
+  pdf.status = 'validated';
+  student.reportApproval = { pdfId: pdf.id, approvedAt: stamp() };
+  student.updatedAt = stamp();
+  if (JSON.stringify(priorIdentity) !== JSON.stringify(identity)) audit(student, 'Identidad del PDF confirmada', priorIdentity, identity);
+  audit(student, 'Lectura PDF confirmada', pdf.name, { identity, academic: student.validated.academic });
+  return { pdf, student };
+}
+
+/** Uses explicit links only; a code found in PDF text never selects a student for deletion. */
+export function deleteReportAndStudent(state: AppState, pdfId: string): { studentId: string | null; deletedPdfIds: string[] } {
+  const pdf = state.pdfs.find(record => record.id === pdfId);
+  if (!pdf) throw new ReportWorkflowError(404, 'PDF no encontrado.');
+  const student = state.students.find(candidate => candidate.id === pdf.studentId);
+  const ids = new Set<string>([pdf.id, ...(student?.pdfIds ?? [])]);
+  if (student) for (const record of state.pdfs) if (record.studentId === student.id) ids.add(record.id);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const hashes = new Set(state.pdfs.filter(record => ids.has(record.id)).map(record => record.hash));
+    for (const record of state.pdfs) {
+      if (ids.has(record.id)) continue;
+      const sameOwner = !record.studentId || record.studentId === student?.id;
+      if (sameOwner && (hashes.has(record.hash) || (record.replacesId && ids.has(record.replacesId)))) { ids.add(record.id); changed = true; }
+    }
+  }
+  state.pdfs = state.pdfs.filter(record => !ids.has(record.id));
+  if (student) state.students = state.students.filter(candidate => candidate.id !== student.id);
+  for (const remaining of state.students) {
+    remaining.pdfIds = remaining.pdfIds.filter(id => !ids.has(id));
+    if (remaining.reportApproval && ids.has(remaining.reportApproval.pdfId)) {
+      delete remaining.reportApproval;
+      remaining.validated.academic = false;
+      remaining.academic.forEach(area => { area.validated = false; });
+      remaining.updatedAt = stamp();
+    }
+  }
+  for (const remaining of state.pdfs) if (remaining.replacesId && ids.has(remaining.replacesId)) delete remaining.replacesId;
+  return { studentId: student?.id ?? null, deletedPdfIds: [...ids] };
+}

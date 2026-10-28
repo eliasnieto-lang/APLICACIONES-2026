@@ -1,9 +1,11 @@
-import type { AppState, Commitment, Grade, Settings, Student } from './types';
-import { cohortRecordApplies } from './calculations';
+import type { AppState, Grade, Settings, Student } from './types';
+import { ACTIVE_BIMESTERS, ALLOWED_COHORTS, normalizeCohort } from './policy';
 
 export const defaultSettings: Settings = {
   year: 2027,
-  version: '1.0.0 · Cartilla Círculos 2027',
+  version: '2.0.0 · Cartilla Círculos 2027 · I–III',
+  workflowVersion: 2,
+  progressionComparison: 'first_two_vs_third',
   areas: [
     { id: 'matematica', name: 'Matemática', group: 'math', eligible: true, competencies: ['Resuelve problemas de cantidad', 'Resuelve problemas de regularidad, equivalencia y cambio', 'Resuelve problemas de forma, movimiento y localización', 'Resuelve problemas de gestión de datos e incertidumbre'] },
     { id: 'ciencia', name: 'Ciencia y Tecnología', group: 'science', eligible: true, competencies: ['Indaga mediante métodos científicos', 'Explica el mundo físico', 'Diseña y construye soluciones tecnológicas'] },
@@ -33,54 +35,36 @@ export const defaultSettings: Settings = {
 const newId = () => globalThis.crypto.randomUUID();
 export function createStudent(input: Partial<Student>, settings: Settings): Student {
   const now = new Date().toISOString();
+  const cohort = normalizeCohort(input.grade ?? '', input.section ?? '');
   const student: Student = {
-    id: input.id ?? newId(), code: input.code ?? '', name: input.name ?? '', grade: input.grade ?? '', section: input.section ?? '',
-    academic: input.academic ?? settings.areas.map(area => ({ areaId: area.id, grades: area.competencies.map(() => ['', '', '', ''] as Grade[]), validated: false })),
+    id: input.id ?? newId(), code: input.code ?? '', name: input.name ?? '', grade: cohort?.grade ?? input.grade ?? '', section: cohort?.section ?? input.section ?? '',
+    academic: input.academic ?? settings.areas.map(area => ({ areaId: area.id, grades: area.competencies.map(() => ACTIVE_BIMESTERS.map(() => '') as Grade[]), validated: false })),
     attendance: input.attendance ?? { required: null, attended: null, punctual: null, exempted: null, validated: false },
     discipline: input.discipline ?? { confirmed: false, incidents: [] },
     institutional: [...(input.institutional ?? [])], family: [...(input.family ?? [])],
     validated: input.validated ?? { academic: false, performance: false, commitment: false },
     history: input.history ?? [], pdfIds: input.pdfIds ?? [], createdAt: input.createdAt ?? now, updatedAt: input.updatedAt ?? now,
+    ...(input.reportApproval ? { reportApproval: input.reportApproval } : {}),
   };
-  for (const template of settings.cohortRecords ?? []) {
-    if (!cohortRecordApplies(template, student)) continue;
-    const records = template.kind === 'institutional' ? student.institutional : student.family;
-    if (!records.some(record => record.catalogId === template.id)) records.push({ id: newId(), catalogId: template.id, name: template.name, date: template.date, required: template.required, status: 'pending', justification: '', evidence: '', validated: false });
-  }
   return student;
 }
 
 export function createDemoState(): AppState {
   const settings = structuredClone(defaultSettings);
-  settings.criteriaApproved = true;
   settings.disciplineTypes[0].discount = 5;
   settings.disciplineTypes[1].discount = 15;
   settings.disciplineTypes[2].discount = 30;
-  settings.cohortRecords = [
-    ...Array.from({ length: 5 }, (_, i) => ({ id: `demo-actividad-${i + 1}`, kind: 'institutional' as const, name: `Actividad institucional ${i + 1}`, date: `2026-${String(4 + i % 7).padStart(2, '0')}-15`, grade: '', section: '', required: true })),
-    ...Array.from({ length: 4 }, (_, i) => ({ id: `demo-familia-${i + 1}`, kind: 'family' as const, name: `Reunión familiar ${i + 1}`, date: `2026-${String(4 + i % 7).padStart(2, '0')}-15`, grade: '', section: '', required: true })),
-  ];
   const names = ['Valentina Mendoza Torres', 'Mateo Salazar Ríos', 'Luciana Flores Vega', 'Sebastián Quispe León', 'Camila Paredes Soto', 'Nicolás Herrera Díaz', 'Alessia Romero Cruz', 'Gabriel Castro Silva'];
-  const makeRecords = (kind: 'institutional' | 'family', fulfilled: number): Commitment[] => settings.cohortRecords!.filter(template => template.kind === kind).map((template, i) => ({ id: newId(), catalogId: template.id, name: template.name, date: template.date, required: template.required, status: i < fulfilled ? 'fulfilled' : 'missed', justification: '', evidence: `Acta ficticia de demostración ${i + 1}`, validated: true }));
   const students = names.map((name, i) => {
-    const s = createStudent({ code: `DEMO-${String(i + 1).padStart(3, '0')}`, name, grade: i >= 6 ? '4° secundaria' : '3° secundaria', section: 'A' }, settings);
+    const cohort = ALLOWED_COHORTS[i % ALLOWED_COHORTS.length];
+    const s = createStudent({ code: `DEMO-${String(i + 1).padStart(3, '0')}`, name, grade: cohort.grade, section: cohort.section }, settings);
     s.academic.forEach((area, a) => {
-      area.grades = area.grades.map((_, c) => Array.from({ length: 4 }, (__, b) => i === 0 ? ((a + c + b) % 3 === 0 ? 'AD' : 'A') : i === 1 ? (b > 1 ? 'AD' : 'A') : i === 2 ? 'A' : ((a + c + i + b) % 6 === 0 ? 'B' : 'A')));
-      area.validated = true;
+      area.grades = area.grades.map((_, c) => ACTIVE_BIMESTERS.map((__, b) => i === 0 ? ((a + c + b) % 3 === 0 ? 'AD' : 'A') : i === 1 ? (b > 1 ? 'AD' : 'A') : i === 2 ? 'A' : ((a + c + i + b) % 6 === 0 ? 'B' : 'A')));
     });
-    s.attendance = { required: 200, exempted: 0, attended: 190 - i * 2, punctual: 180 - i * 3, validated: true };
-    s.discipline.confirmed = true;
-    s.institutional = makeRecords('institutional', i < 2 ? 5 : 4);
-    s.family = makeRecords('family', i === 3 ? 3 : 4);
-    s.validated = { academic: true, performance: true, commitment: true };
     if (i === 4) {
-      s.academic[0].grades.forEach(row => { row[3] = ''; });
-      s.academic[0].validated = false;
-      s.validated.academic = false;
+      s.academic[0].grades.forEach(row => { row[2] = ''; });
     }
-    if (i === 5) { s.discipline.confirmed = false; s.validated.performance = false; }
-    if (i === 6) { s.family[0].status = 'pending'; s.family[0].validated = false; s.validated.commitment = false; }
-    if (i === 7) return createStudent({ id: s.id, code: s.code, name: s.name, grade: s.grade, section: 'B' }, settings);
+    if (i === 7) return createStudent({ id: s.id, code: s.code, name: s.name, grade: s.grade, section: s.section }, settings);
     return s;
   });
   return { students, settings, pdfs: [] };

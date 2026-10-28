@@ -1,4 +1,5 @@
 import type { CohortRecord, Commitment, Settings, Student } from './types';
+import { ACTIVE_BIMESTERS, cohortKey, isReportApproved, normalizeCohort } from './policy';
 
 export interface StudentResult {
   a: number | null; b: number | null; c: number | null; total: number | null;
@@ -17,7 +18,14 @@ const present = (value: unknown): value is number => typeof value === 'number' &
 const count = (value: unknown): value is number => present(value) && Number.isInteger(value) && value >= 0;
 const percent = (part: number, total: number) => total > 0 ? 100 * part / total : 0;
 const validDate = (value: string): boolean => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
-export const cohortRecordApplies = (record: CohortRecord, student: Pick<Student, 'grade' | 'section'>): boolean => (!record.grade.trim() || record.grade.trim() === student.grade.trim()) && (!record.section.trim() || record.section.trim() === student.section.trim());
+export const cohortRecordApplies = (record: CohortRecord, student: Pick<Student, 'grade' | 'section'>): boolean => {
+  const grade = record.grade.trim();
+  const section = record.section.trim().toUpperCase();
+  const studentCohort = normalizeCohort(student.grade, student.section);
+  const recordCohort = normalizeCohort(grade, section || 'F');
+  const gradeMatches = !grade || (studentCohort && recordCohort ? studentCohort.grade === recordCohort.grade : grade === student.grade.trim());
+  return Boolean(gradeMatches && (!section || section === student.section.trim().toUpperCase()));
+};
 export const fmt = (value: number | null): string => value === null || !Number.isFinite(value) ? 'Pendiente' : value.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 export const calculateProgression = (s1: number, s2: number): number => 25 * Math.min(4, Math.max(1, s2 + .5 * (s2 - s1)));
 export const calculateTotal = (a: number | null, b: number | null, c: number | null): number | null => a !== null && b !== null && c !== null ? (a + b + c) / 3 : null;
@@ -67,7 +75,7 @@ function commitmentResult(records: Commitment[], label: string, pending: string[
     const template = record.catalogId ? templates.find(template => template.id === record.catalogId) : undefined;
     const catalogValid = !record.catalogId || Boolean(template && records.filter(r => r.catalogId === record.catalogId).length === 1 && template.name.trim() === record.name.trim() && template.date === record.date && template.required === record.required);
     if (!catalogValid) pending.push(`${label}: revisar vinculación y datos de convocatoria común ${record.name || record.catalogId}.`);
-    const needsJustification = !record.required || ['justified', 'na'].includes(record.status);
+    const needsJustification = !record.required || ['missed', 'justified', 'na'].includes(record.status);
     const hasEvidence = Boolean(record.evidence?.trim());
     const dataValid = Boolean(catalogValid && record.name.trim() && validDate(record.date) && ['fulfilled', 'missed', 'justified', 'na'].includes(record.status) && hasEvidence && (!needsJustification || record.justification.trim()));
     if (!dataValid) {
@@ -86,17 +94,32 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
   const pending: string[] = [];
   const configErrors = validateSettings(settings);
   pending.push(...configErrors);
+  const reportApproved = isReportApproved(student);
+  if (!reportApproved) {
+    const noData = student.academic.every(area => area.grades.every(row => row.every(value => !value))) && Object.values(student.attendance).every(value => value === null || value === false) && !student.discipline.confirmed && !student.discipline.incidents.length && !student.institutional.length && !student.family.length;
+    pending.push('Confirmar la identidad y la lectura de una libreta PDF antes de evaluar Académico, Desempeño y Compromiso.');
+    return {
+      a: null, b: null, c: null, total: null, g: null, r: null, p: null,
+      science: null, letters: null, s1: null, s2: null, delta: null,
+      attendance: null, punctuality: null, ap: null, discipline: null,
+      participation: null, family: null, participationNA: false, familyNA: false,
+      pa: 0, pb: 0, pc: 0, progress: 0,
+      academicComplete: false, performanceComplete: false, commitmentComplete: false,
+      eligible: false, status: noData ? 'SIN INICIAR' : 'PENDIENTE DE LIBRETA', pending,
+      areaAverages: Object.fromEntries(settings.areas.filter(area => area.eligible).map(area => [area.id, null])),
+    };
+  }
   const eligibleAreas = settings.areas.filter(a => a.eligible);
   const areaAverages: Record<string, number | null> = {};
   const bimestersByArea: Record<string, (number | null)[]> = {};
   let expectedGrades = 0;
   let validatedGrades = 0;
   let enteredGrades = 0;
-  const missingByBimester = [0, 0, 0, 0];
+  const missingByBimester = ACTIVE_BIMESTERS.map(() => 0);
   for (const area of eligibleAreas) {
     const input = student.academic.find(a => a.areaId === area.id);
     const bimesters: (number | null)[] = [];
-    for (let b = 0; b < 4; b++) {
+    for (let b = 0; b < ACTIVE_BIMESTERS.length; b++) {
       const values: number[] = [];
       for (let c = 0; c < area.competencies.length; c++) {
         expectedGrades++;
@@ -113,7 +136,7 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
     areaAverages[area.id] = bimesters.every(present) ? mean(bimesters as number[]) : null;
     if (!input?.validated) pending.push(`Validar área: ${area.name}.`);
   }
-  ['I', 'II', 'III', 'IV'].forEach((label, b) => {
+  ACTIVE_BIMESTERS.forEach((label, b) => {
     if (missingByBimester[b]) pending.push(`Faltan ${missingByBimester[b]} notas del ${label} bimestre.`);
   });
   const academicComplete = expectedGrades > 0 && enteredGrades === expectedGrades;
@@ -137,7 +160,7 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
     return values.length && values.every(present) ? mean(values as number[]) : null;
   };
   const s1 = semester([0, 1]);
-  const s2 = semester([2, 3]);
+  const s2 = semester([2]);
   const delta = s1 !== null && s2 !== null ? s2 - s1 : null;
   const p = s1 !== null && s2 !== null ? calculateProgression(s1, s2) : null;
   const a = academicComplete && g !== null && r !== null && p !== null ? settings.academicWeights.general * g + settings.academicWeights.specialized * r + settings.academicWeights.progress * p : null;
@@ -175,8 +198,8 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
   const b = ap !== null && discipline !== null ? settings.performanceWeights.attendance * ap + settings.performanceWeights.discipline * discipline : null;
 
   const cohortRecords = (settings.cohortRecords ?? []).filter(record => cohortRecordApplies(record, student));
-  const pi = commitmentResult(student.institutional, 'Participación institucional', pending, cohortRecords.filter(record => record.kind === 'institutional'));
-  const cf = commitmentResult(student.family, 'Compromiso familiar', pending, cohortRecords.filter(record => record.kind === 'family'));
+  const pi = commitmentResult(student.institutional, 'Participación institucional', pending, cohortRecords.filter(record => record.kind === 'institutional' && student.institutional.some(input => input.catalogId === record.id)));
+  const cf = commitmentResult(student.family, 'Compromiso familiar', pending, cohortRecords.filter(record => record.kind === 'family' && student.family.some(input => input.catalogId === record.id)));
   let c: number | null = pi.value !== null && cf.value !== null ? settings.commitmentWeights.participation * pi.value + settings.commitmentWeights.family * cf.value : null;
   if ((pi.na || cf.na) && pi.complete && cf.complete) {
     if (settings.naPolicy === 'other_component' && settings.naPolicyApproved && !(pi.na && cf.na)) c = pi.na ? cf.value : pi.value;
@@ -190,12 +213,14 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
   const unresolvedIdentity = (value: string) => !value.trim() || /^(?:por revisar|por definir|sin grado|sin secci[oó]n|desconocido|[-—–])$/i.test(value.trim());
   const identityValid = ![student.code, student.name, student.grade, student.section].some(unresolvedIdentity);
   if (!identityValid) pending.push('Completar código, nombre, grado y sección del estudiante.');
+  const cohortValid = Boolean(normalizeCohort(student.grade, student.section));
+  if (!cohortValid) pending.push('El grado y sección deben corresponder a 2.º F, 3.º F o 4.º F de secundaria.');
   if (!student.validated.academic) pending.push('Confirmar validación final de Académico.');
   if (!student.validated.performance) pending.push('Confirmar validación final de Desempeño.');
   if (!student.validated.commitment) pending.push('Confirmar validación final de Compromiso.');
   if (!settings.criteriaApproved) pending.push('Confirmar aprobación institucional de los criterios y ponderaciones.');
   const total = calculateTotal(a, b, c);
-  const eligible = total !== null && academicComplete && performanceComplete && commitmentComplete && progress === 100 && Object.values(student.validated).every(Boolean) && settings.criteriaApproved && configErrors.length === 0 && identityValid;
+  const eligible = total !== null && academicComplete && performanceComplete && commitmentComplete && progress === 100 && Object.values(student.validated).every(Boolean) && settings.criteriaApproved && configErrors.length === 0 && identityValid && cohortValid;
   const untouchedCommitments = [...student.institutional, ...student.family].every(record => record.status === 'pending' && !record.validated && !record.justification && !record.evidence);
   const noData = enteredGrades === 0 && attendanceFields.every(v => v === null) && !student.discipline.confirmed && !student.discipline.incidents.length && untouchedCommitments;
   const status = eligible ? 'VALIDADO' : noData ? 'SIN INICIAR' : configErrors.length || attendanceInvalid ? 'CON OBSERVACIONES' : total !== null && progress === 100 ? 'COMPLETO SIN VALIDAR' : 'EN PROCESO';
@@ -205,7 +230,7 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
 /** Competition ranking inside each comparable grade/section; ties use displayed precision. */
 export function rankStudents(students: Student[], settings: Settings): RankedStudent[] {
   const rounded = (value: number) => Number(value.toLocaleString('en-US', { useGrouping: false, minimumFractionDigits: 2, maximumFractionDigits: 2 }));
-  const rows = students.map(student => ({ student, result: calculateStudent(student, settings), position: 0, cohort: `${student.grade} · ${student.section}` })).filter(row => row.result.eligible);
+  const rows = students.filter(student => normalizeCohort(student.grade, student.section)).map(student => ({ student, result: calculateStudent(student, settings), position: 0, cohort: cohortKey(student.grade, student.section) })).filter(row => row.result.eligible);
   rows.sort((a, b) => a.cohort.localeCompare(b.cohort, 'es', { numeric: true }) || rounded(b.result.total!) - rounded(a.result.total!));
   let cohort = '';
   let previous: number | null = null;

@@ -1,5 +1,26 @@
 # Validación de la edición web
 
+## Ajuste de libretas y tres bimestres
+
+La prueba vigente es `npm run build:web && npm run test:web`, implementada en `tests/browser-adjustment.cjs`. Sirve únicamente el HTML generado, con un perfil de navegador aislado, y comprueba:
+
+- Código, apellidos y nombres extraídos de PDF nativos con tres bimestres, lista automática y exclusión de aulas no habilitadas.
+- Filtro exacto 2.º F, 3.º F y 4.º F, bloqueo previo y apertura de las tres áreas al confirmar.
+- Académico automático con I–III y progresión del promedio I–II frente a III; B y C inicialmente vacíos.
+- Captura manual de asistencia, concurso con puesto y representación, incumplimiento con observación/evidencia, validaciones y ranking.
+- Excel con cuatro hojas, resultados esperados y registros pendientes separados.
+- Nueva versión de libreta, duplicado, conservación de B/C, eliminación de ficha y todos los originales relacionados, y reimportación del mismo documento.
+- Persistencia al reiniciar el navegador y ausencia de solicitudes HTTP a una API o a otros orígenes tras cargar el HTML.
+
+Los scripts `tests/browser-web.cjs` y `tests/browser-smoke.cjs` conservan pruebas históricas de la primera versión. Los comandos npm `test:web` y `test:browser` ejecutan la prueba actual del ajuste. La validación matemática, SQLite y lectura PDF/OCR se ejecuta con `npm test`: 64 pruebas aprobadas en este ajuste, incluidas la protección de documentos reasignados a otro estudiante y la corrección de aula sin pérdida de datos manuales.
+
+El flujo completo pasó en Chromium con datos ficticios: Académico 58,75 para notas C/B/A, Desempeño manual 95,50 y Compromiso manual 65,00. El total exportado coincide con su promedio. No hubo solicitudes HTTP adicionales, errores JavaScript ni errores de consola. También se verificaron bloqueo de modificaciones antes de confirmar, restauraciones con contenido adulterado y conflictos entre pestañas en una prueba aislada de la API local del navegador.
+
+No se ha recibido una libreta real para verificar la diagramación institucional. El original y las observaciones permanecen disponibles para revisión.
+
+## Registro histórico de la primera edición
+
+
 La edición web usa el almacenamiento IndexedDB del navegador y procesa los documentos en el dispositivo. Esta validación es independiente de las pruebas de la edición con servidor y SQLite descritas en `VALIDACION.md`.
 
 ## Cómo repetir la prueba

@@ -3,7 +3,8 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { AppState, Dataset } from '../shared/types.js';
 import { defaultSettings, createDemoState } from '../shared/defaults.js';
-import { stateSchema } from './validation.js';
+import { stateSchema, stateReferenceErrors } from './validation.js';
+import { migrateState } from '../shared/migrations.js';
 
 export const MAX_BACKUP_BYTES=512*1024*1024;
 export class CapacityError extends Error {}
@@ -22,13 +23,19 @@ export class Store {
   }
   read(dataset: Dataset): AppState {
     const row = this.db.prepare('SELECT payload FROM states WHERE dataset=?').get(dataset) as { payload: string };
-    return JSON.parse(row.payload);
+    const state=migrateState(JSON.parse(row.payload) as AppState);
+    if(JSON.stringify(state)!==row.payload)this.save(dataset,state);
+    return state;
   }
   save(dataset: Dataset, state: AppState) {
     const checked=stateSchema.safeParse(state);
     if(!checked.success)throw checked.error;
+    const errors=stateReferenceErrors(state);
+    if(errors.length)throw new Error(errors.join(' '));
     const payload=JSON.stringify(state);
     const files=this.db.prepare('SELECT id,length(content) AS bytes FROM documents WHERE dataset=?').all(dataset) as {id:string;bytes:number}[];
+    const fileIds=new Set(files.map(file=>file.id));
+    if(state.pdfs.some(pdf=>!fileIds.has(pdf.id)))throw new Error('Falta el archivo original de un PDF del estado.');
     // Bound the exact JSON backup size, including base64 overhead, before committing writes.
     const envelope=JSON.stringify({format:'circulos-backup',version:1,dataset,createdAt:new Date().toISOString(),state:null,files:[]});
     const backupBytes=Buffer.byteLength(payload)+Buffer.byteLength(envelope)-4+files.reduce((sum,file)=>sum+Buffer.byteLength(JSON.stringify({id:file.id,content:''}))+4*Math.ceil(file.bytes/3),0)+Math.max(0,files.length-1);
@@ -44,6 +51,10 @@ export class Store {
   }
   putFile(dataset: Dataset, id: string, content: Buffer) {
     this.db.prepare('INSERT INTO documents(dataset,id,content) VALUES(?,?,?)').run(dataset, id, content);
+  }
+  deleteFiles(dataset: Dataset, ids: string[]) {
+    const remove=this.db.prepare('DELETE FROM documents WHERE dataset=? AND id=?');
+    for(const id of ids)remove.run(dataset,id);
   }
   replace(dataset: Dataset, state: AppState, files: { id: string; content: Buffer }[]) {
     this.db.exec('BEGIN IMMEDIATE');

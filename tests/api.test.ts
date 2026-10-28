@@ -7,12 +7,12 @@ import type { Server } from 'node:http';
 import ExcelJS from 'exceljs';
 import { createApp } from '../server/index.js';
 import type { AppState, Student } from '../shared/types.js';
-import { defaultSettings } from '../shared/defaults.js';
+import { createStudent, defaultSettings } from '../shared/defaults.js';
 
-function reportPdf(code:string,name:string,omitArea='') {
+function reportPdf(code:string,name:string,omitArea='',grade='3',section='F') {
   const normalize=(text:string)=>text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[()\\]/g,'\\$&');
-  const lines=[`Codigo: ${code}`,`Estudiante: ${name}`,'Grado: 3','Seccion: A','Periodo: 2026'];
-  for(const area of defaultSettings.areas.filter(area=>area.id!==omitArea)){lines.push(area.name,...area.competencies.map(c=>`${c} A A A A`));}
+  const lines=[`Codigo estudiante: ${code}`,`Estudiante: ${name}`,`Grado: ${grade}`,`Seccion: ${section}`,'Periodo: 2026'];
+  for(const area of defaultSettings.areas.filter(area=>area.id!==omitArea)){lines.push(area.name,...area.competencies.map(c=>`${c} A A A`));}
   const stream=`BT /F1 9 Tf 40 790 Td 12 TL ${lines.map((s,i)=>`${i?'T* ':''}(${normalize(s)}) Tj`).join('\n')} ET`;
   const objects=[
     '<< /Type /Catalog /Pages 2 0 R >>',
@@ -38,120 +38,223 @@ async function harness() {
   return{dir,app,server,base,request,close};
 }
 
-test('SQLite: datos reales aislados, validación, importación CSV y persistencia tras reinicio',async()=>{
-  const h=await harness();let closed=false;
-  try{
-    const initial=await (await h.request('/api/state')).json() as AppState;
-    assert.equal(initial.students.length,0);assert.equal(initial.settings.criteriaApproved,false);
-    const demo=await (await h.request('/api/state?dataset=demo')).json() as AppState;assert(demo.students.length>=8);
-    let response=await h.request('/api/students','POST',{code:'AL-001',name:'Estudiante de prueba',grade:'3',section:'A'});assert.equal(response.status,201);
-    let student=await response.json() as Student;
-    response=await h.request('/api/students','POST',{code:'al-001',name:'Duplicado',grade:'3',section:'A'});assert.equal(response.status,409);
-    const invalid={...student,attendance:{required:100,exempted:0,attended:101,punctual:90,validated:false}};
+type Harness = Awaited<ReturnType<typeof harness>>;
+async function upload(h:Harness,bytes:Buffer,name='libreta.pdf') {
+  const form=new FormData();form.append('files',new Blob([new Uint8Array(bytes)],{type:'application/pdf'}),name);
+  const response=await fetch(h.base+'/api/pdfs',{method:'POST',body:form});
+  assert.equal(response.status,201,await response.clone().text());
+  return (await response.json()).pdfs[0] as AppState['pdfs'][number];
+}
+const readState=async(h:Harness)=>await(await h.request('/api/state')).json() as AppState;
+async function confirm(h:Harness,pdfId:string,body:Record<string,unknown>={}) {
+  const response=await h.request(`/api/pdfs/${pdfId}`,'PUT',{action:'validate',...body});
+  assert.equal(response.status,200,await response.clone().text());
+  return response.json();
+}
+
+test('La libreta crea el expediente real, exige confirmación y autovalida solo I–III sin rellenar B/C',async()=>{
+  const h=await harness();try{
+    const initial=await readState(h);assert.equal(initial.students.length,0);assert.equal(initial.settings.workflowVersion,2);
+    const pdf=await upload(h,reportPdf('REAL-1','Estudiante Real'));
+    let state=await readState(h),student=state.students[0];
+    assert.equal(student.code,'REAL-1');assert.equal(student.grade,'3.º de secundaria');assert.equal(student.section,'F');
+    assert.equal(student.reportApproval,undefined);assert.equal(student.validated.academic,false);
+    assert(student.academic.every(area=>area.grades.every(row=>row.length===3&&row.every(value=>value==='A'))));
+    assert.deepEqual(student.attendance,{required:null,attended:null,punctual:null,exempted:null,validated:false});
+    assert.deepEqual(student.discipline,{confirmed:false,incidents:[]});assert.deepEqual(student.institutional,[]);assert.deepEqual(student.family,[]);
+    const forged={...student,reportApproval:{pdfId:pdf.id,approvedAt:new Date().toISOString()},attendance:{...student.attendance,required:200}};
+    assert.equal((await h.request(`/api/students/${student.id}`,'PUT',forged)).status,409);
+    const form=new FormData();form.append('file',new Blob(['codigo,dias,eximidos,asistencias,puntuales\nREAL-1,200,10,180,170\n'],{type:'text/csv'}),'asistencia.csv');
+    let response=await fetch(h.base+'/api/records/import',{method:'POST',body:form});assert.equal((await response.json()).updated,0);
+    await confirm(h,pdf.id);
+    state=await readState(h);student=state.students[0];assert.equal(student.reportApproval?.pdfId,pdf.id);
+    assert.equal(student.validated.academic,true);assert(student.academic.every(area=>area.validated));
+    assert.equal(student.validated.performance,false);assert.equal(student.validated.commitment,false);
+    const imported=new FormData();imported.append('file',new Blob(['codigo,dias,eximidos,asistencias,puntuales\nREAL-1,200,10,180,170\nINEXISTENTE,200,0,190,180\n'],{type:'text/csv'}),'asistencia.csv');
+    response=await fetch(h.base+'/api/records/import',{method:'POST',body:imported});const result=await response.json();assert.equal(result.updated,1);assert.equal(result.errors.length,1);
+    student=(await readState(h)).students[0];assert.equal(student.attendance.exempted,10);
+    response=await h.request(`/api/students/${student.id}`,'PUT',{...student,reportApproval:{pdfId:'inventado',approvedAt:'falso'},discipline:{confirmed:false,incidents:[{id:'draft',typeId:'',date:'',description:'',measure:'',evidence:'',verified:false}]}});
+    assert.equal(response.status,200);student=await response.json() as Student;assert.equal(student.reportApproval?.pdfId,pdf.id);
+    assert.equal((await h.request(`/api/students/${student.id}`,'PUT',{...student,name:'Identidad alterada'})).status,409);
+    const invalid={...student,attendance:{...student.attendance,attended:201}};
     assert.equal((await h.request(`/api/students/${student.id}`,'PUT',invalid)).status,400);
-    const form=new FormData();form.append('file',new Blob(['codigo,dias,eximidos,asistencias,puntuales\nAL-001,200,10,180,170\nINEXISTENTE,200,0,190,180\n'],{type:'text/csv'}),'asistencia.csv');
-    response=await fetch(h.base+'/api/records/import',{method:'POST',body:form});assert.equal(response.status,200);
-    const imported=await response.json();assert.equal(imported.updated,1);assert.equal(imported.errors.length,1);
-    const state=await (await h.request('/api/state')).json() as AppState;
-    student=state.students[0];assert.equal(student.attendance.exempted,10);assert.equal(student.attendance.validated,false);assert(student.history.some(v=>v.field==='Asistencia importada'));
+  }finally{await h.close();}
+});
+
+test('Identidades ausentes o aulas ajenas permanecen en revisión; la corrección explícita conserva la extracción',async()=>{
+  const h=await harness();try{
+    for(const [grade,section] of [['1','F'],['5','F'],['12','F'],['25','F'],['3xyz','F'],['3','A']]){
+      assert.equal((await h.request('/api/students','POST',{code:`BAD-${grade}-${section}`,name:'No permitido',grade,section})).status,400);
+    }
+    const pdf=await upload(h,reportPdf('COR-1','Identidad Leida','','3','A'),'fuera_de_aula.pdf');
+    assert.equal(pdf.studentId,null);assert.equal((await readState(h)).students.length,0);
+    assert.equal((await h.request(`/api/pdfs/${pdf.id}`,'PUT',{action:'validate'})).status,400);
+    await confirm(h,pdf.id,{identity:{code:'COR-1',name:'Identidad Corregida',grade:'tercero de secundaria',section:'f'}});
+    const state=await readState(h);assert.equal(state.students.length,1);assert.equal(state.students[0].name,'Identidad Corregida');
+    assert.equal(state.students[0].grade,'3.º de secundaria');assert.equal(state.pdfs[0].extractedName,'Identidad Leida');assert.equal(state.pdfs[0].extractedSection,'A');
+    assert.equal(state.pdfs[0].confirmedIdentity?.section,'F');assert.equal(state.students[0].reportApproval?.pdfId,pdf.id);
+    const missing=await upload(h,reportPdf('','Sin Codigo','','4','F'),'sin_codigo.pdf');
+    assert.equal(missing.studentId,null);assert.equal((await readState(h)).students.length,1);
+    await confirm(h,missing.id,{identity:{code:'COR-2',name:'Sin Codigo Corregido',grade:'4.º',section:'F'}});
+    assert.equal((await readState(h)).students.length,2);
+  }finally{await h.close();}
+});
+
+test('Reconfirmar identidad conserva ajustes académicos; reemplazar reinicia A y aprobación y conserva B/C manuales',async()=>{
+  const h=await harness();try{
+    const prior=await upload(h,reportPdf('REPL-1','Estudiante Reemplazo'),'original.pdf');await confirm(h,prior.id);
+    let student=(await readState(h)).students[0];
+    student.academic[0].grades[0][0]='AD';
+    student.attendance={required:200,exempted:10,attended:180,punctual:170,validated:true};
+    student.discipline={confirmed:true,incidents:[]};
+    student.institutional=[{id:'contest',name:'Olimpiada',date:'2026-10-10',required:true,status:'fulfilled',justification:'',evidence:'Acta',validated:true,placement:'Segundo puesto',representingSchool:true}];
+    student.family=[{id:'meeting',name:'Reunión',date:'2026-10-10',required:true,status:'fulfilled',justification:'',evidence:'Firma',validated:true}];
+    let response=await h.request(`/api/students/${student.id}`,'PUT',student);assert.equal(response.status,200);student=await response.json() as Student;
+    assert.equal(student.academic[0].validated,false);assert.equal(student.validated.academic,false);
+    await confirm(h,prior.id,{identity:{code:student.code,name:'Estudiante Corregido',grade:student.grade,section:student.section}});
+    student=(await readState(h)).students[0];assert.equal(student.academic[0].grades[0][0],'AD');assert.equal(student.academic[0].validated,false);assert.equal(student.validated.academic,false);
+    const manual={attendance:student.attendance,discipline:student.discipline,institutional:student.institutional,family:student.family};
+    const replacement=await upload(h,reportPdf('REPL-1','Estudiante Corregido','matematica'),'nueva.pdf');
+    let state=await readState(h);student=state.students[0];
+    assert.equal(student.reportApproval,undefined);assert.equal(student.validated.academic,false);
+    assert(student.academic.find(area=>area.areaId==='matematica')!.grades.every(row=>row.every(value=>value==='')));
+    assert.equal(student.academic.find(area=>area.areaId==='ciencia')!.grades[0][0],'A');
+    assert.deepEqual({attendance:student.attendance,discipline:student.discipline,institutional:student.institutional,family:student.family},manual);
+    assert.equal(state.pdfs.find(pdf=>pdf.id===prior.id)!.status,'replaced');
+    assert.equal((await h.request(`/api/students/${student.id}`,'PUT',{...student,discipline:{...student.discipline,confirmed:false}})).status,409);
+    assert.equal((await h.request(`/api/pdfs/${prior.id}`,'PUT',{action:'validate'})).status,400);
+    response=await h.request(`/api/pdfs/${replacement.id}`,'PUT',{action:'replace',studentId:student.id,replacesId:prior.id});assert.equal(response.status,200);
+    await confirm(h,replacement.id);state=await readState(h);student=state.students[0];
+    assert.equal(student.reportApproval?.pdfId,replacement.id);assert.equal(student.validated.academic,false);
+    assert.equal(student.academic.find(area=>area.areaId==='matematica')!.validated,false);assert.equal(student.academic.find(area=>area.areaId==='ciencia')!.validated,true);
+    assert.deepEqual(student.institutional,manual.institutional);assert.deepEqual(student.family,manual.family);
+    assert.equal((await h.request(`/api/pdfs/${prior.id}/file`)).status,200);
+  }finally{await h.close();}
+});
+
+test('Eliminar libreta borra expediente, todas las versiones y copias, permite reimportar y nunca busca por texto',async()=>{
+  const h=await harness();try{
+    const bytes=reportPdf('DEL-1','Estudiante Eliminable');
+    const original=await upload(h,bytes,'original.pdf');await confirm(h,original.id);
+    const other=await upload(h,reportPdf('SAFE-1','Estudiante Conservado'),'otro.pdf');await confirm(h,other.id);
+    const copy=await upload(h,bytes,'copia.pdf');assert.equal(copy.status,'duplicate');
+    const replacement=await upload(h,reportPdf('DEL-1','Estudiante Eliminable','matematica'),'version.pdf');
+    let state=await readState(h);const deletedStudentId=state.students.find(student=>student.code==='DEL-1')!.id;
+    assert.equal(state.pdfs.length,4);assert.equal((await(await h.request('/api/backup')).json()).files.length,4);
+    const response=await h.request(`/api/pdfs/${copy.id}`,'DELETE');assert.equal(response.status,200);
+    const deletion=await response.json();assert.equal(deletion.studentId,deletedStudentId);assert.deepEqual(new Set(deletion.deletedPdfIds),new Set([original.id,copy.id,replacement.id]));
+    state=await readState(h);assert.equal(state.students.length,1);assert.equal(state.students[0].code,'SAFE-1');assert.equal(state.pdfs.length,1);
+    for(const id of deletion.deletedPdfIds)assert.equal((await h.request(`/api/pdfs/${id}/file`)).status,404);
+    assert.equal((await(await h.request('/api/backup')).json()).files.length,1);
+    const again=await upload(h,bytes,'reimportada.pdf');assert.equal(again.status,'review');assert(again.studentId);assert.notEqual(again.studentId,deletedStudentId);
+    const unlinked=await upload(h,reportPdf('SAFE-1','Estudiante Conservado','','3','A'),'sin_vinculo.pdf');assert.equal(unlinked.studentId,null);
+    assert.equal((await h.request(`/api/pdfs/${unlinked.id}`,'DELETE')).status,200);
+    state=await readState(h);assert.equal(state.students.length,2);assert(state.students.some(student=>student.code==='SAFE-1'));
+  }finally{await h.close();}
+});
+
+test('La eliminación de originales y del estado comparte una transacción atómica',async()=>{
+  const h=await harness();try{
+    const pdf=await upload(h,reportPdf('ATOMIC-1','Estudiante Atomico'));
+    const store=h.app.locals.store,save=store.save;
+    store.save=()=>{throw new Error('Fallo de persistencia simulado');};
+    try{assert.equal((await h.request(`/api/pdfs/${pdf.id}`,'DELETE')).status,500);}finally{store.save=save;}
+    assert.equal((await readState(h)).students.length,1);assert.equal((await readState(h)).pdfs.length,1);
+    assert.equal((await h.request(`/api/pdfs/${pdf.id}/file`)).status,200);
+    assert.equal((await(await h.request('/api/backup')).json()).files.length,1);
+  }finally{await h.close();}
+});
+
+test('Eliminar una copia antigua no elimina el original reasignado y aprobado de otro estudiante',async()=>{
+  const h=await harness();try{
+    const source=await upload(h,reportPdf('OWNER-A','Estudiante Origen'),'origen.pdf');await confirm(h,source.id);
+    const duplicate=await upload(h,reportPdf('OWNER-A','Estudiante Origen'),'copia_origen.pdf');assert.equal(duplicate.status,'duplicate');
+    const other=await upload(h,reportPdf('OWNER-B','Estudiante Destino'),'destino.pdf');await confirm(h,other.id);
+    const before=await readState(h),target=before.students.find(student=>student.code==='OWNER-B')!;
+    const identity={code:target.code,name:target.name,grade:target.grade,section:target.section};
+    assert.equal((await h.request(`/api/pdfs/${source.id}`,'PUT',{action:'validate',identity})).status,409);
+    await confirm(h,source.id,{identity,confirmMismatch:true});
+    const response=await h.request(`/api/pdfs/${duplicate.id}`,'DELETE');assert.equal(response.status,200);
+    const deletion=await response.json();assert.deepEqual(deletion.deletedPdfIds,[duplicate.id]);
+    const after=await readState(h);assert.equal(after.students.length,1);assert.equal(after.students[0].id,target.id);
+    assert.equal(after.students[0].reportApproval?.pdfId,source.id);assert.equal(after.pdfs.find(pdf=>pdf.id===source.id)?.status,'validated');
+    assert.equal((await h.request(`/api/pdfs/${source.id}/file`)).status,200);assert.equal((await h.request(`/api/pdfs/${other.id}/file`)).status,200);
+    assert.equal((await(await h.request('/api/backup')).json()).files.length,2);
+  }finally{await h.close();}
+});
+
+test('Corregir aula en la libreta desvincula solo la pauta no aplicable y conserva los datos manuales',async()=>{
+  const h=await harness();try{
+    const pdf=await upload(h,reportPdf('COHORT-1','Estudiante Cambio'));await confirm(h,pdf.id);
+    const state=await readState(h),settings={...state.settings,cohortRecords:[
+      {id:'only-third',kind:'institutional',name:'Concurso de Tercero',date:'2026-10-10',grade:'3.º de secundaria',section:'F',required:true},
+      {id:'all-families',kind:'family',name:'Reunión de Familias',date:'2026-10-10',grade:'',section:'F',required:true},
+    ]};
+    assert.equal((await h.request('/api/settings','PUT',settings)).status,200);
+    let student=(await readState(h)).students[0];
+    student.institutional=[{id:'manual-contest',catalogId:'only-third',name:'Concurso de Tercero',date:'2026-10-10',required:true,status:'fulfilled',justification:'Anotación manual',evidence:'Acta manual',validated:true,placement:'Segundo puesto',representingSchool:true}];
+    student.family=[{id:'manual-family',catalogId:'all-families',name:'Reunión de Familias',date:'2026-10-10',required:true,status:'fulfilled',justification:'Firma presencial',evidence:'Lista firmada',validated:true}];
+    let response=await h.request(`/api/students/${student.id}`,'PUT',student);assert.equal(response.status,200);student=await response.json() as Student;
+    response=await h.request(`/api/students/${student.id}`,'PUT',{...student,validated:{...student.validated,commitment:true}});assert.equal(response.status,200);student=await response.json() as Student;
+    const priorContest=structuredClone(student.institutional[0]),priorFamily=structuredClone(student.family[0]);
+    await confirm(h,pdf.id,{identity:{code:student.code,name:student.name,grade:'4',section:'F'}});
+    student=(await readState(h)).students[0];assert.equal(student.grade,'4.º de secundaria');assert.equal(student.validated.commitment,false);
+    const {catalogId:_,validated:__,...manualBefore}=priorContest;
+    const {catalogId:removed,validated:reviewed,...manualAfter}=student.institutional[0];
+    assert.equal(removed,undefined);assert.equal(reviewed,false);assert.deepEqual(manualAfter,manualBefore);
+    assert.deepEqual(student.family[0],priorFamily);assert(student.history.some(entry=>entry.field==='Desvinculación de pauta tras confirmar identidad'));
+    assert.equal(student.reportApproval?.pdfId,pdf.id);assert.equal((await readState(h)).pdfs[0].extractedGrade,'3');
+  }finally{await h.close();}
+});
+
+test('Respaldo: integridad, referencias, migración de cuatro periodos y persistencia tras reinicio',async()=>{
+  const h=await harness();let closed=false;try{
+    const pdf=await upload(h,reportPdf('BACK-1','Estudiante Respaldo'));await confirm(h,pdf.id);
+    const backup=await(await h.request('/api/backup')).json();
+    const corrupted=structuredClone(backup);corrupted.files[0].content=Buffer.from('alterado').toString('base64');
+    assert.equal((await h.request('/api/restore','POST',corrupted)).status,400);
+    const badReference=structuredClone(backup);badReference.state.students[0].pdfIds=[];
+    assert.equal((await h.request('/api/restore','POST',badReference)).status,400);
+    const malformed=structuredClone(backup);malformed.state.students[0].academic[0].grades[0][0]='E';
+    assert.throws(()=>h.app.locals.store.save('real',malformed.state));assert.equal((await h.request('/api/restore','POST',malformed)).status,400);
+    assert.equal((await h.request('/api/restore','POST',{...backup,dataset:'demo'})).status,400);
+    assert.equal((await h.request('/api/restore','POST',backup)).status,200);
+    const legacy=structuredClone(backup);delete legacy.state.settings.workflowVersion;delete legacy.state.settings.progressionComparison;
+    legacy.state.settings.criteriaApproved=true;legacy.state.settings.closed=true;delete legacy.state.students[0].reportApproval;
+    for(const area of legacy.state.students[0].academic)for(const row of area.grades)row.push('C');
+    assert.equal((await h.request('/api/restore','POST',legacy)).status,200);
+    const migrated=await readState(h);assert.equal(migrated.settings.workflowVersion,2);assert.equal(migrated.settings.criteriaApproved,false);assert.equal(migrated.settings.closed,false);
+    assert.equal(migrated.students[0].validated.academic,false);assert.equal(migrated.students[0].reportApproval?.pdfId,pdf.id);
+    assert.equal(migrated.students[0].academic[0].grades[0][3],'C','La cuarta nota histórica se conserva sin evaluarse');
     await h.close(false);closed=true;
-    const reopened=createApp({dataDir:h.dir});const restored=reopened.locals.store.read('real') as AppState;
-    assert.equal(restored.students[0].code,'AL-001');assert.equal(restored.students[0].attendance.attended,180);
-    reopened.locals.store.close();await rm(h.dir,{recursive:true,force:true});
+    const reopened=createApp({dataDir:h.dir});try{const restored=reopened.locals.store.read('real') as AppState;assert.equal(restored.students[0].code,'BACK-1');assert.equal(restored.students[0].reportApproval?.pdfId,pdf.id);}finally{reopened.locals.store.close();}
+    await rm(h.dir,{recursive:true,force:true});
   }finally{if(!closed)await h.close();}
 });
 
-test('PDF múltiple: diez fichas, duplicados, originales, respaldo íntegro y restauración atómica',async()=>{
+test('Excel exporta solo F admitidos, tres periodos y los campos manuales del concurso; catálogo no crea registros',async()=>{
   const h=await harness();try{
-    const form=new FormData();for(let i=1;i<=10;i++)form.append('files',new Blob([reportPdf(`PDF-${i}`,`Estudiante Prueba ${i}`)],{type:'application/pdf'}),`libreta_${i}.pdf`);
-    let response=await fetch(h.base+'/api/pdfs',{method:'POST',body:form});assert.equal(response.status,201);
-    const result=await response.json();assert.equal(result.pdfs.length,10);assert(result.pdfs.every((p:{studentId:string})=>p.studentId));
-    let state=await (await h.request('/api/state')).json() as AppState;
-    assert.equal(state.students.length,10);assert.equal(state.pdfs.length,10);assert(state.students.every(s=>!s.validated.academic));
-    assert.equal(state.students[0].academic[0].grades[0][0],'A');
-    response=await h.request(`/api/pdfs/${state.pdfs[0].id}/file`);assert.equal(response.status,200);assert.equal(response.headers.get('content-type'),'application/pdf');
-    const source=Buffer.from(await response.arrayBuffer());assert(source.subarray(0,5).equals(Buffer.from('%PDF-')));
-    const duplicateForm=new FormData();duplicateForm.append('files',new Blob([reportPdf('PDF-1','Estudiante Prueba 1')],{type:'application/pdf'}),'copia.pdf');
-    const dup=await (await fetch(h.base+'/api/pdfs',{method:'POST',body:duplicateForm})).json();assert.equal(dup.pdfs[0].status,'duplicate');
-    state=await (await h.request('/api/state')).json() as AppState;assert.equal(state.students.length,10);
-    const backup=await (await h.request('/api/backup')).json();assert.equal(backup.files.length,11);
-    const corrupted=structuredClone(backup);corrupted.files[0].content=Buffer.from('alterado').toString('base64');
-    assert.equal((await h.request('/api/restore','POST',corrupted)).status,400);
-    assert.equal((await (await h.request('/api/state')).json()).students.length,10);
-    assert.equal((await h.request('/api/restore','POST',backup)).status,200);
-    response=await h.request(`/api/pdfs/${state.pdfs[0].id}/file`);assert(Buffer.from(await response.arrayBuffer()).equals(source));
-    const wrongDataset={...backup,dataset:'demo'};assert.equal((await h.request('/api/restore','POST',wrongDataset)).status,400);
-  }finally{await h.close();}
-});
-
-test('Excel con cuatro hojas: ranking descendente y pendientes separados; cierre bloquea cambios',async()=>{
-  const h=await harness();try{
-    let response=await h.request('/api/export?dataset=demo');assert.equal(response.status,200);
-    const book=new ExcelJS.Workbook();await book.xlsx.load(Buffer.from(await response.arrayBuffer()) as never);
-    assert.deepEqual(book.worksheets.map(s=>s.name),['RANKING','DETALLE','PENDIENTES','CONFIGURACIÓN']);
-    const ranking=book.getWorksheet('RANKING')!;assert(ranking.rowCount>2);
-    const cohortScores=new Map<string,number>();
-    ranking.eachRow((row,index)=>{if(index===1)return;const cohort=String(row.getCell(12).value);const score=Number(row.getCell(9).value);if(cohortScores.has(cohort))assert(score<=cohortScores.get(cohort)!);cohortScores.set(cohort,score);});
-    const pending=book.getWorksheet('PENDIENTES')!;assert(pending.rowCount>1);
-    const rankedCodes=new Set<string>();ranking.eachRow((row,index)=>{if(index>1)rankedCodes.add(String(row.getCell(2).value));});
-    pending.eachRow((row,index)=>{if(index>1)assert(!rankedCodes.has(String(row.getCell(1).value)));});
-    const state=await (await h.request('/api/state?dataset=demo')).json() as AppState;
-    response=await h.request('/api/settings?dataset=demo','PUT',{...state.settings,closed:true});assert.equal(response.status,200);
-    const afterClose=await (await h.request('/api/state?dataset=demo')).json() as AppState;
-    assert.equal(afterClose.students[0].validated.academic,state.students[0].validated.academic,'Cerrar sin cambiar criterios conserva las validaciones');
-    assert.equal((await h.request('/api/students?dataset=demo','POST',{code:'X',name:'No',grade:'3',section:'A'})).status,423);
-    assert.equal((await h.request('/api/settings?dataset=demo','PUT',{...state.settings,closed:false})).status,423);
-    assert.equal((await h.request('/api/settings?dataset=demo','PUT',{...state.settings,closed:false,confirmReopen:true})).status,200);
-    assert.equal((await h.request('/api/state?dataset=invalid')).status,400);
-  }finally{await h.close();}
-});
-
-test('Reemplazar una libreta deja en blanco las áreas que no se reconocen en la nueva versión',async()=>{
-  const h=await harness();try{
-    const upload=async(bytes:Buffer,name:string)=>{
-      const form=new FormData();form.append('files',new Blob([new Uint8Array(bytes)],{type:'application/pdf'}),name);
-      const response=await fetch(h.base+'/api/pdfs',{method:'POST',body:form});assert.equal(response.status,201);
-      return (await response.json()).pdfs[0];
-    };
-    const prior=await upload(reportPdf('REPL-1','Estudiante Reemplazo'),'original.pdf');
-    const replacement=await upload(reportPdf('REPL-1','Estudiante Reemplazo','matematica'),'nueva.pdf');
-    const before=await (await h.request('/api/state')).json() as AppState;
-    assert.equal(before.students[0].academic[0].grades[0][0],'A');
-    const response=await h.request(`/api/pdfs/${replacement.id}`,'PUT',{action:'replace',studentId:prior.studentId,replacesId:prior.id});
-    assert.equal(response.status,200);
-    const after=await (await h.request('/api/state')).json() as AppState;
-    assert(after.students[0].academic.find(area=>area.areaId==='matematica')!.grades.every(row=>row.every(value=>value==='')));
-    assert.equal(after.students[0].academic.find(area=>area.areaId==='ciencia')!.grades[0][0],'A');
-    assert.equal(after.pdfs.find(pdf=>pdf.id===prior.id)!.status,'replaced');
-    assert(after.students[0].history.some(entry=>entry.before.includes('matematica')&&entry.before.includes('"A"')));
-  }finally{await h.close();}
-});
-
-test('Pauta común: sincroniza cohortes, protege metadatos, conserva retirados y audita cambios',async()=>{
-  const h=await harness();try{
-    const created=await (await h.request('/api/students','POST',{code:'COH-1',name:'Estudiante Cohorte',grade:'3',section:'A'})).json() as Student;
-    const initial=await (await h.request('/api/state')).json() as AppState;
-    const settings={...initial.settings,cohortRecords:[{id:'event-1',kind:'institutional',name:'Concurso común',date:'2026-10-10',grade:'3',section:'A',required:true}]};
+    const pdf=await upload(h,reportPdf('EXPORT-1','Estudiante Exportado'));await confirm(h,pdf.id);
+    let state=await readState(h),student=state.students[0];
+    student.institutional=[{id:'contest',name:'Olimpiada Nacional',date:'2026-10-10',required:true,status:'fulfilled',justification:'',evidence:'Acta',validated:true,placement:'Primer puesto',representingSchool:true}];
+    const response=await h.request(`/api/students/${student.id}`,'PUT',student);assert.equal(response.status,200);
+    state=await readState(h);
+    const settings={...state.settings,criteriaApproved:true,cohortRecords:[{id:'template',kind:'institutional',name:'Plantilla de referencia',date:'2026-10-10',grade:'3.º de secundaria',section:'F',required:true}]};
     assert.equal((await h.request('/api/settings','PUT',settings)).status,200);
-    let state=await (await h.request('/api/state')).json() as AppState;
-    let student=state.students.find(s=>s.id===created.id)!;
-    assert.equal(student.institutional.length,1);assert.equal(student.institutional[0].catalogId,'event-1');assert.equal(student.institutional[0].status,'pending');
-    const forged=structuredClone(student);forged.institutional[0].required=false;
-    assert.equal((await h.request(`/api/students/${student.id}`,'PUT',forged)).status,409);
-    const modified=structuredClone(student);modified.institutional[0].status='fulfilled';modified.institutional[0].evidence='Acta de concurso';
-    const result=await h.request(`/api/students/${student.id}`,'PUT',modified);assert.equal(result.status,200);
-    student=await result.json() as Student;
-    assert(student.history.some(entry=>entry.field==='institutional'&&entry.after.includes('fulfilled')));
-    const sibling=await (await h.request('/api/students','POST',{code:'COH-2',name:'Otra cohorte',grade:'4',section:'A'})).json() as Student;
-    assert.equal(sibling.institutional.length,0);
-    assert.equal((await h.request('/api/settings','PUT',{...state.settings,cohortRecords:[]})).status,200);
-    state=await (await h.request('/api/state')).json() as AppState;student=state.students.find(s=>s.id===created.id)!;
-    assert.equal(student.institutional[0].catalogId,undefined);assert.equal(student.institutional[0].status,'na');assert.equal(student.institutional[0].required,false);assert.equal(student.institutional[0].validated,false);
-    assert(student.history.some(entry=>entry.field==='Sincronización de criterios comunes de cohorte'&&entry.before.includes('fulfilled')));
-    const backup=await (await h.request('/api/backup')).json();const malformed=structuredClone(backup);malformed.state.students[0].academic[0].grades[0][0]='E';
-    assert.throws(()=>h.app.locals.store.save('real',malformed.state),'La persistencia rechaza estados que luego no podrían restaurarse');
-    assert.equal((await h.request('/api/restore','POST',malformed)).status,400);
-    assert.equal((await (await h.request('/api/state')).json()).students.length,2);
-    assert.equal((await h.request('/api/restore','POST',backup)).status,200);
+    state=await readState(h);assert.equal(state.students[0].institutional.length,1);assert.equal(state.students[0].family.length,0);
+    state.students.push(createStudent({code:'OLD-A',name:'Historico otra aula',grade:'3',section:'A'},state.settings));h.app.locals.store.save('real',state);
+    const exported=await h.request('/api/export');assert.equal(exported.status,200);
+    const book=new ExcelJS.Workbook();await book.xlsx.load(Buffer.from(await exported.arrayBuffer()) as never);
+    assert.deepEqual(book.worksheets.map(sheet=>sheet.name),['RANKING','DETALLE','PENDIENTES','CONFIGURACIÓN']);
+    const detail=book.getWorksheet('DETALLE')!;assert.equal(detail.rowCount,2);assert.equal(detail.getCell('A2').value,'EXPORT-1');
+    const headers=detail.getRow(1).values as string[];
+    assert.deepEqual(headers.filter(value=>String(value).startsWith('Calificaciones ')),['Calificaciones I','Calificaciones II','Calificaciones III']);
+    const placement=headers.indexOf('Puesto en concursos'),representation=headers.indexOf('Representación del colegio');
+    assert.match(String(detail.getRow(2).getCell(placement).value),/Primer puesto/);assert.match(String(detail.getRow(2).getCell(representation).value),/true/);
+    assert.equal(book.getWorksheet('PENDIENTES')!.rowCount,2);
+    assert.equal((await h.request('/api/settings','PUT',{...settings,closed:true})).status,200);
+    assert.equal((await h.request(`/api/pdfs/${pdf.id}`,'DELETE')).status,423);
+    assert.equal((await h.request('/api/settings','PUT',{...settings,closed:false})).status,423);
+    assert.equal((await h.request('/api/settings','PUT',{...settings,closed:false,confirmReopen:true})).status,200);
   }finally{await h.close();}
 });

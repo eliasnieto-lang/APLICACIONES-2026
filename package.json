@@ -9,9 +9,9 @@
     "start": "NODE_ENV=production tsx server/index.ts",
     "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "test:browser": "node tests/browser-smoke.cjs",
+    "test:browser": "node tests/browser-adjustment.cjs",
     "build:web": "bash scripts/fetch-ocr-model.sh && tsc --noEmit && vite build --config vite.browser.config.ts && node scripts/inline-browser.mjs",
-    "test:web": "node tests/browser-web.cjs"
+    "test:web": "node tests/browser-adjustment.cjs"
   },
   "dependencies": {
     "csv-parse": "^7.0.3",
