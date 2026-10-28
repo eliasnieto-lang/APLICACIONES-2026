@@ -4,7 +4,7 @@ import { applyFilenameIdentity, parseReportFilename, resolveReportIdentity } fro
 import { registerImportedReport } from './report-workflow';
 import { ACADEMIC_CONTEST_LABEL, isAcademicContest } from './contests';
 import { hasActiveGrades } from './academic-policy';
-import { DEFAULT_DIMENSION_WEIGHTS } from './evaluation-policy';
+import { DEFAULT_BIMESTER_WEIGHTS, DEFAULT_DIMENSION_WEIGHTS } from './evaluation-policy';
 
 const identityKey = (value: string): string => value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('es');
 const validTimestamp = (value: string | undefined): value is string => Boolean(value?.trim() && Number.isFinite(Date.parse(value)));
@@ -30,6 +30,12 @@ export function migrateState(state: AppState): AppState {
     result.settings.dimensionWeights = { ...DEFAULT_DIMENSION_WEIGHTS };
     result.settings.criteriaApproved = false;
   }
+  const scoringUpgrade = result.settings.academicScoringPolicy !== 'weighted_bimesters_common_progression';
+  if (scoringUpgrade || !result.settings.bimesterWeights) {
+    result.settings.bimesterWeights = { ...DEFAULT_BIMESTER_WEIGHTS };
+    result.settings.criteriaApproved = false;
+  }
+  result.settings.academicScoringPolicy = 'weighted_bimesters_common_progression';
   // The changed academic comparison must be reviewed and closed again under I–III.
   if (upgrading) { result.settings.criteriaApproved = false; result.settings.closed = false; }
 

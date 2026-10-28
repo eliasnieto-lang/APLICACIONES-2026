@@ -104,6 +104,44 @@ test('El PDF nativo con rótulos sin dos puntos reconoce automáticamente códig
   }finally{await h.close();}
 });
 
+test('Los tres bimestres pesan 25/25/50 y la progresión compara celdas C–B–A sin alterar las notas PDF',async()=>{
+  const h=await harness();try{
+    const initial=await readState(h);
+    assert.deepEqual(initial.settings.bimesterWeights,{first:0.25,second:0.25,third:0.5});
+    assert.equal(initial.settings.academicScoringPolicy,'weighted_bimesters_common_progression');
+    const bytes=makeCompactPdf(defaultSettings,{code:'BIM-AAD',name:'RENDIMIENTO PONDERADO PRUEBA',grade:'1',section:'A',grades:['A','A','AD','C']});
+    const pdf=await upload(h,bytes,'BOLETA_1ro año A_Secundaria_RENDIMIENTO_PONDERADO_PRUEBA.pdf');
+    await confirm(h,pdf.id);
+    let state=await readState(h),student=state.students.find(value=>value.code==='BIM-AAD')!;
+    const originalGrades=structuredClone(student.academic),result=calculateStudent(student,state.settings);
+    assert.equal(result.g,87.5);assert.equal(result.r,87.5);assert.equal(result.a,90);
+    assert.equal(result.s1,3);assert.equal(result.s2,4);
+    assert.equal(result.progressionS1,3);assert.equal(result.progressionS2,3);assert.equal(result.delta,0);
+    assert.equal(result.p,100,'AD conserva su logro actual, sin producir por sí sola una bonificación de crecimiento.');
+    for(const value of Object.values(result.areaAverages))assert.equal(value,3.5);
+    assert.deepEqual(student.academic,originalGrades,'El cálculo no convierte ni modifica las notas de la libreta.');
+    assert.deepEqual(Buffer.from(await(await h.request(`/api/pdfs/${pdf.id}/file`)).arrayBuffer()),bytes);
+    const backup=await(await h.request('/api/backup')).json();
+    assert.deepEqual(backup.state.settings.bimesterWeights,initial.settings.bimesterWeights);
+    assert.equal((await h.request('/api/restore','POST',backup)).status,200);
+    state=await readState(h);student=state.students.find(value=>value.code==='BIM-AAD')!;
+    assert.deepEqual(student.academic,originalGrades);assert.equal(calculateStudent(student,state.settings).a,90);
+
+    // Capping the mean rather than each cell would miss the B decline hidden
+    // by a newly available AD in the same bimester.
+    const rows=Object.fromEntries(defaultSettings.areas.map(area=>[area.id,area.competencies.map(()=>['','',''])]));
+    rows.matematica=[['A','A','AD'],['A','A','B'],['A','A','AD'],['A','A','B']];
+    const mixed=await upload(h,makeCompactPdf(defaultSettings,{code:'BIM-MIX',name:'PROGRESION COMPARABLE PRUEBA',grade:'1',section:'B',gradesByArea:rows}),'BOLETA_1ro año B_Secundaria_PROGRESION_COMPARABLE_PRUEBA.pdf');
+    await confirm(h,mixed.id);
+    state=await readState(h);const mixedStudent=state.students.find(value=>value.code==='BIM-MIX')!,mixedResult=calculateStudent(mixedStudent,state.settings);
+    assert.equal(mixedResult.g,75);assert.equal(mixedResult.r,75);
+    assert.equal(mixedResult.s1,3);assert.equal(mixedResult.s2,3);
+    assert.equal(mixedResult.progressionS1,3);assert.equal(mixedResult.progressionS2,2.5);assert.equal(mixedResult.delta,-0.5);
+    assert.equal(mixedResult.p,68.75);assert.equal(mixedResult.a,73.75);
+    assert.deepEqual(mixedStudent.academic.find(area=>area.areaId==='matematica')!.grades,rows.matematica);
+  }finally{await h.close();}
+});
+
 test('El nombre del archivo identifica la libreta antes de confirmar, sin código ni periodo extraído',async()=>{
   const h=await harness();try{
     const filename='BOLETA_2do año F_Secundaria_SEGURA_CAMONES_ANDRES ADRIAN.pdf';
@@ -285,9 +323,13 @@ test('Aulas 1.º A y 1.º B mantienen rankings separados, admiten excluir Compro
     state=await readState(h);
     const customWeights={academic:0.7,performance:0.2,commitment:0.1};
     assert.equal((await h.request('/api/settings','PUT',{...state.settings,dimensionWeights:customWeights})).status,200);
-    const legacySettings={...(await readState(h)).settings};delete legacySettings.dimensionWeights;
+    const currentSettings=(await readState(h)).settings;
+    const legacySettings={...currentSettings};delete legacySettings.dimensionWeights;delete legacySettings.bimesterWeights;delete legacySettings.academicScoringPolicy;
     assert.equal((await h.request('/api/settings','PUT',legacySettings)).status,200);
     assert.deepEqual((await readState(h)).settings.dimensionWeights,customWeights,'Un cliente antiguo no restablece los pesos ya configurados.');
+    assert.deepEqual((await readState(h)).settings.bimesterWeights,currentSettings.bimesterWeights);
+    assert.equal((await readState(h)).settings.academicScoringPolicy,currentSettings.academicScoringPolicy);
+    assert.equal((await readState(h)).settings.criteriaApproved,currentSettings.criteriaApproved,'Un guardado antiguo no vuelve a activar la migración de la fórmula académica.');
     const legacyStudent=(await readState(h)).students[0],retainedDecision=legacyStudent.circleStatus;
     delete legacyStudent.commitmentEnabled;delete legacyStudent.circleStatus;
     const legacyResponse=await h.request(`/api/students/${legacyStudent.id}`,'PUT',legacyStudent);assert.equal(legacyResponse.status,200);
@@ -346,6 +388,23 @@ test('No participar en concursos se confirma sin inventar eventos, aporta PI cer
     assert.equal((await h.request('/api/restore','POST',backup)).status,200);student=(await readState(h)).students[0];
     assert.equal(student.noContestParticipation,true);assert.equal(calculateStudent(student,state.settings).participation,0);assert.deepEqual(student.institutional,[]);
     assert.deepEqual(Buffer.from(await(await h.request(`/api/pdfs/${pdf.id}/file`)).arrayBuffer()),bytes);
+    // Reviewing the new formula is an approval action, not a change to the
+    // evidence already reviewed in A, B and C.
+    const reviewed=structuredClone(student);
+    for(const criteriaApproved of [false,true]){
+      const settings=(await readState(h)).settings;
+      const response=await h.request('/api/settings','PUT',{...settings,criteriaApproved});assert.equal(response.status,200,await response.clone().text());
+      state=await readState(h);student=state.students.find(value=>value.id===reviewed.id)!;
+      for(const field of ['academic','attendance','discipline','institutional','family','validated','noContestParticipation','circleStatus','reportApproval'] as const)assert.deepEqual(student[field],reviewed[field],`Cambiar solo aprobación conserva ${field}.`);
+      assert.equal(calculateStudent(student,state.settings).eligible,criteriaApproved);
+    }
+    assert(student.history.some(entry=>/aprobaci[oó]n/i.test(entry.field)),'La aprobación se conserva en el historial sin borrar revisiones.');
+    const settings=(await readState(h)).settings;
+    assert.equal((await h.request('/api/settings','PUT',{...settings,dimensionWeights:{academic:0.6,performance:0.25,commitment:0.15}})).status,200);
+    student=(await readState(h)).students.find(value=>value.id===reviewed.id)!;
+    assert.deepEqual(student.validated,{academic:false,performance:false,commitment:false},'Un cambio real de ponderación sí exige una nueva revisión.');
+    assert(student.academic.every(area=>!area.validated));assert.equal(student.attendance.validated,false);assert.equal(student.discipline.confirmed,false);assert(student.family.every(record=>!record.validated));
+    assert.deepEqual(student.academic.map(area=>area.grades),reviewed.academic.map(area=>area.grades),'Invalidar la revisión nunca borra las calificaciones.');
   }finally{await h.close();}
 });
 
@@ -681,13 +740,14 @@ test('Respaldo: integridad, referencias, migración de cuatro periodos y persist
     assert.throws(()=>h.app.locals.store.save('real',malformed.state));assert.equal((await h.request('/api/restore','POST',malformed)).status,400);
     assert.equal((await h.request('/api/restore','POST',{...backup,dataset:'demo'})).status,400);
     assert.equal((await h.request('/api/restore','POST',backup)).status,200);
-    const legacy=structuredClone(backup);delete legacy.state.settings.workflowVersion;delete legacy.state.settings.progressionComparison;delete legacy.state.settings.dimensionWeights;
+    const legacy=structuredClone(backup);delete legacy.state.settings.workflowVersion;delete legacy.state.settings.progressionComparison;delete legacy.state.settings.dimensionWeights;delete legacy.state.settings.bimesterWeights;delete legacy.state.settings.academicScoringPolicy;
     delete legacy.state.students[0].commitmentEnabled;delete legacy.state.students[0].circleStatus;
     legacy.state.settings.criteriaApproved=true;legacy.state.settings.closed=true;delete legacy.state.students[0].reportApproval;
     for(const area of legacy.state.students[0].academic)for(const row of area.grades)row.push('C');
     assert.equal((await h.request('/api/restore','POST',legacy)).status,200);
     const migrated=await readState(h);assert.equal(migrated.settings.workflowVersion,2);assert.equal(migrated.settings.criteriaApproved,false);assert.equal(migrated.settings.closed,false);
     assert.deepEqual(migrated.settings.dimensionWeights,defaultSettings.dimensionWeights);assert.equal(migrated.students[0].commitmentEnabled,true);assert.equal(migrated.students[0].circleStatus,'pending');
+    assert.deepEqual(migrated.settings.bimesterWeights,{first:0.25,second:0.25,third:0.5});assert.equal(migrated.settings.academicScoringPolicy,'weighted_bimesters_common_progression');
     assert.equal(migrated.students[0].validated.academic,false);assert.equal(migrated.students[0].reportApproval?.pdfId,pdf.id);
     assert.equal(migrated.students[0].academic[0].grades[0][3],'C','La cuarta nota histórica se conserva sin evaluarse');
     await h.close(false);closed=true;

@@ -3,13 +3,14 @@ import { ACTIVE_BIMESTERS, cohortKey, isReportApproved, normalizeCohort } from '
 import { ACADEMIC_CONTEST_LABEL, contestPoints, contestRequiredFields, isAcademicContest } from './contests';
 import { activeAreas, hasActiveGrades, omittedCompetencyIndexes } from './academic-policy';
 import { commitmentRequiredFields, incidentRequiredFields, isValidRecordDate } from './record-validation';
-import { DEFAULT_DIMENSION_WEIGHTS, getDimensionWeights, getEffectiveDimensionWeights, isCommitmentEnabled } from './evaluation-policy';
-export { DEFAULT_DIMENSION_WEIGHTS, getDimensionWeights, getEffectiveDimensionWeights, isCommitmentEnabled } from './evaluation-policy';
+import { DEFAULT_DIMENSION_WEIGHTS, getBimesterWeights, getDimensionWeights, getEffectiveDimensionWeights, isCommitmentEnabled } from './evaluation-policy';
+export { DEFAULT_BIMESTER_WEIGHTS, DEFAULT_DIMENSION_WEIGHTS, getBimesterWeights, getDimensionWeights, getEffectiveDimensionWeights, isCommitmentEnabled } from './evaluation-policy';
 
 export interface StudentResult {
   a: number | null; b: number | null; c: number | null; total: number | null;
   g: number | null; r: number | null; p: number | null;
   science: number | null; letters: number | null; s1: number | null; s2: number | null; delta: number | null;
+  progressionS1: number | null; progressionS2: number | null;
   attendance: number | null; punctuality: number | null; ap: number | null; discipline: number | null;
   participation: number | null; family: number | null; participationNA: boolean; familyNA: boolean;
   pa: number; pb: number; pc: number; progress: number;
@@ -32,7 +33,7 @@ export const cohortRecordApplies = (record: CohortRecord, student: Pick<Student,
   return Boolean(gradeMatches && (!section || section === student.section.trim().toUpperCase()));
 };
 export const fmt = (value: number | null): string => value === null || !Number.isFinite(value) ? 'Pendiente' : value.toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-export const calculateProgression = (s1: number, s2: number): number => 25 * Math.min(4, Math.max(1, s2 + .5 * (s2 - s1)));
+export const calculateProgression = (s1: number, s2: number, comparableDelta = s2 - s1): number => 25 * Math.min(4, Math.max(1, s2 + .5 * comparableDelta));
 export function calculateTotal(a: number | null, b: number | null, c: number | null, weights: DimensionWeights = DEFAULT_DIMENSION_WEIGHTS, commitmentEnabled = true): number | null {
   if (!present(a) || !present(b) || commitmentEnabled && !present(c)) return null;
   const values = [weights.academic, weights.performance, weights.commitment];
@@ -49,6 +50,9 @@ export function validateSettings(settings: Settings): string[] {
   weights('Académico', Object.values(settings.academicWeights));
   weights('Desempeño', Object.values(settings.performanceWeights));
   weights('Compromiso', Object.values(settings.commitmentWeights));
+  const bimesterWeights = getBimesterWeights(settings);
+  weights('Bimestres', [bimesterWeights.first, bimesterWeights.second, bimesterWeights.third]);
+  if ([bimesterWeights.first, bimesterWeights.second, bimesterWeights.third].some(value => !present(value) || value <= 0)) errors.push('Bimestres: I, II y III deben tener un peso mayor que cero.');
   const dimensionWeights = getDimensionWeights(settings);
   weights('Promedio general', [dimensionWeights.academic, dimensionWeights.performance, dimensionWeights.commitment]);
   if ([dimensionWeights.academic, dimensionWeights.performance, dimensionWeights.commitment].some(value => !present(value) || value <= 0)) errors.push('Promedio general: cada ámbito debe tener un peso mayor que cero; excluya Compromiso en la ficha cuando no se evalúe.');
@@ -151,7 +155,7 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
     pending.push(`Confirmar la identidad y la lectura de una libreta PDF antes de evaluar ${commitmentExcluded ? 'Académico y Desempeño' : 'Académico, Desempeño y Compromiso'}.`);
     return {
       a: null, b: null, c: null, total: null, g: null, r: null, p: null,
-      science: null, letters: null, s1: null, s2: null, delta: null,
+      science: null, letters: null, s1: null, s2: null, delta: null, progressionS1: null, progressionS2: null,
       attendance: null, punctuality: null, ap: null, discipline: null,
       participation: null, family: null, participationNA: false, familyNA: false,
       pa: 0, pb: 0, pc: 0, progress: 0,
@@ -163,6 +167,9 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
   const eligibleAreas = activeAreas(student, settings);
   const areaAverages: Record<string, number | null> = {};
   const bimestersByArea: Record<string, (number | null)[]> = {};
+  const comparableBimestersByArea: Record<string, (number | null)[]> = {};
+  const bimesterWeights = getBimesterWeights(settings);
+  const periodWeights = [bimesterWeights.first, bimesterWeights.second, bimesterWeights.third];
   let expectedGrades = 0;
   let validatedGrades = 0;
   let enteredGrades = 0;
@@ -172,6 +179,7 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
     const omitted = new Set(omittedCompetencyIndexes(area, input, student));
     const competencyCount = area.competencies.length - omitted.size;
     const bimesters: (number | null)[] = [];
+    const comparableBimesters: (number | null)[] = [];
     for (let b = 0; b < ACTIVE_BIMESTERS.length; b++) {
       const values: number[] = [];
       for (let c = 0; c < area.competencies.length; c++) {
@@ -185,9 +193,13 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
         } else missingByBimester[b]++;
       }
       bimesters.push(values.length === competencyCount ? mean(values) : null);
+      // AD did not exist in I–II: only the common C/B/A scale measures growth.
+      // Cap each source cell before averaging; never change the stored grade.
+      comparableBimesters.push(values.length === competencyCount ? mean(values.map(value => Math.min(value, 3))) : null);
     }
     bimestersByArea[area.id] = bimesters;
-    areaAverages[area.id] = bimesters.every(present) ? mean(bimesters as number[]) : null;
+    comparableBimestersByArea[area.id] = comparableBimesters;
+    areaAverages[area.id] = bimesters.every(present) ? (bimesters as number[]).reduce((sum, value, index) => sum + value * periodWeights[index], 0) : null;
     if (!input?.validated) pending.push(`Validar área: ${area.name}.`);
   }
   ACTIVE_BIMESTERS.forEach((label, b) => {
@@ -208,17 +220,19 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
   const r = hasScience && hasLetters
     ? science !== null && letters !== null ? 25 * (settings.scienceWeight * science + (1 - settings.scienceWeight) * letters) : null
     : hasScience && science !== null ? 25 * science : hasLetters && letters !== null ? 25 * letters : null;
-  const semester = (indices: number[]) => {
+  const semester = (indices: number[], source = bimestersByArea) => {
     const values = eligibleAreas.map(area => {
-      const b = indices.map(i => bimestersByArea[area.id][i]);
+      const b = indices.map(i => source[area.id][i]);
       return b.every(present) ? mean(b as number[]) : null;
     });
     return values.length && values.every(present) ? mean(values as number[]) : null;
   };
   const s1 = semester([0, 1]);
   const s2 = semester([2]);
-  const delta = s1 !== null && s2 !== null ? s2 - s1 : null;
-  const p = s1 !== null && s2 !== null ? calculateProgression(s1, s2) : null;
+  const progressionS1 = semester([0, 1], comparableBimestersByArea);
+  const progressionS2 = semester([2], comparableBimestersByArea);
+  const delta = progressionS1 !== null && progressionS2 !== null ? progressionS2 - progressionS1 : null;
+  const p = s1 !== null && s2 !== null && delta !== null ? calculateProgression(s1, s2, delta) : null;
   const a = academicComplete && g !== null && r !== null && p !== null ? settings.academicWeights.general * g + settings.academicWeights.specialized * r + settings.academicWeights.progress * p : null;
 
   const at = student.attendance;
@@ -286,7 +300,7 @@ export function calculateStudent(student: Student, settings: Settings): StudentR
   const untouchedCommitments = commitmentExcluded || [...student.institutional, ...student.family].every(record => record.status === 'pending' && !record.validated && !record.justification && !record.evidence);
   const noData = enteredGrades === 0 && attendanceFields.every(v => v === null) && !student.discipline.confirmed && !student.discipline.incidents.length && untouchedCommitments;
   const status = eligible ? 'VALIDADO' : noData ? 'SIN INICIAR' : configErrors.length || attendanceInvalid ? 'CON OBSERVACIONES' : total !== null && progress === 100 ? 'COMPLETO SIN VALIDAR' : 'EN PROCESO';
-  return { a, b, c, total, g, r, p, science, letters, s1, s2, delta, attendance, punctuality, ap, discipline, participation: pi.value, family: cf.value, participationNA: pi.na, familyNA: cf.na, pa, pb, pc, progress, academicComplete, performanceComplete, commitmentComplete, commitmentExcluded, eligible, status, pending, areaAverages };
+  return { a, b, c, total, g, r, p, science, letters, s1, s2, delta, progressionS1, progressionS2, attendance, punctuality, ap, discipline, participation: pi.value, family: cf.value, participationNA: pi.na, familyNA: cf.na, pa, pb, pc, progress, academicComplete, performanceComplete, commitmentComplete, commitmentExcluded, eligible, status, pending, areaAverages };
 }
 
 /** Competition ranking inside each comparable grade/section; ties use displayed precision. */

@@ -302,11 +302,11 @@ async function install(): Promise<void> {
       return json({ deleted: true, ...removed, files: saved.removedFiles });
     }
     if (method === 'PUT' && path === '/api/settings') {
-      const body = await bodyJson(input, init), settings = settingsSchema.parse(body && typeof body === 'object' && !Array.isArray(body) ? { ...body, dimensionWeights: (body as Partial<Settings>).dimensionWeights === undefined ? state.settings.dimensionWeights : (body as Partial<Settings>).dimensionWeights } : body);
+      const body = await bodyJson(input, init), settings = settingsSchema.parse(body && typeof body === 'object' && !Array.isArray(body) ? { ...body, dimensionWeights: (body as Partial<Settings>).dimensionWeights === undefined ? state.settings.dimensionWeights : (body as Partial<Settings>).dimensionWeights, bimesterWeights: (body as Partial<Settings>).bimesterWeights === undefined ? state.settings.bimesterWeights : (body as Partial<Settings>).bimesterWeights, academicScoringPolicy: (body as Partial<Settings>).academicScoringPolicy === undefined ? state.settings.academicScoringPolicy : (body as Partial<Settings>).academicScoringPolicy } : body);
       settings.activityTypes = [ACADEMIC_CONTEST_LABEL];
       if (state.settings.closed && ((body as { confirmReopen?: unknown }).confirmReopen !== true || settings.closed)) throw new HttpError(423, 'Confirme explícitamente la reapertura de la evaluación antes de modificar los parámetros.');
       checkErrors(validateSettings(settings));
-      const criteriaChanged = !same({ ...state.settings, closed: false }, { ...settings, closed: false });
+      const criteriaChanged = !same({ ...state.settings, closed: false, criteriaApproved: false }, { ...settings, closed: false, criteriaApproved: false });
       if (settings.closed && !settings.criteriaApproved) throw new HttpError(400, 'Apruebe los criterios institucionales antes de cerrar la evaluación.');
       if (settings.closed && criteriaChanged) throw new HttpError(400, 'Guarde los cambios de parámetros y revise los expedientes antes de cerrar la evaluación.');
       const available = new Set(settings.disciplineTypes.map(value => value.id));
@@ -320,6 +320,7 @@ async function install(): Promise<void> {
         if (!same(previous, student.academic)) student.history.push(audit('Revisión de catálogo académico', previous, student.academic));
         syncCohortRecords(student, settings); student.updatedAt = stamp();
       }
+      if (state.settings.criteriaApproved !== settings.criteriaApproved) for (const student of state.students) { student.history.push(audit('Aprobación de criterios institucionales', state.settings.criteriaApproved, settings.criteriaApproved)); student.updatedAt = stamp(); }
       if (state.settings.closed !== settings.closed) for (const student of state.students) { student.history.push(audit('Estado de la evaluación', state.settings.closed ? 'Cerrada' : 'Abierta', settings.closed ? 'Cerrada' : 'Abierta')); student.updatedAt = stamp(); }
       state.settings = settings; await save(dataset, state, expected); return json(settings);
     }

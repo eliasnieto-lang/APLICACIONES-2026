@@ -10,6 +10,7 @@ export interface Commitment { id: string; catalogId?: string; name: string; date
 export interface CohortRecord { id: string; kind: 'institutional' | 'family'; name: string; date: string; grade: string; section: string; required: boolean }
 export interface HistoryEntry { id: string; date: string; field: string; before: string; after: string }
 export interface DimensionWeights { academic: number; performance: number; commitment: number }
+export interface BimesterWeights { first: number; second: number; third: number }
 export type CircleStatus = 'pending' | 'remains' | 'does_not_remain';
 export interface Student {
   id: string; code: string; name: string; grade: string; section: string;
@@ -28,6 +29,7 @@ export interface Settings {
   year: number; version: string; areas: AreaDefinition[];
   academicWeights: { general: number; specialized: number; progress: number };
   dimensionWeights?: DimensionWeights;
+  bimesterWeights?: BimesterWeights;
   scienceWeight: number;
   performanceWeights: { attendance: number; discipline: number };
   commitmentWeights: { participation: number; family: number };
@@ -35,6 +37,7 @@ export interface Settings {
   disciplineTypes: DisciplineType[]; activityTypes: string[]; familyTypes: string[]; cohortRecords?: CohortRecord[]; closed: boolean;
   workflowVersion?: 2;
   progressionComparison?: 'first_two_vs_third';
+  academicScoringPolicy?: 'weighted_bimesters_common_progression';
 }
 export interface PdfRecord {
   id: string; name: string; hash: string; size: number; uploadedAt: string;

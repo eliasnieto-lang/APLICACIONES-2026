@@ -1,6 +1,12 @@
-import type { DimensionWeights, Settings, Student } from './types';
+import type { BimesterWeights, DimensionWeights, Settings, Student } from './types';
 
 export const DEFAULT_DIMENSION_WEIGHTS: Readonly<DimensionWeights> = Object.freeze({ academic: .5, performance: .25, commitment: .25 });
+export const DEFAULT_BIMESTER_WEIGHTS: Readonly<BimesterWeights> = Object.freeze({ first: .25, second: .25, third: .5 });
+
+/** Active periods retain their source scale; the third period has half the course weight. */
+export function getBimesterWeights(settings?: Pick<Settings, 'bimesterWeights'>): BimesterWeights {
+  return { ...(settings?.bimesterWeights ?? DEFAULT_BIMESTER_WEIGHTS) };
+}
 
 export const isCommitmentEnabled = (student?: Pick<Student, 'commitmentEnabled'>): boolean => student?.commitmentEnabled !== false;
 

@@ -4,12 +4,13 @@ import { calculateStudent, rankStudents } from '../shared/calculations.js';
 import { ACTIVE_BIMESTERS, normalizeCohort } from '../shared/policy.js';
 import { CONTEST_SCOPE_OPTIONS } from '../shared/contests.js';
 import { hasActiveGrades } from '../shared/academic-policy.js';
-import { getDimensionWeights, getEffectiveDimensionWeights } from '../shared/evaluation-policy.js';
+import { getDimensionWeights, getEffectiveDimensionWeights, getBimesterWeights } from '../shared/evaluation-policy.js';
 
 const circleLabel = (status: AppState['students'][number]['circleStatus']) => status === 'remains' ? 'Permanece' : status === 'does_not_remain' ? 'No permanece' : 'Pendiente';
 
 export async function buildWorkbook(state: AppState, filters: {grade?:string;section?:string} = {}) {
   const workbook=new ExcelJS.Workbook();
+  const bimesterWeights=getBimesterWeights(state.settings);
   workbook.creator='Colegio Albert Einstein · Círculos';
   workbook.created=new Date();
   const requestedCohort=filters.grade?normalizeCohort(filters.grade,filters.section||'F'):null;
@@ -22,7 +23,7 @@ export async function buildWorkbook(state: AppState, filters: {grade?:string;sec
     ranking.addRow([position,s.code,s.name,s.grade,s.section,r.a,r.b,r.commitmentExcluded?'No se evalúa':r.c,r.total,r.progress,r.status,cohort,r.commitmentExcluded?'Académico y Desempeño':'Académico, Desempeño y Compromiso',weights.academic,weights.performance,weights.commitment,circleLabel(s.circleStatus),s.noContestParticipation===true?'Sí':'No']);
   }
   const detail=workbook.addWorksheet('DETALLE');
-  detail.addRow(['Código','Estudiante','G','R','P','Ciencias (1–4)','Letras (1–4)','Promedio I–II','Promedio III','Asistencia (%)','Puntualidad (%)','AP','Disciplina','Participación PI','Familia CF','Peso G','Peso R','Peso P','Peso AP','Peso D','Peso PI','Peso CF','Origen académico','Asistencia registrada','Incidencias verificadas','Participación registrada','Familia registrada','Historial de ajustes',...ACTIVE_BIMESTERS.map(period=>`Calificaciones ${period}`),'Puesto en concursos','Representación del colegio','Notas adicionales de la libreta','Compromiso incluido en promedio','Peso académico total','Peso desempeño total','Peso compromiso total','Permanencia en el círculo','No participó en concursos']);
+  detail.addRow(['Código','Estudiante','G','R','P','Ciencias (1–4)','Letras (1–4)','Promedio I–II','Promedio III','Asistencia (%)','Puntualidad (%)','AP','Disciplina','Participación PI','Familia CF','Peso G','Peso R','Peso P','Peso AP','Peso D','Peso PI','Peso CF','Origen académico','Asistencia registrada','Incidencias verificadas','Participación registrada','Familia registrada','Historial de ajustes',...ACTIVE_BIMESTERS.map(period=>`Calificaciones ${period}`),'Puesto en concursos','Representación del colegio','Notas adicionales de la libreta','Compromiso incluido en promedio','Peso académico total','Peso desempeño total','Peso compromiso total','Permanencia en el círculo','No participó en concursos','Peso I bimestre','Peso II bimestre','Peso III bimestre','Promedio comparable I–II','III comparable','Cambio comparable']);
   for (const s of students) {
     const r=calculateStudent(s,state.settings);
     const pdfs=state.pdfs.filter(p=>s.pdfIds.includes(p.id));
@@ -33,7 +34,7 @@ export async function buildWorkbook(state: AppState, filters: {grade?:string;sec
       JSON.stringify(s.attendance),JSON.stringify(s.discipline),JSON.stringify(s.institutional),JSON.stringify(s.family),JSON.stringify(s.history),
       ...ACTIVE_BIMESTERS.map((_,period)=>JSON.stringify(s.academic.filter(hasActiveGrades).map(area=>({areaId:area.areaId,grades:area.grades.map(row=>row[period]??'')})))),
       JSON.stringify(s.institutional.map(record=>({id:record.id,name:record.name,placement:record.placement??''}))),
-      JSON.stringify(s.institutional.map(record=>({id:record.id,name:record.name,representingSchool:record.representingSchool??null}))),JSON.stringify(pdfs.flatMap(pdf=>pdf.supplementalAreas??[]).filter(hasActiveGrades)),s.commitmentEnabled===false?'No':'Sí',getEffectiveDimensionWeights(state.settings,s).academic,getEffectiveDimensionWeights(state.settings,s).performance,getEffectiveDimensionWeights(state.settings,s).commitment,circleLabel(s.circleStatus),s.noContestParticipation===true?'Sí':'No']);
+      JSON.stringify(s.institutional.map(record=>({id:record.id,name:record.name,representingSchool:record.representingSchool??null}))),JSON.stringify(pdfs.flatMap(pdf=>pdf.supplementalAreas??[]).filter(hasActiveGrades)),s.commitmentEnabled===false?'No':'Sí',getEffectiveDimensionWeights(state.settings,s).academic,getEffectiveDimensionWeights(state.settings,s).performance,getEffectiveDimensionWeights(state.settings,s).commitment,circleLabel(s.circleStatus),s.noContestParticipation===true?'Sí':'No',bimesterWeights.first,bimesterWeights.second,bimesterWeights.third,r.progressionS1,r.progressionS2,r.delta]);
   }
   const pending=workbook.addWorksheet('PENDIENTES');
   pending.addRow(['Código','Estudiante','Grado','Sección','Avance (%)','PA (%)','PB (%)','PC (%)','Estado','Dimensiones y validaciones pendientes','Ámbitos evaluados','Permanencia en el círculo','No participó en concursos']);
@@ -67,6 +68,7 @@ export async function buildWorkbook(state: AppState, filters: {grade?:string;sec
     ['Decisión institucional','Permanencia registrada manualmente: Pendiente, Permanece o No permanece. Los puntajes no asignan esta decisión automáticamente.'],
   ];
   configRows.push(['Sin participación en concursos','Confirmación expresa sin eventos registrados: PI=0 puntos, sin fecha ni puesto ficticios. Compromiso familiar y validación final de C mantienen sus requisitos.']);
+  configRows.push(['Peso I bimestre',bimesterWeights.first],['Peso II bimestre',bimesterWeights.second],['Peso III bimestre',bimesterWeights.third],['Promedio por área',`${bimesterWeights.first} × promedio I + ${bimesterWeights.second} × promedio II + ${bimesterWeights.third} × promedio III; se convierte a puntos sobre 100 multiplicando por 25.`],['Progresión comparable','Para comparar I–II frente a III se usa la escala común C=1, B=2, A/AD=3 en cada celda. AD mantiene su valor real4 en el promedio y en el nivel actual de III; no genera por sí sola un incremento de progresión.'],['Fórmula P','25 × MIN(4; MAX(1; promedio real III + 0,50 × cambio comparable))'],['Política académica',state.settings.academicScoringPolicy??'weighted_bimesters_common_progression']);
   for (const row of configRows) config.addRow(row);
   for (const sheet of workbook.worksheets) {
     sheet.views=[{state:'frozen',ySplit:1}];

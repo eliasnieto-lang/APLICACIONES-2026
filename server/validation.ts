@@ -36,12 +36,14 @@ export const settingsSchema = z.object({
   areas: z.array(areaDefinition).min(1).max(100),
   academicWeights: z.object({general:weight,specialized:weight,progress:weight}), scienceWeight: weight,
   dimensionWeights: z.object({academic:weight,performance:weight,commitment:weight}).optional(),
+  bimesterWeights: z.object({first:weight,second:weight,third:weight}).optional(),
   performanceWeights: z.object({attendance:weight,discipline:weight}), commitmentWeights:z.object({participation:weight,family:weight}),
   criteriaApproved:z.boolean(),naPolicy:z.enum(['pending','other_component']),naPolicyApproved:z.boolean(),
   disciplineTypes:z.array(z.object({id,name:z.string().min(1).max(200),discount:z.number().min(0).max(100).nullable(),punctuality:z.boolean()})).max(100),
   activityTypes:z.array(z.string().min(1).max(200)).max(200),familyTypes:z.array(z.string().min(1).max(200)).max(200),
   cohortRecords:z.array(z.object({id,kind:z.enum(['institutional','family']),name:z.string().trim().min(1).max(200),date:z.string().regex(/^\d{4}-\d{2}-\d{2}$/),grade:z.string().trim().max(60),section:z.string().trim().max(20),required:z.boolean()})).max(2000).optional(),closed:z.boolean(),
   workflowVersion:z.literal(2).optional(), progressionComparison:z.literal('first_two_vs_third').optional(),
+  academicScoringPolicy:z.literal('weighted_bimesters_common_progression').optional(),
 });
 const pdfSchema = z.object({
   id, name:z.string().min(1).max(300),hash:z.string().regex(/^[a-f0-9]{64}$/),size:z.number().int().min(0).max(20*1024*1024),uploadedAt:text,

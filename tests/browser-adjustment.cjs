@@ -286,16 +286,22 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     assert.equal(initial.state.students.length, 0, 'El perfil temporal no contiene datos institucionales.');
     assert.equal(initial.state.settings.workflowVersion, 2);
     assert.equal(initial.state.settings.progressionComparison, 'first_two_vs_third');
+    assert.deepEqual(initial.state.settings.bimesterWeights, { first: 0.25, second: 0.25, third: 0.5 });
+    assert.equal(initial.state.settings.academicScoringPolicy, 'weighted_bimesters_common_progression');
     assert.equal(await page.getByRole('button', { name: 'Nuevo estudiante', exact: true }).count(), 0, 'El alta parte de una libreta.');
 
     await navigate('Parámetros');
+    for (const [label, value] of [['Peso del I bimestre', '25 %'], ['Peso del II bimestre', '25 %'], ['Peso del III bimestre', '50 %']]) {
+      assert.equal((await page.getByLabel(label, { exact: true }).inputValue()).replace(/\s/g, ''), value.replace(/\s/g, ''));
+      assert(await page.getByLabel(label, { exact: true }).getAttribute('readonly') !== null, 'Los pesos seleccionados se muestran sin alterar la regla institucional.');
+    }
     await check(page.getByLabel('Confirmo que los pesos, el catálogo y los criterios registrados cuentan con aprobación institucional para esta evaluación.'));
     await page.getByRole('button', { name: 'Guardar parámetros', exact: true }).first().click();
     await poll(async () => (await snapshot()).state.settings.criteriaApproved, 'aprobación de criterios');
     const settings = (await snapshot()).state.settings;
     assert.deepEqual(settings.dimensionWeights, { academic: 0.5, performance: 0.25, commitment: 0.25 });
     const offeredClassrooms = [1, 2, 3, 4, 5].flatMap(grade => ['A', 'B', 'C', 'D', 'E'].map(section => `${grade}.º ${section}`));
-    const weightedReference = 58.75 * settings.dimensionWeights.academic + 95.5 * settings.dimensionWeights.performance + 100 * settings.dimensionWeights.commitment;
+    const weightedReference = 63.75 * settings.dimensionWeights.academic + 95.5 * settings.dimensionWeights.performance + 100 * settings.dimensionWeights.commitment;
     const weightedReferencePattern = new RegExp(weightedReference.toFixed(2).replace('.', '[.,]'));
     const pupils = [
       { code: 'AJUSTE-F2-001', name: 'PEREZ RAMOS Lucia Elena', grade: 2 },
@@ -378,14 +384,16 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     await tab('Académico').click();
     const cells = page.locator('.grade-select');
     assert.equal(await cells.count(), settings.areas.reduce((sum, area) => sum + area.competencies.length * 3, 0));
-    assert.deepEqual(await page.locator('.academic-table').first().locator('thead th').allTextContents(), ['Competencia', 'I bim.', 'II bim.', 'III bim.']);
+    const gradeHeaders = await page.locator('.academic-table').first().locator('thead th').allTextContents();
+    assert.equal(gradeHeaders[0], 'Competencia');
+    for (const [index, bimester, weight] of [[1, 'I', 25], [2, 'II', 25], [3, 'III', 50]]) { assert(gradeHeaders[index].startsWith(`${bimester} bim.`)); assert(gradeHeaders[index].replace(/\s/g, '').endsWith(`${weight}%`)); }
     assert.deepEqual(await cells.allTextContents(), previewNotes, 'A conserva las 45 notas que se mostraron antes de confirmar.');
     assert.equal(await page.locator('.academic-table input, .academic-table select, .academic-table textarea, .academic-table [contenteditable=true]').count(), 0, 'Las notas académicas son de solo lectura.');
-    assert.match(await metric('General · G').innerText(), /50[.,]00/);
+    assert.match(await metric('General · G').innerText(), /56[.,]25/);
     assert.match(await metric('Promedio I–II · S1').innerText(), /1[.,]50/);
     assert.match(await metric('Promedio I–II · S1').innerText(), /III · S2: 3[.,]00/);
     assert.match(await metric('Progresión · P').innerText(), /93[.,]75/, 'P compara promedio I–II = 1,50 con III = 3,00.');
-    assert.match(await dimension('Académico').innerText(), /58[.,]75/);
+    assert.match(await dimension('Académico').innerText(), /63[.,]75/);
     assert.equal(await dimension('Desempeño').innerText(), 'Pendiente');
     assert.equal(await dimension('Compromiso').innerText(), 'Pendiente');
 
@@ -487,7 +495,7 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     assert.deepEqual(excludedC.institutional, beforeExcludingC.institutional);
     assert.deepEqual(excludedC.family, beforeExcludingC.family);
     assert.deepEqual(excludedC.validated, beforeExcludingC.validated, 'Excluir Compromiso conserva sus confirmaciones y registros, sin afectar A/B.');
-    assert.match(await page.locator('.detail-total').innerText(), /71[.,]00/);
+    assert.match(await page.locator('.detail-total').innerText(), /74[.,]33/);
     await includeC.check(); await saved();
     await page.getByLabel('Permanencia en el círculo', { exact: true }).selectOption('remains'); await saved();
     const completed = await student(pupils[0].code);
@@ -522,7 +530,23 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     for (const field of ['code', 'name', 'grade', 'section', 'reportApproval', 'attendance', 'discipline', 'institutional', 'family', 'validated', 'commitmentEnabled', 'circleStatus']) assert.deepEqual(rescanned[field], completed[field], `Volver a escanear conserva ${field}.`);
     assert.deepEqual(rescanned.academic, completed.academic);
     assert.deepEqual(await page.locator('.grade-select').allTextContents(), previewNotes);
-    assert.match(await dimension('Académico').innerText(), /58[.,]75/);
+    assert.match(await dimension('Académico').innerText(), /63[.,]75/);
+    assert.match(await page.locator('.detail-total').innerText(), weightedReferencePattern);
+
+    // Approval alone must not erase the completed reviews preserved by the
+    // calculation-policy migration. Exercise the real Settings UI both ways.
+    const beforeCriteriaApproval = await student(pupils[0].code);
+    await navigate('Parámetros');
+    const approveCriteria = page.getByLabel('Confirmo que los pesos, el catálogo y los criterios registrados cuentan con aprobación institucional para esta evaluación.');
+    for (const approved of [false, true]) {
+      await approveCriteria.setChecked(approved);
+      await page.getByRole('button', { name: 'Guardar parámetros', exact: true }).first().click();
+      await poll(async () => (await snapshot()).state.settings.criteriaApproved === approved, `aprobación de fórmula ${approved}`);
+      const afterApproval = await student(pupils[0].code);
+      for (const field of ['academic', 'attendance', 'discipline', 'institutional', 'family', 'validated', 'commitmentEnabled', 'circleStatus', 'noContestParticipation', 'reportApproval']) assert.deepEqual(afterApproval[field], beforeCriteriaApproval[field], `Cambiar solo la aprobación conserva ${field}.`);
+    }
+    await openStudent(pupils[0].code, pupils[0].name);
+    assert.match(await page.locator('.detail-total').innerText(), /Validado para ranking/);
     assert.match(await page.locator('.detail-total').innerText(), weightedReferencePattern);
 
     await navigate('Panel principal');
@@ -533,10 +557,16 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     const ranking = workbook.getWorksheet('RANKING');
     assert.equal(ranking.rowCount, 2, 'Solo la ficha con A, B y C completos entra al ranking.');
     assert.equal(ranking.getCell('B2').value, pupils[0].code);
-    assert.equal(ranking.getCell('F2').value, 58.75);
+    assert.equal(ranking.getCell('F2').value, 63.75);
     assert.equal(ranking.getCell('G2').value, 95.5);
     assert.equal(ranking.getCell('H2').value, 100);
     assert(Math.abs(ranking.getCell('I2').value - weightedReference) < 1e-10);
+    const exportedConfig = new Map();
+    workbook.getWorksheet('CONFIGURACIÓN').eachRow((row, index) => { if (index > 1) exportedConfig.set(row.getCell(1).value, row.getCell(2).value); });
+    assert.equal(exportedConfig.get('Peso I bimestre'), 0.25);
+    assert.equal(exportedConfig.get('Peso II bimestre'), 0.25);
+    assert.equal(exportedConfig.get('Peso III bimestre'), 0.5);
+    assert.match(exportedConfig.get('Progresión comparable'), /A\/AD=3/);
 
     // Old saved metadata is repaired from the retained filename immediately.
     // Its original bytes, three grade columns and manual B/C stay intact.
@@ -702,7 +732,7 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     assert.equal(await page.locator('.academic-table').count(), 10);
     assert.deepEqual(await page.locator('.grade-select').allTextContents(), allCoursesNotes);
     assert.equal(await page.locator('.academic-table input, .academic-table select, .academic-table textarea, .academic-table [contenteditable=true]').count(), 0);
-    assert.match(await dimension('Académico').innerText(), /58[.,]75/);
+    assert.match(await dimension('Académico').innerText(), /63[.,]75/);
     const allCoursesApproved = await student(allCoursesPupil.code);
     assertBlankManual(allCoursesApproved);
     await startPdfTrace();
@@ -717,9 +747,43 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     assert.deepEqual((await student(allCoursesPupil.code)).academic, allCoursesApproved.academic);
     assert.equal(current.state.settings.areas.length, 5, 'Reconocer otras asignaturas conserva el catálogo de cálculo aprobado.');
     assert.deepEqual(await page.locator('.grade-select').allTextContents(), allCoursesNotes);
-    assert.match(await dimension('Académico').innerText(), /58[.,]75/);
+    assert.match(await dimension('Académico').innerText(), /63[.,]75/);
     await page.screenshot({ path: '/tmp/circulos-all-courses-academic.png', fullPage: true });
     await deleteImported(path.basename(allCoursesPath));
+    assert.equal((await snapshot()).state.students.length, 3);
+
+    // A was the top level available in I–II. Its new AD in III keeps the
+    // stronger current achievement, but never creates an extra growth bonus.
+    const weightedPupil = { code: 'BIMESTRES-1A-001', name: 'RENDIMIENTO PONDERADO PRUEBA', grade: 1, section: 'A' };
+    const weightedPath = path.join(directory, 'BOLETA_1ro año A_Secundaria_RENDIMIENTO_PONDERADO_PRUEBA.pdf');
+    await fs.writeFile(weightedPath, makeCompactPdf(settings, { ...weightedPupil, grades: ['A', 'A', 'AD', 'C'] }));
+    await navigate('Importar libretas'); await upload([weightedPath]);
+    const weightedPdf = (await snapshot()).state.pdfs.find(pdf => pdf.name === path.basename(weightedPath));
+    const weightedSource = structuredClone(weightedPdf.areas);
+    assert(weightedSource.every(area => area.grades.every(row => row.join(',') === 'A,A,AD')));
+    await confirm(path.basename(weightedPath)); await tab('Académico').click();
+    const weightedMath = page.locator('.detail-area').filter({ has: page.getByRole('heading', { name: 'Matemática', exact: true }) });
+    assert.match(await weightedMath.innerText(), /Promedio ponderado I–III/);
+    assert.match(await weightedMath.innerText(), /87[.,]50\s*\/\s*100/);
+    assert.match(await metric('General · G').innerText(), /87[.,]50/);
+    assert.match(await metric('Ciencias y Letras · R').innerText(), /87[.,]50/);
+    assert.match(await metric('Progresión · P').innerText(), /100[.,]00/);
+    assert.match(await dimension('Académico').innerText(), /90[.,]00/);
+    const comparable = page.locator('.detail-formula').filter({ has: page.getByRole('heading', { name: 'Fórmula y componentes', exact: true }) });
+    assert.match(await comparable.innerText(), /Cambio comparable 0[.,]00/);
+    assert.match(await comparable.innerText(), /AD.*III.*mejora adicional/s);
+    await weightedMath.screenshot({ path: '/tmp/circulos-weighted-bimesters-aad.png' });
+    const weightedBeforeReload = await student(weightedPupil.code);
+    await load(); await openStudent(weightedPupil.code, weightedPupil.name); await tab('Académico').click();
+    assert.match(await dimension('Académico').innerText(), /90[.,]00/);
+    assert.deepEqual((await student(weightedPupil.code)).academic, weightedBeforeReload.academic);
+    assert.deepEqual((await snapshot()).state.pdfs.find(pdf => pdf.id === weightedPdf.id).areas, weightedSource);
+    const weightedBackup = await backup();
+    assert.deepEqual(weightedBackup.state.settings.bimesterWeights, { first: 0.25, second: 0.25, third: 0.5 });
+    assert.equal(weightedBackup.state.settings.academicScoringPolicy, 'weighted_bimesters_common_progression');
+    const weightedFile = weightedBackup.files.find(file => file.id === weightedPdf.id);
+    assert.equal(createHash('sha256').update(Buffer.from(weightedFile.content, 'base64')).digest('hex'), weightedPdf.hash);
+    await deleteImported(path.basename(weightedPath));
     assert.equal((await snapshot()).state.students.length, 3);
 
     // The same ten printed subjects can include courses not studied during
@@ -1235,8 +1299,8 @@ function makeMixedPdf(settings, headerImage, imageWidth, imageHeight) {
     assert.deepEqual(requests.filter(request => /^https?:/.test(request.url) && /\/api(?:\/|\?)/.test(new URL(request.url).pathname)), [], 'No se usa una API HTTP.');
     assert.deepEqual(requests.filter(request => /^https?:/.test(request.url) && new URL(request.url).origin !== new URL(appUrl).origin), [], 'No se descargan recursos externos.');
     assert.deepEqual(errors, [], 'Sin excepciones JavaScript.');
-    const report = { passed: true, classrooms: ['2.º F', '3.º F', '4.º F', '5.º F'], rejectedClassroom: '6.º F', bimesters: ['I', 'II', 'III'], provisionalImport: true, automaticIdentityWithoutColons: true, editableFullNameConfirmDeleteReview: true, filenameIdentityBeforeConfirmation: true, filenameWithoutCodeOrYear: true, manualNameFallback: true, missingGradesRemainPending: true, existingPdfFilenameRecoveryWithoutOcr: true, recoveryPreservesManualRecords: true, mixedRasterHeaderNativeGrades: true, reportGate: true, automaticAcademicOnly: true, progression: { firstTwo: 1.5, third: 3, score: 93.75, academic: 58.75 }, compactFourBimesterPdf: true, automatic45NotesPreview: true, all10Courses78Notes: true, supplementalCoursesSurviveRescan: true, incompleteReportAutomaticRescanOnce: true, readOnlyAcademicNotes: true, activeOriginalRescanPreservesManualRecords: true, contestOnlyEventTypes: true, threeRequiredContestFields: true, contestScores: { local: 40, regional: 70, national: 100 }, bestCompletedContest: true, scores: { a: 58.75, b: 95.5, c: 100, total: weightedReference }, replacementAndDuplicateCascade: true, exactFileReimport: true, indexedDBPersistenceAfterRestart: true, standaloneInlineHtml: true, offlineOperations: true, httpRequestsAfterLoad: operationHttpRequests, downloads, pageErrors: errors, consoleErrors };
-    Object.assign(report, { offeredClassrooms, onlyFiveSectionsOffered: true, legacyClassroomRecordsPreserved: true, explicitNoContestParticipation: true, noContestScoresZeroWithoutEvent: true, noContestConfirmationPersistsAndCanUndo: true, addingContestClearsNoParticipation: true, dimensionWeights: settings.dimensionWeights, commitmentExclusion: true, commitmentRecordsPreservedWhenExcluded: true, manualCircleDecision: true, firstGradeClassroomFiltersAndRankings: true, perAreaPercentageScale: true, indagaAllClassroomsManualValidation: true, indaga4F5FManualValidation: true, indagaBlankGradesPreserved: true, indagaExcludedFromAverages: true, indagaDoesNotTriggerRecovery: true, indagaManualValidationPersistsAfterReload: true, blankCoursesExcludedFromPreviewAndScores: true, ivOnlyCoursesRemainInactive: true, blankRawGradesPreserved: true, blankCoursesDoNotTriggerRescan: true, manualAcademicValidationWithoutGradeEntry: true, partiallyReadCourseRemainsPending: true, threeRequiredIncidentFields: true, unapprovedDiscountRemainsPending: true, threeRequiredFamilyFields: true, optionalFamilyEvidence: true, familyScore: 100, explicitStudentDeletion: true, studentDeletionWhileClosed: true, deletionCancellationPreservesData: true, deletionWaitsForRescanAndAutosave: true, explicitDeletionCascadesVersionsDuplicatesAndBlobs: true, reimportAfterExplicitStudentDeletion: true, totalCleanupRequiresTypedConfirmation: true, totalCleanupWhileClosed: true, totalCleanupRemovesOrphanPdfBlobs: true, totalCleanupPreservesParameters: true, realCleanupPreservesDemo: true, emptyCleanupBackup: true, emptyCleanupDashboardAndRestart: true });
+    const report = { passed: true, classrooms: ['2.º F', '3.º F', '4.º F', '5.º F'], rejectedClassroom: '6.º F', bimesters: ['I', 'II', 'III'], provisionalImport: true, automaticIdentityWithoutColons: true, editableFullNameConfirmDeleteReview: true, filenameIdentityBeforeConfirmation: true, filenameWithoutCodeOrYear: true, manualNameFallback: true, missingGradesRemainPending: true, existingPdfFilenameRecoveryWithoutOcr: true, recoveryPreservesManualRecords: true, mixedRasterHeaderNativeGrades: true, reportGate: true, automaticAcademicOnly: true, progression: { firstTwo: 1.5, third: 3, score: 93.75, academic: 63.75 }, compactFourBimesterPdf: true, automatic45NotesPreview: true, all10Courses78Notes: true, supplementalCoursesSurviveRescan: true, incompleteReportAutomaticRescanOnce: true, readOnlyAcademicNotes: true, activeOriginalRescanPreservesManualRecords: true, contestOnlyEventTypes: true, threeRequiredContestFields: true, contestScores: { local: 40, regional: 70, national: 100 }, bestCompletedContest: true, scores: { a: 63.75, b: 95.5, c: 100, total: weightedReference }, replacementAndDuplicateCascade: true, exactFileReimport: true, indexedDBPersistenceAfterRestart: true, standaloneInlineHtml: true, offlineOperations: true, httpRequestsAfterLoad: operationHttpRequests, downloads, pageErrors: errors, consoleErrors };
+    Object.assign(report, { bimesterWeights: settings.bimesterWeights, weightedAcademicAverages: true, comparableProgressionWithoutAutomaticAdBonus: true, weightedAadArea: 87.5, weightedAadAcademic: 90, weightedGradesAndPdfHashPreserved: true, offeredClassrooms, onlyFiveSectionsOffered: true, legacyClassroomRecordsPreserved: true, explicitNoContestParticipation: true, noContestScoresZeroWithoutEvent: true, noContestConfirmationPersistsAndCanUndo: true, addingContestClearsNoParticipation: true, dimensionWeights: settings.dimensionWeights, commitmentExclusion: true, commitmentRecordsPreservedWhenExcluded: true, manualCircleDecision: true, firstGradeClassroomFiltersAndRankings: true, perAreaPercentageScale: true, indagaAllClassroomsManualValidation: true, indaga4F5FManualValidation: true, indagaBlankGradesPreserved: true, indagaExcludedFromAverages: true, indagaDoesNotTriggerRecovery: true, indagaManualValidationPersistsAfterReload: true, blankCoursesExcludedFromPreviewAndScores: true, ivOnlyCoursesRemainInactive: true, blankRawGradesPreserved: true, blankCoursesDoNotTriggerRescan: true, manualAcademicValidationWithoutGradeEntry: true, partiallyReadCourseRemainsPending: true, threeRequiredIncidentFields: true, unapprovedDiscountRemainsPending: true, threeRequiredFamilyFields: true, optionalFamilyEvidence: true, familyScore: 100, explicitStudentDeletion: true, studentDeletionWhileClosed: true, deletionCancellationPreservesData: true, deletionWaitsForRescanAndAutosave: true, explicitDeletionCascadesVersionsDuplicatesAndBlobs: true, reimportAfterExplicitStudentDeletion: true, totalCleanupRequiresTypedConfirmation: true, totalCleanupWhileClosed: true, totalCleanupRemovesOrphanPdfBlobs: true, totalCleanupPreservesParameters: true, realCleanupPreservesDemo: true, emptyCleanupBackup: true, emptyCleanupDashboardAndRestart: true });
     await fs.writeFile('/tmp/circulos-adjustment-result.json', JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
   } catch (error) {

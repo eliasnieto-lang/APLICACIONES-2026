@@ -1,13 +1,14 @@
 import type { AppState, Grade, Settings, Student } from './types';
 import { ACTIVE_BIMESTERS, normalizeCohort } from './policy';
 import { ACADEMIC_CONTEST_LABEL } from './contests';
-import { DEFAULT_DIMENSION_WEIGHTS } from './evaluation-policy';
+import { DEFAULT_BIMESTER_WEIGHTS, DEFAULT_DIMENSION_WEIGHTS } from './evaluation-policy';
 
 export const defaultSettings: Settings = {
   year: 2027,
   version: '2.0.0 · Cartilla Círculos 2027 · I–III',
   workflowVersion: 2,
   progressionComparison: 'first_two_vs_third',
+  academicScoringPolicy: 'weighted_bimesters_common_progression',
   areas: [
     { id: 'matematica', name: 'Matemática', group: 'math', eligible: true, competencies: ['Resuelve problemas de cantidad', 'Resuelve problemas de regularidad, equivalencia y cambio', 'Resuelve problemas de forma, movimiento y localización', 'Resuelve problemas de gestión de datos e incertidumbre'] },
     { id: 'ciencia', name: 'Ciencia y Tecnología', group: 'science', eligible: true, competencies: ['Indaga mediante métodos científicos', 'Explica el mundo físico', 'Diseña y construye soluciones tecnológicas'] },
@@ -17,6 +18,7 @@ export const defaultSettings: Settings = {
   ],
   academicWeights: { general: .4, specialized: .4, progress: .2 },
   dimensionWeights: { ...DEFAULT_DIMENSION_WEIGHTS },
+  bimesterWeights: { ...DEFAULT_BIMESTER_WEIGHTS },
   scienceWeight: .6,
   performanceWeights: { attendance: .6, discipline: .4 },
   commitmentWeights: { participation: .7, family: .3 },

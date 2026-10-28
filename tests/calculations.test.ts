@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateProgression, calculateStudent, calculateTotal, cohortRecordApplies, DEFAULT_DIMENSION_WEIGHTS, fmt, getDimensionWeights, getEffectiveDimensionWeights, rankStudents, validateSettings } from '../shared/calculations';
+import { calculateProgression, calculateStudent, calculateTotal, cohortRecordApplies, DEFAULT_BIMESTER_WEIGHTS, DEFAULT_DIMENSION_WEIGHTS, fmt, getBimesterWeights, getDimensionWeights, getEffectiveDimensionWeights, rankStudents, validateSettings } from '../shared/calculations';
 import { createDemoState, createStudent, defaultSettings } from '../shared/defaults';
 import type { AppState, CohortRecord, Commitment, PdfRecord, Settings, Student } from '../shared/types';
 import { ACTIVE_BIMESTERS, ALLOWED_COHORTS, cohortKey, isReportApproved, normalizeCohort } from '../shared/policy';
@@ -54,6 +54,67 @@ test('Cartilla: S1=3 y S2=3,2 produce P=82,50 y estabilidad AD produce 100', () 
   assert.equal(calculateProgression(1, 1), 25);
   assert.equal(calculateProgression(4, 1), 25);
   assert.equal(calculateProgression(1, 4), 100);
+});
+test('Los tres bimestres pesan 25/25/50 y AD del III no añade crecimiento por cambiar la escala', () => {
+  const settings = approved(), student = complete(settings);
+  assert.deepEqual(getBimesterWeights(settings), { first: .25, second: .25, third: .5 });
+  assert.deepEqual(getBimesterWeights({}), DEFAULT_BIMESTER_WEIGHTS);
+  student.academic.forEach(area => area.grades.forEach(row => row.splice(0, row.length, 'A', 'A', 'AD')));
+  const source = structuredClone(student), result = calculateStudent(student, settings);
+  assert.ok(Object.values(result.areaAverages).every(value => value === 3.5));
+  assert.equal(result.g, 87.5); assert.equal(result.r, 87.5);
+  assert.equal(result.s1, 3); assert.equal(result.s2, 4);
+  assert.equal(result.progressionS1, 3); assert.equal(result.progressionS2, 3); assert.equal(result.delta, 0);
+  assert.equal(result.p, 100, 'El nivel AD actual vale cien, sin bonificación por la escala nueva.');
+  assert.equal(result.a, 90); assert.equal(result.eligible, true);
+  assert.deepEqual(student, source, 'El ajuste no convierte ni modifica ninguna nota fuente.');
+});
+test('El ejemplo de Matemática promedia I2,50 II2,75 III3,00 como 70,3125 puntos', () => {
+  const settings = approved(), student = complete(settings);
+  student.academic.find(area => area.areaId === 'matematica')!.grades = [
+    ['B', 'A', 'B'], ['B', 'A', 'A'], ['A', 'A', 'A'], ['A', 'B', 'AD'],
+  ];
+  const result = calculateStudent(student, settings);
+  assert.equal(result.areaAverages.matematica, 2.8125);
+  assert.equal(result.areaAverages.matematica! * 25, 70.3125);
+});
+test('La progresión compara cada celda en C/B/A, conservando AD real en el nivel actual', () => {
+  const settings = approved();
+  settings.areas.forEach(area => { area.competencies = ['Primera competencia', 'Segunda competencia']; });
+  const student = complete(settings);
+  student.academic.forEach(area => { area.grades = [['A', 'A', 'AD'], ['A', 'A', 'B']]; });
+  const before = structuredClone(student), result = calculateStudent(student, settings);
+  assert.equal(result.s1, 3); assert.equal(result.s2, 3);
+  assert.equal(result.progressionS1, 3); assert.equal(result.progressionS2, 2.5);
+  assert.equal(result.delta, -.5, 'AD no compensa artificialmente la caída de A a B en otra competencia.');
+  assert.equal(result.p, 68.75); assert.equal(result.g, 75); assert.equal(result.r, 75); assert.equal(result.a, 73.75);
+  assert.deepEqual(student, before);
+});
+test('El III ponderado reordena el ranking por rendimiento reciente sin mezclar aulas', () => {
+  const settings = approved(), recent = complete(settings), early = complete(settings), otherClass = complete(settings);
+  recent.name = 'Mayor rendimiento reciente'; recent.grade = '1'; recent.section = 'A';
+  early.name = 'Mayor rendimiento inicial'; early.code = '002'; early.grade = '1'; early.section = 'A';
+  otherClass.code = '003'; otherClass.grade = '1'; otherClass.section = 'B';
+  recent.academic.forEach(area => area.grades.forEach(row => row.splice(0, row.length, 'B', 'B', 'A')));
+  early.academic.forEach(area => area.grades.forEach(row => row.splice(0, row.length, 'A', 'A', 'B')));
+  assert.equal(calculateStudent(recent, settings).g, 62.5);
+  assert.equal(calculateStudent(early, settings).g, 62.5);
+  assert.equal(calculateStudent(recent, settings).p, 87.5);
+  assert.equal(calculateStudent(early, settings).p, 37.5);
+  const ranking = rankStudents([early, otherClass, recent], settings);
+  assert.deepEqual(ranking.map(row => [row.student.name, row.position, row.cohort]), [
+    [recent.name, 1, '1.º A'], [early.name, 2, '1.º A'], [otherClass.name, 1, '1.º B'],
+  ]);
+});
+test('Los pesos bimestrales inválidos bloquean la elegibilidad sin reemplazar notas', () => {
+  for (const weights of [
+    { first: .25, second: .25, third: .25 }, { first: 0, second: .5, third: .5 },
+    { first: -.25, second: .5, third: .75 }, { first: Number.NaN, second: .25, third: .5 },
+  ]) {
+    const settings = approved(), student = complete(settings); settings.bimesterWeights = weights;
+    assert.ok(validateSettings(settings).some(error => error.includes('Bimestres')));
+    assert.equal(calculateStudent(student, settings).eligible, false);
+  }
 });
 test('Cartilla: asistencia95, puntualidad90, disciplina85 produce B=89,50', () => {
   const result = calculateStudent(complete(), approved());
@@ -328,13 +389,15 @@ test('La excepción de Indaga conserva la ponderación y progresión calculadas 
   const science = student.academic.find(area => area.areaId === 'ciencia')!;
   science.grades = [['', '', ''], ['B', 'A', 'AD'], ['A', 'AD', 'AD']];
   const result = calculateStudent(student, settings);
-  assert.equal(result.areaAverages.ciencia, 10 / 3);
-  assert.ok(Math.abs(result.g! - 230 / 3) < 1e-12);
-  assert.ok(Math.abs(result.r! - 77.5) < 1e-12);
+  assert.equal(result.areaAverages.ciencia, 3.5);
+  assert.equal(result.g, 77.5);
+  assert.ok(Math.abs(result.r! - 78.75) < 1e-12);
   assert.equal(result.s1, 3);
   assert.equal(result.s2, 3.2);
-  assert.equal(result.p, 82.5);
-  assert.ok(Math.abs(result.a! - 469 / 6) < 1e-12);
+  assert.equal(result.progressionS1, 2.95);
+  assert.equal(result.progressionS2, 3);
+  assert.ok(Math.abs(result.p! - 80.625) < 1e-12);
+  assert.ok(Math.abs(result.a! - 78.625) < 1e-12);
 });
 test('Una Indaga parcial u otra competencia incompleta sigue pendiente y no se puede validar', () => {
   for (const grade of ['2', '3', '4', '5']) {
@@ -764,11 +827,13 @@ test('El promedio I–II se compara con III y los datos heredados IV no afectan 
   const result = calculateStudent(student, settings);
   assert.equal(result.s1, 2.5);
   assert.equal(result.s2, 4);
-  assert.equal(result.delta, 1.5);
-  assert.equal(result.g, 75);
-  assert.equal(result.r, 75);
+  assert.equal(result.progressionS1, 2.5);
+  assert.equal(result.progressionS2, 3);
+  assert.equal(result.delta, .5);
+  assert.equal(result.g, 81.25);
+  assert.equal(result.r, 81.25);
   assert.equal(result.p, 100);
-  assert.equal(result.a, 80);
+  assert.equal(result.a, 85);
   assert.equal(result.pa, 100);
   assert.equal(result.eligible, true);
   assert.ok(result.pending.every(message => !message.includes('IV bimestre')));

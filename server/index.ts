@@ -132,11 +132,11 @@ export function createApp(options: {dataDir?: string} = {}) {
     res.json({deleted:true,...counts});
   });
   app.put('/api/settings',(req,res)=>{
-    const ds=dataset(req),state=store.read(ds),settings=settingsSchema.parse({...req.body,dimensionWeights:req.body.dimensionWeights===undefined?state.settings.dimensionWeights:req.body.dimensionWeights});
+    const ds=dataset(req),state=store.read(ds),settings=settingsSchema.parse({...req.body,dimensionWeights:req.body.dimensionWeights===undefined?state.settings.dimensionWeights:req.body.dimensionWeights,bimesterWeights:req.body.bimesterWeights===undefined?state.settings.bimesterWeights:req.body.bimesterWeights,academicScoringPolicy:req.body.academicScoringPolicy===undefined?state.settings.academicScoringPolicy:req.body.academicScoringPolicy});
     settings.activityTypes=[ACADEMIC_CONTEST_LABEL];
     if(state.settings.closed&&(req.body.confirmReopen!==true||settings.closed))throw new HttpError(423,'Confirme explícitamente la reapertura de la evaluación antes de modificar los parámetros.');
     checkErrors(validateSettings(settings));
-    const criteriaChanged=!same({...state.settings,closed:false},{...settings,closed:false});
+    const criteriaChanged=!same({...state.settings,closed:false,criteriaApproved:false},{...settings,closed:false,criteriaApproved:false});
     if(settings.closed&&!settings.criteriaApproved)throw new HttpError(400,'Apruebe los criterios institucionales antes de cerrar la evaluación.');
     if(settings.closed&&criteriaChanged)throw new HttpError(400,'Guarde los cambios de parámetros y revise los expedientes antes de cerrar la evaluación.');
     const availableCategories=new Set(settings.disciplineTypes.map(type=>type.id));
@@ -153,6 +153,7 @@ export function createApp(options: {dataDir?: string} = {}) {
         s.updatedAt=stamp();
       }
     }
+    if(state.settings.criteriaApproved!==settings.criteriaApproved)for(const s of state.students){s.history.push(audit('Aprobación de criterios institucionales',state.settings.criteriaApproved,settings.criteriaApproved));s.updatedAt=stamp();}
     if(state.settings.closed!==settings.closed)for(const s of state.students)s.history.push(audit('Estado de la evaluación',state.settings.closed?'Cerrada':'Abierta',settings.closed?'Cerrada':'Abierta'));
     state.settings=settings;store.save(ds,state);res.json(settings);
   });

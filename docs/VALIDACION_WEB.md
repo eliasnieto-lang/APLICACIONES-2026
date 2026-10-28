@@ -1,5 +1,19 @@
 # Validación de la edición web
 
+## Bimestres 25/25/50 y progresión comparable
+
+La opción1 elegida por el usuario pondera **I25 %, II25 % y III50 %** en las medias de cada área, utilizadas una sola vez por G/R. La progresión compara C/B/A por celda, tomando AD como A únicamente para medir el cambio; el AD real conserva4 en el promedio y en el nivel actual del III. Los pesos generales50/25/25 y las demás reglas se conservan.
+
+Validación final: **197/197 pruebas** en `npm test`, incluidas **32 API**, además de TypeScript, `npm run build:web` y la aceptación completa `npm run test:web`. HTML probado: **10 345 744 bytes**, SHA-256 `e40d086d7903dfa7fb8f72f789740a983efa5c3f8dedbb856464240217b57378`.
+
+Un PDF genuino A–A–AD produjo **87,50 por área**, G/R87,50, cambio comparable0, P100 y **Académico90,00**. Las notas, aprobación, hash, original y respaldo permanecieron intactos; los resultados persistieron al recargar. Los casos mixtos verifican que el ajuste de comparación se aplica por celda y no sobre la media: una mezclaAD/B posterior a A/A dio cambio−0,50, P68,75 y Académico73,75. A–A–A permanece75. La captura matemática previa con medias2,50/2,75/3,00 ahora produce70,3125 antes del redondeo de presentación.
+
+El caso integral de referencia produce ahora G/R56,25, P93,75 y A63,75, con B95,50/C100 y **total80,75**; excluyendo C da74,3333. Las fichas y el Excel coinciden. Se verificaron los pesos de solo lectura en Parámetros, las columnas25/25/50, los indicadores comparables y los metadatos del Excel.
+
+La migración y los guardados antiguos preservan datos y campos nuevos, aplican la política una sola vez y no requieren reescaneo. El flujo real de desmarcar/guardar y aprobar/guardar los criterios conservó todas las revisiones completadas y el ranking80,75. Un cambio efectivo de ponderaciones sigue invalidando las revisiones correspondientes, sin borrar notas ni registros. Se inspeccionaron las capturas del área A–A–AD y de los pesos en Parámetros.
+
+El navegador completó **12 descargas**, sin errores de página/consola ni solicitudes HTTP durante las operaciones. Se conservaron todos los escenarios anteriores de OCR, áreas vacías/Indaga, ausencia de concursos, aulas A–E con datos históricos, permanencia, respaldos, eliminación y reinicio. Todas las pruebas usaron documentos ficticios y almacenamiento temporal.
+
 ## Secciones A–E y confirmación sin concursos
 
 Los desplegables actuales ofrecen **25 aulas: 1.º–5.º, secciones A, B, C, D y E**. Los registros históricos de otras secciones conservan identidad, aprobación, originales y acceso en Todas las aulas; no se borran ni se reasignan. El apartado de concursos incorpora una confirmación explícita **No participó en concursos**, que produce **PI=0** sin crear eventos ni exigir tipo, fecha o puesto. Permite deshacer y se retira al agregar un concurso.
