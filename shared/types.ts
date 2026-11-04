@@ -1,3 +1,4 @@
+import type { PresentationQuestion } from './questions';
 import type { PresentationDraw, PresentationRanking } from './jornada';
 import type { PaperPoll } from './paper-vote';
 export type Area = 'MAT' | 'COM';
@@ -76,26 +77,28 @@ export interface PresentationEvaluation extends Versioned {
   scores: PresentationScore[]; notes: string[]; generalObservation: string; physicalText: string;
   /** Missing metadata identifies the historical 0–2 live scale. Never infer from the numeric scores. */
   scaleMax?: PresentationScaleMax;
+  /** Rubric 2 adds the mandatory editorial-answer criterion; missing metadata preserves ten-criterion history. */
+  rubricVersion?: 2; responseScore?: PresentationScore; questionVersion?: number | null;
   materialViewed?: boolean;
   status: 'draft' | 'closed'; closedAt: string | null; updatedAt: string; rulesVersion: number;
 }
 export interface PresentationPublisherAssessment {
   publisherId: string; area: Area; block: Block; registered: number; closed: number; pending: number;
   drafts: number; score: number | null; i2: number | null; state: 'pending' | 'eligible' | 'ineligible';
-  pendingScaleUpdate?: number;
+  pendingScaleUpdate?: number; pendingQuestionUpdate?: number;
 }
 export interface PresentationCategoryAssessment {
   categoryId: string; area: Area; block: Block;
   state: 'pending' | 'ready' | 'tie' | 'less_than_three' | 'published';
   registered: number; closed: number; pending: number;
-  pendingScaleUpdate?: number;
+  pendingScaleUpdate?: number; pendingQuestionUpdate?: number;
   ranked: PresentationPublisherAssessment[]; finalists: string[]; tied: string[]; reasons: string[];
 }
 export interface PresentationShortlist extends Versioned {
   categoryId: string; area: Area; block: Block; publisherIds: string[];
   status: 'published' | 'superseded'; statement: string; folio: string;
   directorApproved: boolean; publishedAt: string; rulesVersion: number;
-  snapshot: { assessment: PresentationCategoryAssessment; publishers: Pick<Publisher, 'id' | 'name'>[]; threshold: number; scaleMax?: PresentationScaleMax };
+  snapshot: { assessment: PresentationCategoryAssessment; publishers: Pick<Publisher, 'id' | 'name'>[]; threshold: number; scaleMax?: PresentationScaleMax; rubricVersion?: 2 };
 }
 export interface Review extends Versioned { categoryId: string; offerIds: string[]; unitReference: string; reason: string }
 export interface Turn {
@@ -130,6 +133,7 @@ export interface AuditEntry { id: string; actor: string; action: string; referen
 export interface State {
   schemaVersion: number; version: number; settings: Settings;
   presentationDraw?: PresentationDraw; presentationRanking?: PresentationRanking; paperPolls?: PaperPoll[];
+  presentationQuestions?: PresentationQuestion[];
   publishers: Publisher[]; series: Series[]; offers: Offer[]; books: Book[];
   teachers: Teacher[]; assignments: Assignment[]; evaluations: Evaluation[];
   presentationEvaluations: PresentationEvaluation[]; presentationShortlists: PresentationShortlist[];

@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-04T17:20:01.213Z",
+  "fixture": "isolated server responses; no database changes",
+  "passed": 5,
+  "checks": [
+    "manual exposition cannot finish before its required question and answer are confirmed",
+    "a representative may ask from either area; saving only a draft keeps finalization blocked",
+    "an explicit observed answer unlocks finish without any minimum teacher score",
+    "a stale question save keeps local text and requires consulting the newer server record",
+    "finalization freezes the shared answer and teaching/secretary roles cannot edit the question"
+  ],
+  "pageErrors": []
+}

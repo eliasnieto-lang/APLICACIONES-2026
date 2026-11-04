@@ -18,6 +18,7 @@ export default function PresentationRanking({ snapshot, api, refresh, notify }: 
   const draw = state.presentationDraw;
   const ranking = state.presentationRanking;
   const drawFinished = presentationDrawFinished(state);
+  const missingQuestions = draw?.publishers.filter(publisher => !(state.presentationQuestions ?? []).some(question => question.publisherId === publisher.id && question.status === 'answered')).length ?? 0;
   const category = ranking?.categories.find(item => item.area === area && item.block === block);
   const rows = category ? presentationRankingRows(category, top === 'all' ? null : Number(top)) : [];
   const staleDraw = !!ranking && ranking.drawId !== draw?.id;
@@ -34,8 +35,8 @@ export default function PresentationRanking({ snapshot, api, refresh, notify }: 
   return <div className="stack presentation-ranking"><style>{styles}</style>
     <header className="row between"><div><span className="eyebrow">CIERRE DE PRESENTACIONES</span><h1>Ranking y Top de editoriales</h1><p className="muted">Compare los resultados por área y categoría al terminar las exposiciones.</p></div><Trophy size={38} aria-hidden="true" /></header>
     <section className="card stack"><div className="row between"><div><h2>Generar ranking de la jornada</h2><p>{draw ? `${draw.completedPublisherIds.length} de ${draw.publishers.length} presentaciones finalizadas.` : 'Realice primero el sorteo en Sala en vivo.'}</p></div><button type="button" className="primary" disabled={busy || !drawFinished} onClick={() => void generate()}><RefreshCw size={17} />{busy ? 'Generando…' : ranking ? 'Actualizar ranking / Top' : 'Generar ranking / Top'}</button></div>
-      {!drawFinished && <p className="notice">El botón se habilita cuando se finalizan todos los turnos del sorteo desde Sala en vivo.</p>}
-      <p className="muted">El ranking usa todas las fichas cerradas de la categoría en escala 0–4. Si faltan fichas, se identifica como provisional. No reemplaza la publicación formal de la terna.</p>
+      {!drawFinished && <p className="notice">{missingQuestions ? `Falta registrar la pregunta obligatoria y su respuesta en ${missingQuestions} editorial(es), desde Sala en vivo.` : 'El botón se habilita cuando se finalizan todos los turnos del sorteo desde Sala en vivo.'}</p>}
+      <p className="muted">El ranking orientativo usa todas las fichas cerradas de la categoría en once criterios de escala 0–4, incluida la respuesta obligatoria, y no exige puntaje mínimo. Clasifica tres editoriales para la votación familiar; los padres eligen entre ellas y pueden elegir una distinta del primer puesto. Si faltan fichas, el resultado es provisional.</p>
       {error && <div className="notice danger" role="alert">{error}</div>}
     </section>
     {ranking ? <>
@@ -50,9 +51,9 @@ export default function PresentationRanking({ snapshot, api, refresh, notify }: 
           <td data-label="Puesto"><strong>{position === null ? '—' : `${position}.`}</strong>{tied && <small>Empate</small>}</td><th scope="row" data-label="Editorial">{name(assessment.publisherId)}</th>
           <td data-label="Promedio /100"><strong className="ranking-score">{scoreText(assessment.score)}</strong></td>
           <td data-label="Fichas cerradas">{assessment.closed} / {assessment.registered}<small>{assessment.pending} pendientes</small></td>
-          <td data-label="Situación"><span className={`status ${assessment.pending > 0 || assessment.score === null ? 'pending' : ''}`}>{assessment.score === null ? 'Sin puntaje' : assessment.pending > 0 ? 'Provisional' : assessment.state === 'eligible' ? 'Alcanza el corte' : 'Bajo el corte'}</span></td>
+          <td data-label="Situación"><span className={`status ${assessment.pending > 0 || assessment.score === null ? 'pending' : ''}`}>{assessment.score === null ? 'Sin puntaje' : assessment.pending > 0 ? 'Provisional' : 'Valoración completa'}</span></td>
         </tr>)}</tbody></table></div>}
-        <p className="muted">Un cero registrado forma parte del promedio. Las fichas pendientes no se convierten en cero. El orden compara promedio e I2; las editoriales empatadas comparten puesto y se incluyen juntas en el límite del Top.</p>
+        <p className="muted">La posición docente no determina la elección familiar. Un cero registrado forma parte del promedio. Las fichas pendientes no se convierten en cero. El orden compara promedio e I2; las editoriales empatadas comparten puesto y se incluyen juntas en el límite del Top.</p>
       </section>
     </> : <section className="card empty-state">El ranking aparecerá aquí después de generarlo. Las valoraciones individuales se conservan en sus fichas.</section>}
   </div>;

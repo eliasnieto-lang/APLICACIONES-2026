@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-04T15:48:49.857Z",
+  "at": "2026-11-04T18:03:33.168Z",
   "backend": "Node/Express + PostgreSQL + PostgREST reales; QR y OMR reales en Chromium",
   "passed": 8,
   "checks": [

@@ -75,11 +75,11 @@ begin
   if exists(select 1 from jsonb_array_elements(coalesce(s->'paperPolls','[]')) q where q->>'status'='open' and q->>'block'=p_payload->>'block' and exists(select 1 from jsonb_array_elements_text(p_payload->'areas') a where q->'areas' ? a)) then perform public.textos_fail('Ya existe una votación abierta para esa categoría y área.','PT409'); end if;
   for area in select jsonb_array_elements_text(p_payload->'areas') loop
    category:=public.textos_presentation_category(s,area,p_payload->>'block');
-   if category is null or coalesce((category->>'registered')::int,0)<1 or coalesce((category->>'pending')::int,1)>0 or jsonb_typeof(category->'ranked') is distinct from 'array' or jsonb_array_length(category->'ranked')<2 then perform public.textos_fail('Se requieren al menos dos editoriales y todas las fichas cerradas en '||area||'.','PT423'); end if;
+   if category is null or coalesce((category->>'registered')::int,0)<1 or coalesce((category->>'pending')::int,1)>0 or jsonb_typeof(category->'ranked') is distinct from 'array' or jsonb_array_length(category->'ranked')<3 then perform public.textos_fail('Se requieren tres editoriales y todas las fichas cerradas en '||area||'.','PT423'); end if;
    if exists(select 1 from jsonb_array_elements(category->'ranked') q where q->'score' is null or q->'score'='null') then perform public.textos_fail('El ranking del área contiene resultados pendientes.','PT423'); end if;
    if jsonb_array_length(category->'ranked')>3 and category#>'{ranked,2,score}'=category#>'{ranked,3,score}' and category#>'{ranked,2,i2}'=category#>'{ranked,3,i2}' then perform public.textos_fail('Hay un empate en el corte del Top 3. Resuélvalo antes de preparar las fichas.','PT423'); end if;
    select coalesce(jsonb_agg(jsonb_build_object('id',q->>'publisherId','name',p->>'name') order by ord),'[]') into ranking_options from jsonb_array_elements(category->'ranked') with ordinality r(q,ord) join jsonb_array_elements(s->'publishers') p on p->>'id'=q->>'publisherId' where ord<=3;
-   if jsonb_array_length(ranking_options)<2 then perform public.textos_fail('Las editoriales del ranking ya no están disponibles. Actualice el ranking.','PT409'); end if;
+   if jsonb_array_length(ranking_options)<>3 then perform public.textos_fail('Las editoriales del ranking ya no están disponibles. Actualice el ranking.','PT409'); end if;
    options:=options||jsonb_build_object(area,ranking_options);
    counts:=counts||jsonb_build_object(area,jsonb_build_object('options',(select jsonb_object_agg(o->>'id',0) from jsonb_array_elements(ranking_options) o),'blank',0,'invalid',0));
   end loop;

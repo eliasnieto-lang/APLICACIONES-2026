@@ -18,6 +18,7 @@ state.publishers = [
   { id: 'two', version: 1, name: 'Editorial Dos', samplesReceived: false, sampleNote: '' },
   { id: 'three', version: 1, name: 'Editorial Tres', samplesReceived: false, sampleNote: '' },
 ];
+state.presentationQuestions = state.publishers.map(publisher => ({ id: `q-${publisher.id}`, publisherId: publisher.id, version: 1, representativeName: 'Portavoz de prueba', area: 'MAT', question: 'Pregunta del ensayo', answer: 'Respuesta del ensayo', status: 'answered', askedAt: at, answeredAt: at, updatedAt: at }));
 let now = stamp; const calls = []; let failDraw = false;
 async function page({ publicView = false, mobile = false } = {}) {
   const context = await browser.newContext({ viewport: mobile ? { width: 390, height: 844 } : { width: 1360, height: 1000 } }); contexts.push(context);
@@ -54,7 +55,7 @@ async function page({ publicView = false, mobile = false } = {}) {
     return route.fulfill({ json: state.turn });
   });
   const page = await context.newPage(); page.on('pageerror', error => errors.push(error.message)); page.setDefaultTimeout(10000);
-  await page.clock.install({ time: stamp }); await page.goto(base + (publicView ? '/?public=1' : '/')); await page.getByRole('heading', { name: publicView ? state.settings.title : 'Sala en vivo', exact: true }).waitFor();
+  await page.clock.install({ time: stamp }); await page.clock.pauseAt(stamp + 1000); await page.goto(base + (publicView ? '/?public=1' : '/')); await page.getByRole('heading', { name: publicView ? state.settings.title : 'Sala en vivo', exact: true }).waitFor();
   return page;
 }
 try {

@@ -1,7 +1,8 @@
+import { getMineduIndicatorReference, MINEDU_SOURCE } from '../shared/minedu-reference';
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
 import type { Area, Block, Book, Shortlist, State } from '../shared/types';
 import { AREAS, BLOCKS, GRADES, INDICATORS, assessBook, basePrice, practiceSummary, scoreEvaluation, workloadSummary } from '../shared/domain';
-import { PRESENTATION_INDICATORS, presentationEvaluationScaleMax, presentationScaleLabel, presentationScore, presentationSummary } from '../shared/presentation';
+import { PRESENTATION_INDICATORS, presentationEvaluationScaleMax, presentationMaximum, presentationUsesCurrentRubric, presentationScaleLabel, presentationScore, presentationSummary } from '../shared/presentation';
 import { LEGACY_PRESENTATION_INDICATORS } from '../shared/presentation-legacy';
 
 export const A4 = { width: 595.28, height: 841.89 };
@@ -116,8 +117,10 @@ export async function buildPresentationTeacherPdf(state: State, scope: Presentat
     || (scope.teacherId && evaluation.teacherId !== scope.teacherId))) throw new Error('La ficha seleccionada no corresponde al docente, editorial, área y categoría.');
   const teacher = state.teachers.find(item => item.id === (evaluation?.teacherId ?? scope.teacherId));
   const scaleMax = evaluation ? presentationEvaluationScaleMax(evaluation) : 4;
+  const currentRubric = !evaluation || presentationUsesCurrentRubric(evaluation);
+  const maximum = evaluation ? presentationMaximum(evaluation) : 44;
   const score = evaluation ? presentationScore(evaluation) : null;
-  const rawTotal = evaluation && score !== null ? evaluation.scores.reduce<number>((sum, value) => sum + value!, 0) : null;
+  const rawTotal = evaluation && score !== null ? evaluation.scores.reduce<number>((sum, value) => sum + value!, 0) + (currentRubric ? evaluation.responseScore! : 0) : null;
   const report = await new PrintedReport(state, 'Ficha individual de exposición editorial', 'DOCUMENTO INTERNO - observaciones de un solo docente', options).initialize();
   report.field('Editorial', publisher.name);
   report.field('Área', AREAS.find(item => item.id === scope.area)?.label ?? scope.area);
@@ -126,14 +129,16 @@ export async function buildPresentationTeacherPdf(state: State, scope: Presentat
   report.field('Ejemplar físico observado (opcional)', evaluation?.physicalText || 'Sin identificación adicional registrada');
   report.field('Estado / cierre', evaluation ? `${evaluation.status === 'closed' ? 'Cerrada' : 'Borrador'} / ${date(evaluation.closedAt)}` : 'Ficha en blanco - no emitida');
   report.field('Versión de ficha / reglas', `${evaluation?.version ?? 0} / ${evaluation?.rulesVersion ?? state.settings.rules.version}`);
-  report.field('Escala de la ficha', scaleMax === 4 ? 'Vigente: 0 a 4; máximo 40 puntos' : 'HISTÓRICA: 0 a 2; máximo 20 puntos; resultado original conservado');
-  report.write(scaleMax === 4
+  report.field('Escala de la ficha', currentRubric ? 'Vigente: 0 a 4; once criterios; máximo 44 puntos' : scaleMax === 4 ? 'HISTÓRICA: diez criterios de 0 a 4; máximo 40 puntos; resultado original conservado' : 'HISTÓRICA: 0 a 2; máximo 20 puntos; resultado original conservado');
+  if (currentRubric) report.write('Ficha institucional adaptada para observar la exposición y una muestra del ejemplar físico. La guía MINEDU adjunta usa niveles 0 a 2 y ponderaciones propias; este registro no equivale a su ficha integral por texto, edición y grado. Las verificaciones documentales se completan por separado.', { size: 9 });
+  report.write(currentRubric
     ? 'Valore lo observado durante la exposición y al revisar el ejemplar físico. Escala: 0 = Sin valoración; 1 = En inicio; 2 = En proceso; 3 = Logrado; 4 = Destacado. Elegir 0 es una respuesta y aporta cero puntos; pendiente significa sin responder. Las observaciones breves son opcionales.'
-    : 'ARCHIVO HISTÓRICO: esta ficha conserva sus valores de la escala 0 a 2. No se convierte a la escala vigente ni participa en sus nuevos promedios. Para actualizarla, el docente debe volver a valorar expresamente los diez indicadores.');
+    : scaleMax === 4 ? 'ARCHIVO HISTÓRICO: conserva sus diez valoraciones de 0 a 4 y su nota original sobre cuarenta puntos. Complete explícitamente la ficha con la pregunta obligatoria para usar la rúbrica vigente.' : 'ARCHIVO HISTÓRICO: esta ficha conserva sus valores de la escala 0 a 2. No se convierte a la escala vigente ni participa en sus nuevos promedios. Para actualizarla, el docente debe volver a valorar expresamente los diez indicadores.');
   if (scaleMax === 2) report.heading('Rúbrica histórica 0–2');
   for (const [index, currentIndicator] of PRESENTATION_INDICATORS.entries()) {
     const indicator = scaleMax === 2 ? LEGACY_PRESENTATION_INDICATORS[index] : currentIndicator;
     report.heading(`${indicator.id}. ${indicator.label}`);
+    if (currentRubric) { const reference = getMineduIndicatorReference(indicator.id, scope.area, scope.block); if (reference) report.write(`Guía de referencia: indicadores ${reference.guideIds.join(', ')}; páginas ${reference.pages.join(', ')}.`, { size: 8 }); }
     if (scaleMax === 2) {
       const legacy = LEGACY_PRESENTATION_INDICATORS[index];
       const signals = legacy.variants?.[scope.area] ?? legacy;
@@ -146,10 +151,23 @@ export async function buildPresentationTeacherPdf(state: State, scope: Presentat
       : scaleMax === 4 ? `${value} - ${presentationScaleLabel(value)}` : `${value} (escala histórica)`);
     report.field('Observación propia (opcional)', evaluation?.notes[index] || '________________________________________');
   }
-  report.heading('Resultado individual');
-  report.field('Suma / máximo', rawTotal === null ? `Pendiente / ${10 * scaleMax}` : `${rawTotal} / ${10 * scaleMax}`);
-  report.field('Puntaje /100', score === null ? 'Pendiente - diez respuestas necesarias' : `${number(score)} (${scaleMax === 4 ? '2.5' : '5'} x suma de diez indicadores)`);
+  if (currentRubric) {
+    report.heading('I11. Respuesta a la pregunta obligatoria');
+    report.write('Valore la claridad, pertinencia y sustento de la respuesta escuchada. La pregunta puede corresponder a cualquiera de las dos áreas.');
+    const question = state.presentationQuestions?.find(item => item.publisherId === scope.publisherId && item.status === 'answered');
+    if (question && (!evaluation || question.version === evaluation.questionVersion)) {
+      report.field('Pregunta formulada', question.question); report.field('Respuesta registrada', question.answer); report.field('Versión de pregunta', question.version);
+    } else if (evaluation?.questionVersion) report.field('Versión de pregunta valorada', `${evaluation.questionVersion}; el texto de esa versión debe consultarse en su historial`);
+    else report.write('Pregunta y respuesta: pendientes de confirmar en Sala en vivo.');
+    report.field('Puntaje 0 / 1 / 2 / 3 / 4', evaluation?.responseScore === null || evaluation?.responseScore === undefined
+      ? 'Pendiente [  ] 0   [  ] 1   [  ] 2   [  ] 3   [  ] 4' : `${evaluation.responseScore} - ${presentationScaleLabel(evaluation.responseScore)}`);
+  }
+  report.heading('Resultado individual orientativo');
+  report.field('Suma / máximo', rawTotal === null ? `Pendiente / ${maximum}` : `${rawTotal} / ${maximum}`);
+  report.field('Puntaje /100', score === null ? `Pendiente - ${currentRubric ? 'once' : 'diez'} respuestas necesarias` : `${number(score)} (${currentRubric ? 'suma de once criterios x 100 / 44' : `${scaleMax === 4 ? '2.5' : '5'} x suma de diez indicadores`})`);
+  if (currentRubric) report.write('Valoración docente orientativa, sin puntaje mínimo. Clasifica tres editoriales para la votación familiar; los padres eligen entre las tres y el primer puesto docente no determina su elección.');
   report.field('Observación general propia (opcional)', evaluation?.generalObservation || '________________________________________');
+  if (currentRubric) report.write(`Fuente de referencia: ${MINEDU_SOURCE.title}, archivo adjunto con metadatos de ${MINEDU_SOURCE.edition}. La respuesta obligatoria es un complemento institucional. La valoración docente orienta y las familias realizan la elección final.`, { size: 8 });
   report.signatures(['Docente evaluador', 'Dirección / Subdirección']);
   return report.finish();
 }
@@ -165,9 +183,11 @@ export async function buildPresentationShortlistPdf(state: State, shortlistId: s
   report.field('Validación de Dirección', shortlist.directorApproved ? 'Registrada; recoger firma formal' : 'Pendiente');
   const assessment = shortlist.snapshot.assessment;
   const scaleMax = shortlist.snapshot.scaleMax ?? 2;
-  report.field('Escala de la versión publicada', scaleMax === 4 ? '0 a 4; máximo individual 40 puntos' : 'HISTÓRICA: 0 a 2; resultados originales conservados');
+  const currentRubric = scaleMax === 4 && shortlist.snapshot.rubricVersion === 2;
+  report.field('Escala de la versión publicada', currentRubric ? '0 a 4; once criterios; máximo individual 44 puntos' : scaleMax === 4 ? 'HISTÓRICA: diez criterios de 0 a 4; máximo individual 40 puntos; resultados originales conservados' : 'HISTÓRICA: 0 a 2; resultados originales conservados');
   report.field('Docentes registrados / fichas cerradas / pendientes al publicar', `${assessment.registered} / ${assessment.closed} / ${assessment.pending}`);
-  report.field('Umbral /100 utilizado', shortlist.snapshot.threshold);
+  if (currentRubric) report.write('Valoración docente orientativa, sin puntaje mínimo. Tres editoriales clasifican a la votación familiar. El primer puesto docente no determina la elección: los padres eligen entre las tres.');
+  else report.field('Umbral /100 de esta versión histórica', shortlist.snapshot.threshold);
   shortlist.publisherIds.forEach((publisherId, index) => {
     const publisher = shortlist.snapshot.publishers.find(item => item.id === publisherId);
     const result = assessment.ranked.find(item => item.publisherId === publisherId);
@@ -303,17 +323,18 @@ export async function buildPrivateWorkbook(state: State): Promise<Uint8Array> {
     const result = workbook.addWorksheet(name); result.addRow(headers); rows.forEach(row => result.addRow(row)); result.getRow(1).font = { bold: true };
     result.columns.forEach(column => { column.width = 24; }); result.views = [{ state: 'frozen', ySplit: 1 }];
   };
-  sheet('LEEME PRIVADO', ['Documento', 'Alcance'], [['EXPORTACIÓN INTERNA', 'Contiene docentes y observaciones privadas. Conservar con acceso restringido.'], ['Flujo vigente', 'Exposiciones PRIVADAS conserva la escala de cada ficha: vigente 0-4, máximo 40, nota = suma x 2.5. Las fichas históricas 0-2 conservan su máximo 20 y su nota original; no se mezclan con los promedios vigentes. Un 0 explícito aporta cero; solo null permanece pendiente. Docentes registrados conserva sus perfiles.'], ['Archivos históricos', 'Titulos y precios, Evaluaciones PRIVADAS y Ternas versiones conservan el procedimiento histórico por libro y grado; no son las notas vigentes de exposición.'], ['Privacidad del voto', 'El padrón no contiene opciones marcadas ni vínculo con el sentido del voto.'], ['Reglas vigentes', JSON.stringify(state.settings.rules)], ['Versión de estado', state.version]]);
+  sheet('LEEME PRIVADO', ['Documento', 'Alcance'], [['EXPORTACIÓN INTERNA', 'Contiene docentes y observaciones privadas. Conservar con acceso restringido.'], ['Flujo vigente', 'Exposiciones PRIVADAS conserva la rúbrica de cada ficha: vigente 0-4, once criterios, máximo 44, nota = suma x 100 / 44. Las fichas históricas de diez criterios 0-4 conservan su máximo 40 y las de 0-2, su máximo 20 y sus notas originales; no se mezclan con los promedios vigentes. Un 0 explícito aporta cero; solo null permanece pendiente. Docentes registrados conserva sus perfiles.'], ['Archivos históricos', 'Titulos y precios, Evaluaciones PRIVADAS y Ternas versiones conservan el procedimiento histórico por libro y grado; no son las notas vigentes de exposición.'], ['Privacidad del voto', 'El padrón no contiene opciones marcadas ni vínculo con el sentido del voto.'], ['Reglas vigentes', JSON.stringify(state.settings.rules)], ['Versión de estado', state.version]]);
   sheet('Docentes registrados', ['Docente', 'Nombres', 'Apellidos', 'Área', 'Categorías', 'Registro directo', 'Versión'], state.teachers.map(teacher => [teacher.name, teacher.firstNames ?? '', teacher.lastNames ?? '', teacher.area ?? '', (teacher.categories ?? []).join(', '), teacher.selfRegistered ? 'Sí' : 'No / histórico', teacher.version]));
-  sheet('Exposiciones PRIVADAS', ['Docente', 'Editorial', 'Área', 'Categoría', 'Estado', 'Escala máxima', 'Suma', 'Máximo', 'Uso de la escala', 'I1', 'I2', 'I3', 'I4', 'I5', 'I6', 'I7', 'I8', 'I9', 'I10', 'Nota /100', 'Observaciones propias', 'Observación general', 'Ejemplar físico', 'Cierre', 'Reglas', 'Versión ficha'], (state.presentationEvaluations ?? []).map(evaluation => {
+  sheet('Exposiciones PRIVADAS', ['Docente', 'Editorial', 'Área', 'Categoría', 'Estado', 'Escala máxima', 'Suma', 'Máximo', 'Uso de la escala', 'I1', 'I2', 'I3', 'I4', 'I5', 'I6', 'I7', 'I8', 'I9', 'I10', 'I11 respuesta', 'Versión de pregunta', 'Versión de rúbrica', 'Nota /100', 'Observaciones propias', 'Observación general', 'Ejemplar físico', 'Cierre', 'Reglas', 'Versión ficha'], (state.presentationEvaluations ?? []).map(evaluation => {
     const maximum = presentationEvaluationScaleMax(evaluation); const score = presentationScore(evaluation);
-    const rawTotal = score === null ? null : evaluation.scores.reduce<number>((sum, value) => sum + value!, 0);
+    const currentRubric = presentationUsesCurrentRubric(evaluation);
+    const rawTotal = score === null ? null : evaluation.scores.reduce<number>((sum, value) => sum + value!, 0) + (currentRubric ? evaluation.responseScore! : 0);
     return [state.teachers.find(teacher => teacher.id === evaluation.teacherId)?.name, state.publishers.find(publisher => publisher.id === evaluation.publisherId)?.name, evaluation.area, evaluation.block, evaluation.status,
-      maximum, rawTotal, 10 * maximum, maximum === 4 ? 'Vigente 0-4' : 'Histórica 0-2: pendiente actualizar escala', ...evaluation.scores, score,
+      maximum, rawTotal, presentationMaximum(evaluation), currentRubric ? 'Vigente 0-4, once criterios' : maximum === 4 ? 'Histórica 0-4, diez criterios: pendiente completar pregunta' : 'Histórica 0-2: pendiente actualizar escala', ...evaluation.scores, currentRubric ? evaluation.responseScore : null, currentRubric ? evaluation.questionVersion : null, evaluation.rubricVersion ?? 1, score,
       evaluation.notes.map((note, index) => note ? `I${index + 1}: ${note}` : '').filter(Boolean).join('\n'), evaluation.generalObservation, evaluation.physicalText, evaluation.closedAt, evaluation.rulesVersion, evaluation.version];
   }));
-  sheet('Resumen exposiciones', ['Área', 'Categoría', 'Editorial', 'Registrados', 'Cerrados', 'Pendientes', 'Promedio /100', 'I2 promedio', 'Estado', 'Escala máxima', 'Máximo individual', 'Pendientes de actualizar escala'], presentationSummary(state).flatMap(category => category.ranked.map(item => [category.area, category.block, state.publishers.find(publisher => publisher.id === item.publisherId)?.name, item.registered, item.closed, item.pending, item.score, item.i2, item.state, 4, 40, item.pendingScaleUpdate ?? 0])));
-  sheet('Ternas de exposicion', ['Área', 'Categoría', 'Versión', 'Estado', 'Editoriales', 'Folio', 'Apreciación', 'Publicación', 'Reglas', 'Escala máxima', 'Máximo individual'], (state.presentationShortlists ?? []).map(shortlist => [shortlist.area, shortlist.block, shortlist.version, shortlist.status, shortlist.publisherIds.map(id => shortlist.snapshot.publishers.find(publisher => publisher.id === id)?.name ?? id).join('; '), shortlist.folio, shortlist.statement, shortlist.publishedAt, shortlist.rulesVersion, shortlist.snapshot.scaleMax ?? 2, 10 * (shortlist.snapshot.scaleMax ?? 2)]));
+  sheet('Resumen exposiciones', ['Área', 'Categoría', 'Editorial', 'Registrados', 'Cerrados', 'Pendientes', 'Promedio /100', 'I2 promedio', 'Estado', 'Escala máxima', 'Máximo individual', 'Pendientes de actualizar escala', 'Pendientes de completar pregunta'], presentationSummary(state).flatMap(category => category.ranked.map(item => [category.area, category.block, state.publishers.find(publisher => publisher.id === item.publisherId)?.name, item.registered, item.closed, item.pending, item.score, item.i2, item.state, 4, 44, item.pendingScaleUpdate ?? 0, item.pendingQuestionUpdate ?? 0])));
+  sheet('Ternas de exposicion', ['Área', 'Categoría', 'Versión', 'Estado', 'Editoriales', 'Folio', 'Apreciación', 'Publicación', 'Reglas', 'Escala máxima', 'Máximo individual'], (state.presentationShortlists ?? []).map(shortlist => [shortlist.area, shortlist.block, shortlist.version, shortlist.status, shortlist.publisherIds.map(id => shortlist.snapshot.publishers.find(publisher => publisher.id === id)?.name ?? id).join('; '), shortlist.folio, shortlist.statement, shortlist.publishedAt, shortlist.rulesVersion, shortlist.snapshot.scaleMax ?? 2, shortlist.snapshot.rubricVersion === 2 && shortlist.snapshot.scaleMax === 4 ? 44 : 10 * (shortlist.snapshot.scaleMax ?? 2)]));
   sheet('Titulos y precios', ['Código', 'Título', 'Edición', 'Grado 2027', 'Editorial / serie', 'Base S/', 'Fuente precio', 'Vigencia', 'Verificación', 'Versión'], state.books.map(book => [book.code, book.title, book.edition, gradeName(book.gradeId), offerName(state, book.offerId), basePrice(book), book.priceSource, book.priceValidity, book.priceStatus, book.version]));
   sheet('Evaluaciones PRIVADAS', ['Docente', 'Título', 'Grado', 'Estado', 'I1', 'I2', 'I3', 'I4', 'I5', 'I6', 'I7', 'I8', 'I9', 'I10', 'Nota /100', 'Evidencias', 'Observaciones', 'Objeción', 'Reglas', 'Versión expediente', 'Versión ficha'], state.evaluations.map(evaluation => [state.teachers.find(teacher => teacher.id === evaluation.teacherId)?.name, state.books.find(book => book.id === evaluation.bookId)?.title, state.books.find(book => book.id === evaluation.bookId)?.gradeId, evaluation.status, ...evaluation.scores, scoreEvaluation(evaluation), evaluation.evidence.join('\n'), evaluation.notes.join('\n'), evaluation.objectionDetail, evaluation.rulesVersion, evaluation.bookVersion, evaluation.version]));
   sheet('Padron PRIVADO', ['Sección origen', 'Grado 2026', 'Grado 2027', 'Representante', 'Titular / suplente', 'Acreditación', 'Evidencia'], state.sections.map(section => [section.label, section.sourceGrade, gradeName(section.gradeId), section.representative, section.replacement ? 'Suplente' : 'Titular', section.accredited ? 'Acreditado' : 'Pendiente', section.accreditationEvidence]));

@@ -1,5 +1,5 @@
-Selección de textos escolares 2027 — 90 grupos SQL/HTTP aprobados en bases locales descartables
-4 de noviembre de 2026
+Selección de textos escolares2027 —124grupos SQL/HTTP aprobados en bases locales descartables
+4noviembre2026
 
 Históricos20
 ✓ 01 RPC requires individual access and tables/helpers reject anonymous reads
@@ -41,31 +41,35 @@ Acceso13
 ✓ 13 reaplicar migración conserva fichas históricas y de exposición, accesos, historial, hash y límite
 13 pruebas de acceso SQL/HTTP aprobadas.
 
-Exposición21
+Exposición25
 ✓ 1 cinco docentes en un bloque sin asignaciones ni libros precargados
 ✓ 2 la ficha empieza pendiente y el primer guardado fija reglas sin datos de expediente
 ✓ 3 autoría y perfil se verifican en servidor; no se acepta una ficha de colega
 ✓ 4 la versión antigua de la aplicación debe actualizar la escala antes de guardar o cerrar
 ✓ 5 CAS impide sobrescribir y puntajes fraccionarios o fuera de rango se rechazan
-✓ 6 todas las fichas cierran con diez enteros; no exige OBNATE, precio, carga ni notas
-✓ 7 el promedio incluye a los cinco docentes y los conteos no tienen cupo de dos
-✓ 8 cada docente solo ve sus tres fichas y la proyección pública todavía no muestra notas
-✓ 9 publicar requiere retiro de editoriales documentado, sin añadir requisitos de expediente
-✓ 10 una o dos editoriales aptas no se convierten en una terna formal
-✓ 11 la publicación formal exige tres elegibles y publica agregados sin fichas individuales
-✓ 12 campos personalizados en un respaldo no atraviesan la proyección pública
-✓ 13 reabrir requiere coordinación y motivo, conserva cierre y retira la publicación afectada
-✓ 14 respaldo y restauración conservan fichas nuevas e historial sin recrear asignaciones
-✓ 15 el servidor rechaza respaldos con fichas duplicadas o categorías docentes vacías
-✓ 16 restaurar una terna publicada exige aprobación y metadatos formales válidos
-✓ 17 una inscripción posterior exige nuevas fichas y conserva la terna anterior en historial
-✓ 18 las fichas históricas 0–2 se conservan con su porcentaje y no se mezclan con la escala 0–4
-✓ 19 solo el autor reinicia explícitamente la rúbrica histórica con CAS y sin convertir sus puntajes
-✓ 20 el cero explícito suma cero y cuenta en el promedio; null sigue pendiente
-✓ 21 la reapertura conserva la escala histórica implícita y requiere reinicio propio para valorar de nuevo
-21 pruebas de presentación SQL/HTTP aprobadas.
+✓ 6 los diez criterios se guardan antes de la pregunta, pero el undécimo exige respuesta vigente
+✓ 7 cada editorial responde una pregunta de cualquier área antes de recibir su valoración I11
+✓ 8 todas las fichas cierran con once valoraciones; no exige OBNATE, precio, carga ni notas
+✓ 9 el promedio incluye a los cinco docentes y los conteos no tienen cupo de dos
+✓ 10 cada docente solo ve sus tres fichas y la proyección pública todavía no muestra notas
+✓ 11 publicar requiere retiro de editoriales documentado, sin añadir requisitos de expediente
+✓ 12 el umbral guardado no bloquea las tres editoriales clasificadas para votación familiar
+✓ 13 la clasificación publica tres editoriales orientativas sin decidir la elección de los padres
+✓ 14 campos personalizados en un respaldo no atraviesan la proyección pública
+✓ 15 reabrir requiere coordinación y motivo, conserva cierre y retira la publicación afectada
+✓ 16 respaldo y restauración conservan fichas nuevas e historial sin recrear asignaciones
+✓ 17 el servidor rechaza respaldos con fichas duplicadas o categorías docentes vacías
+✓ 18 restaurar una terna publicada exige aprobación y metadatos formales válidos
+✓ 19 una inscripción posterior exige nuevas fichas y conserva la terna anterior en historial
+✓ 20 las fichas históricas 0–2 se conservan con su porcentaje y no se mezclan con la escala 0–4
+✓ 21 solo el autor reinicia explícitamente la rúbrica histórica con CAS y sin convertir sus puntajes
+✓ 22 el cero explícito suma cero y cuenta en el promedio; null sigue pendiente
+✓ 23 la reapertura conserva la escala histórica implícita y requiere reinicio propio para valorar de nuevo
+✓ 24 la respuesta I11 acepta cero y cuatro, pero rechaza valores inválidos y versiones de otra pregunta
+✓ 25 una ficha anterior de diez criterios mantiene su porcentaje hasta ampliarla explícitamente, sin borrar sus diez valoraciones
+25 pruebas de presentación SQL/HTTP aprobadas.
 
-Actualizaciones9
+Actualizaciones11
 ✓ 1 002 crea cinco docentes y quince fichas cerradas con la escala anterior 0–2
 ✓ 2 la instalación previa conserva también una ficha histórica por libro y sus referencias
 ✓ 3 003 marca la escala histórica sin convertir puntajes ni modificar libros, docentes o credenciales
@@ -75,7 +79,9 @@ Actualizaciones9
 ✓ 7 restaurar una copia 002 preserva vectores previos y retira su publicación histórica sin reinterpretarla
 ✓ 8 004 incorpora sorteo y papel sin alterar ningún registro, credencial ni historial de 003
 ✓ 9 repetir 004 conserva el orden ya sorteado y no añade versiones ni historial
-9 pruebas de migración 002→003→004 SQL/HTTP aprobadas.
+✓ 10 005 añade borrado y rúbrica adaptada sin eliminar datos ni alterar puntajes, códigos o historial al instalarse
+✓ 11 repetir 005 y previsualizar el borrado no modifica la jornada ni ejecuta una eliminación
+11 pruebas de migración 002→003→004→005 SQL/HTTP aprobadas.
 
 Jornada12
 ✓ 1 no se sortea sin editoriales ni se calcula ranking antes de las exposiciones
@@ -107,6 +113,40 @@ Papel15
 ✓ 12 proyecciones y auditoría no exponen códigos, fotos ni elecciones individuales
 ✓ 13 empate y cero votos válidos nunca inventan un ganador
 ✓ 14 no se crea una votación si el ranking se volvió provisional u obsoleto
-✓ 15 dos editoriales reales bastan sin inventar una tercera alternativa
+✓ 15 dos editoriales no habilitan una votación que requiere tres clasificadas
 PASS 15/15 grupos SQL/HTTP de votación A5 en papel
+
+Preguntas11
+✓ 1 solo Subdirección registra la pregunta y se validan editorial y tipos
+✓ 2 una pregunta puede prepararse como borrador pero no habilita finalizar
+✓ 3 la respuesta exige nombre, pregunta y resumen pero puede ser de cualquier área
+✓ 4 las correcciones previas al cierre exigen CAS y motivo y conservan su historial
+✓ 5 finalizar no espera las notas pero conserva la respuesta que los docentes valorarán
+✓ 6 dos pantallas guardan una sola versión nueva y no sobrescriben la pregunta
+✓ 7 cada editorial sorteada requiere su propia pregunta y respuesta antes de avanzar
+✓ 8 las preguntas respondidas se comparten sin publicar el nombre del representante ni campos privados
+✓ 9 los respaldos rechazan preguntas huérfanas, duplicadas o confirmadas sin respuesta
+✓ 10 reaplicar el esquema no borra preguntas, respuestas, cierres ni historial
+✓ 11 recrear una pregunta borrada nunca reutiliza su versión ni acepta la nota de una respuesta anterior
+11 pruebas SQL/HTTP de pregunta obligatoria aprobadas.
+
+Eliminación17
+✓ 1 solo Subdirección puede previsualizar o borrar; docentes no amplían sus permisos
+✓ 2 la vista previa no cambia datos, versiones, historial, accesos ni códigos
+✓ 3 CAS y confirmación impiden borrar desde una previsualización antigua o incompleta
+✓ 4 borrar un docente quita sus fichas, revoca su acceso y elimina resultados dependientes
+✓ 5 borrar una ficha cerrada no borra al docente y una pestaña antigua no la recrea
+✓ 6 borrar una pregunta reabre solo I11 conservando sus otros diez criterios
+✓ 7 borrar una editorial elimina preguntas/fichas propias y mantiene a los demás docentes
+✓ 8 borrar solo una votación elimina sus códigos y no altera fichas ni el ranking
+✓ 9 reiniciar el sorteo conserva fichas y ranking puede eliminarse por separado
+✓ 10 serie y oferta eliminan libros, revisiones, asignaciones adicionales y toda la segunda vuelta
+✓ 11 borrar un libro no borra su editorial ni docentes y retira los resultados que contenían su copia
+✓ 12 una sección elimina sus entregas y rondas; una incidencia se elimina por separado
+✓ 13 limpiar el archivo histórico conserva catálogo y disponibilidad de la exposición vigente
+✓ 14 borrar la última serie retira votaciones de categorías que pasan a tener una nueva editorial disponible
+✓ 15 vaciar todos los datos conserva configuración y acceso de Subdirección, sin copias ocultas
+✓ 16 la eliminación funciona en Jornada real del servidor aislado y no toca demostración
+✓ 17 reaplicar el esquema instala funciones sin ejecutar eliminaciones ni cambiar datos
+PASS 17/17 grupos SQL/HTTP de eliminación administrativa
 

@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-04T15:40:55.608Z",
+  "at": "2026-11-04T18:05:14.151Z",
   "backend": "isolated UI API and scanner fixture; real PDF/scanner tested separately",
   "passed": 7,
   "checks": [

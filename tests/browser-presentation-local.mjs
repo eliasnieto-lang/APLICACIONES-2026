@@ -36,6 +36,8 @@ try{
   await director.getByLabel('Nombre de la editorial',{exact:true}).fill('Editorial del ensayo de exposición');
   await director.getByRole('button',{name:'Guardar editorial',exact:true}).click();await director.getByText('Editorial guardada. Sus fichas estarán disponibles para los docentes inscritos.',{exact:true}).waitFor();
   const state=(await rpc('snapshot',{},directorCode)).state;publisherId=state.publishers[0].id;assert.equal(state.books.length,0);assert.equal(state.assignments.length,0);
+  await rpc('turn_control',{command:'start',publisherId,expectedTurn:state.turn},directorCode);
+  const question=await rpc('presentation_question_save',{publisherId,expectedVersion:0,representativeName:'Representante del ensayo',area:'MAT',question:'¿Cómo apoya la propuesta los diferentes ritmos de aprendizaje?',answer:'La propuesta ofrece actividades de refuerzo y profundización con orientaciones para el docente.',status:'answered'},directorCode);assert.equal(question.version,1);assert.equal(question.status,'answered');
  });
  const names=[['Alvarado','Ana'],['Benítez','Bruno'],['Cáceres','Carla'],['Dávila','Diego'],['Espinoza','Elena']];
  const pages=[],teacherCodes=[];
@@ -47,27 +49,28 @@ try{
    const boxes=p.locator('.entry-block-options input[type=checkbox]');await boxes.nth(0).check();await boxes.nth(1).check();
    await p.getByRole('button',{name:'Comenzar mi evaluación',exact:true}).click();await p.getByRole('heading',{name:'Evaluar exposición',exact:true}).waitFor();
    const active=await p.evaluate(()=>JSON.parse(sessionStorage.getItem('textos-entry-session-v1:demo')||'null'));teacherCodes.push(active.code);secrets.push(active.code);pages.push(p);
-   if(i===0){assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await p.screenshot({path:'test-results/ficha-exposicion-movil.png',fullPage:true});}
+   if(i===0){await p.getByLabel('Referencia MINEDU de I1',{exact:true}).waitFor();const guide=await fetch(`${base}/referencias/guia-minedu-textos-2013.pdf`);assert.equal(guide.status,200);assert((guide.headers.get('content-type')||'').includes('application/pdf'));assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await p.screenshot({path:'test-results/ficha-exposicion-movil.png',fullPage:true});}
   }
   const s=(await rpc('snapshot',{},directorCode)).state;assert.equal(s.teachers.filter(t=>t.selfRegistered).length,5);assert(s.teachers.every(t=>t.categories.length===2));assert.equal(s.assignments.length,0);
  });
- await checked('live forms close with ten observed scores and no preloaded physical-text metadata',async()=>{
+ await checked('live forms close with eleven observed scores and no preloaded physical-text metadata',async()=>{
   for(const [i,p] of pages.entries()){
    const sum=28+i*2;let remaining=sum;
    for(let k=0;k<10;k++){const value=Math.min(4,remaining);remaining-=value;await p.getByRole('button',{name:new RegExp(`^I${k+1}: ${value} puntos`)}).click();}
+   await p.getByRole('button',{name:/^I11: 1 puntos/}).click();
    if(i===0)await p.getByLabel('Observación general (opcional)',{exact:true}).fill('Observación privada de Ana durante la exposición');
    await p.getByRole('button',{name:'Cerrar mi ficha',exact:true}).click();await p.getByText('El servidor confirmó el cierre de esta ficha.',{exact:false}).first().waitFor();
-   const own=(await rpc('snapshot',{},teacherCodes[i])).state.presentationEvaluations;assert.equal(own.length,1);assert.equal(own[0].status,'closed');assert.equal(own[0].physicalText,'');assert.equal(own[0].area,'MAT');assert.equal(own[0].block,'P1');assert.equal(own[0].scaleMax,4);
+   const own=(await rpc('snapshot',{},teacherCodes[i])).state.presentationEvaluations;assert.equal(own.length,1);assert.equal(own[0].status,'closed');assert.equal(own[0].physicalText,'');assert.equal(own[0].area,'MAT');assert.equal(own[0].block,'P1');assert.equal(own[0].scaleMax,4);assert.equal(own[0].rubricVersion,2);assert.equal(own[0].responseScore,1);assert.equal(own[0].questionVersion,1);
   }
  });
  await checked('all five teacher scores contribute to the category mean and remain private',async()=>{
   const s=(await rpc('snapshot',{},directorCode)).state;const forms=s.presentationEvaluations.filter(x=>x.publisherId===publisherId&&x.block==='P1');assert.equal(forms.length,5);
-  const average=forms.reduce((sum,e)=>sum+2.5*e.scores.reduce((a,b)=>a+b,0),0)/forms.length;assert.equal(average,80);
-  const summary=await rpc('presentation_summary',{},directorCode);assert(JSON.stringify(summary).includes('80'));
+  const average=forms.reduce((sum,e)=>sum+100*(e.scores.reduce((a,b)=>a+b,0)+e.responseScore)/44,0)/forms.length;assert(Math.abs(average-75)<1e-9);
+  const summary=await rpc('presentation_summary',{},directorCode);assert(JSON.stringify(summary).includes('75'));
   const other=await rpc('snapshot',{},teacherCodes[1]);assert(!JSON.stringify(other).includes('Observación privada de Ana'));
   await director.getByRole('button',{name:'Consolidación y ternas',exact:true}).click();await director.getByRole('heading',{name:/Consolidación|Resultados/}).waitFor();
   await director.getByRole('button',{name:'Actualizar información',exact:true}).click();
-  const row=director.locator('table').first().locator('tbody tr').filter({hasText:'Editorial del ensayo de exposición'});await row.locator('td').nth(4).filter({hasText:/80[.,]00/}).waitFor();assert((await row.innerText()).includes('80'));
+  const row=director.locator('table').first().locator('tbody tr').filter({hasText:'Editorial del ensayo de exposición'});await row.locator('td').nth(4).filter({hasText:/75[.,]00/}).waitFor();assert((await row.innerText()).includes('75'));
   await director.screenshot({path:'test-results/consolidado-cinco-docentes.png',fullPage:true});
  });
  await checked('Subdirector dropdowns filter records without changing the official mean',async()=>{
@@ -78,8 +81,8 @@ try{
   await director.getByLabel('Estado',{exact:true}).selectOption('closed');
   await director.getByRole('tab',{name:'Fichas docentes',exact:true}).waitFor();
   assert.equal(await director.locator('table.consolidation-records tbody tr').count(),1);
-  assert((await director.locator('table.consolidation-records').innerText()).includes('70'));
-  const official=await rpc('presentation_summary',{area:'MAT',block:'P1'},directorCode);assert.equal(official.ranked[0].score,80);
+  assert((await director.locator('table.consolidation-records').innerText()).includes('65.91'));
+  const official=await rpc('presentation_summary',{area:'MAT',block:'P1'},directorCode);assert.equal(official.ranked[0].score,75);
   await director.getByRole('button',{name:/^Ver ficha de Alvarado/}).click();
   const modal=director.getByRole('dialog',{name:'Ficha docente',exact:true});await modal.waitFor();assert((await modal.innerText()).includes('Sin valoración'));
   await modal.getByRole('button',{name:'Cerrar ventana',exact:true}).click();
@@ -88,7 +91,7 @@ try{
   await director.getByLabel('Área',{exact:true}).selectOption('COM');await director.getByLabel('Categoría',{exact:true}).selectOption('S1');
   assert.equal(await director.getByLabel(/^Docente/).locator('option').count(),1);
   await director.getByLabel('Área',{exact:true}).selectOption('MAT');await director.getByLabel('Categoría',{exact:true}).selectOption('P1');
-  assert((await director.locator('table.consolidation-results').innerText()).includes('80'));
+  assert((await director.locator('table.consolidation-results').innerText()).includes('75'));
   await director.screenshot({path:'test-results/consolidado-desplegables-real.png',fullPage:true});
  });
  await checked('a second selected category has an independent empty form',async()=>{
@@ -106,11 +109,11 @@ try{
   const old=(await rpc('snapshot',{},teacherCodes[0])).state.presentationEvaluations.find(e=>e.id===legacy.id);assert.deepEqual(old.scores,legacy.scores);assert.equal(old.scaleMax,2);
   await p.getByRole('button',{name:'Evaluar con nueva escala',exact:true}).click();
   await p.getByRole('button',{name:/^I1: 4 puntos/}).waitFor();
-  const fresh=(await rpc('snapshot',{},teacherCodes[0])).state.presentationEvaluations.find(e=>e.id===legacy.id);assert.equal(fresh.scaleMax,4);assert(fresh.scores.every(v=>v===null));assert.equal(fresh.status,'draft');
+  const fresh=(await rpc('snapshot',{},teacherCodes[0])).state.presentationEvaluations.find(e=>e.id===legacy.id);assert.equal(fresh.scaleMax,4);assert.equal(fresh.rubricVersion,2);assert.equal(fresh.responseScore,null);assert.equal(fresh.questionVersion,null);assert(fresh.scores.every(v=>v===null));assert.equal(fresh.status,'draft');
   const retained=await rpc('backup_get',{},directorCode);assert(retained.history.some(h=>h.reference_id===legacy.id&&h.previous.scaleMax===2&&h.previous.scores.reduce((a,b)=>a+b,0)===14));
  });
  await checked('public room excludes private observations and current unpublished teacher results',async()=>{
-  const p=await newPage({width:390,height:844});await p.goto(`${base}/?vista=publica&datos=demo`);await p.getByRole('heading',{name:'Selección de textos escolares 2027',exact:true}).waitFor();const text=await p.locator('body').innerText();assert(!text.includes('Observación privada de Ana'));assert(!text.includes('Alvarado'));assert(!text.includes('80.00'));assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  const p=await newPage({width:390,height:844});await p.goto(`${base}/?vista=publica&datos=demo`);await p.getByRole('heading',{name:'Selección de textos escolares 2027',exact:true}).waitFor();const text=await p.locator('body').innerText();assert(!text.includes('Observación privada de Ana'));assert(!text.includes('Alvarado'));assert(!text.includes('75.00'));assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  });
  assert.deepEqual(errors,[]);
  writeFileSync('test-results/presentation-browser-results.json',JSON.stringify({at:new Date().toISOString(),backend:'Node/Express + PostgreSQL + PostgREST reales',passed:checks.length,checks,pageErrors:errors},null,2));

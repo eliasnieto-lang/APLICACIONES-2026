@@ -1,0 +1,14 @@
+{
+  "at": "2026-11-04T18:04:00.919Z",
+  "backend": "Node/Express + PostgreSQL + PostgREST reales; mutations restricted to demo",
+  "passed": 6,
+  "checks": [
+    "opening the Subdirector cleanup page and its preview never deletes or changes a record",
+    "confirming one teacher removes their closed evaluations and access while preserving the other teacher and Subdirector session",
+    "deleting an editorial cascades its ficha and shared question without removing unrelated records",
+    "a stale deletion preview gets HTTP409 and cannot remove information added since the preview",
+    "clearing the demo jornada requires typed confirmation and preserves event configuration and administrative access",
+    "a fresh registration and editorial work after clearing and cleanup remains usable on a phone"
+  ],
+  "pageErrors": []
+}

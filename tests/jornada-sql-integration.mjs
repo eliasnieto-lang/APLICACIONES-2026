@@ -20,16 +20,18 @@ async function ok(action,payload={},code=director){const result=await rpc(action
 async function reject(action,payload,status,code=director){const result=await rpc(action,payload,code);assert.equal(result.status,status,JSON.stringify(result.body));}
 const state=async()=> (await ok('snapshot')).state;
 const publishers=[],teachers=[];let draw,firstForm,ranking,staleFirstTurn;
-const field=(publisherId,value,expectedVersion=0)=>({publisherId,area:'MAT',block:'P1',scaleMax:4,scores:Array(10).fill(value),notes:Array(10).fill(''),physicalText:'',generalObservation:'',expectedVersion});
+const field=(publisherId,value,expectedVersion=0)=>({publisherId,area:'MAT',block:'P1',scaleMax:4,rubricVersion:2,responseScore:value,questionVersion:1,scores:Array(10).fill(value),notes:Array(10).fill(''),physicalText:'',generalObservation:'',expectedVersion});
 const projectedDraw=value=>({id:value.id,version:value.version,publishers:value.publishers.map(({id,name})=>({id,name})),completedPublisherIds:value.completedPublisherIds,createdAt:value.createdAt,createdBy:'Subdirección'});
 
 await check('no se sortea sin editoriales ni se calcula ranking antes de las exposiciones',async()=>{
  await reject('presentation_draw',{expectedVersion:0,confirmArrivals:true},423);
  await reject('presentation_ranking_generate',{expectedVersion:0},423);
  for(let index=0;index<3;index++)publishers.push(await ok('publisher_save',{publisher:{id:'',version:1,name:`Editorial sorteo ${index+1}`,samplesReceived:false,sampleNote:''}}));
+ const fixture=await state();fixture.presentationQuestions=publishers.map(publisher=>({id:`q-${publisher.id}`,version:1,publisherId:publisher.id,representativeName:'Portavoz del ensayo',area:'MAT',question:'Pregunta del ensayo',answer:'Respuesta del ensayo',status:'answered',askedAt:'2026-11-04T10:00:00Z',answeredAt:'2026-11-04T10:00:01Z',updatedAt:'2026-11-04T10:00:01Z'}));
+ sql(`update public.textos_datasets set state=convert_from(decode('${Buffer.from(JSON.stringify(fixture)).toString('hex')}','hex'),'UTF8')::jsonb where id='demo'`);
  for(const firstNames of ['Ana','Beatriz'])teachers.push(await ok('teacher_register',{firstNames,lastNames:'Sorteo',area:'MAT',categories:['P1']},null));
  firstForm=await ok('presentation_save',field(publishers[0].id,3),teachers[0].code);
- firstForm=await ok('presentation_close',{evaluationId:firstForm.id,expectedVersion:firstForm.version,scaleMax:4},teachers[0].code);
+ firstForm=await ok('presentation_close',{evaluationId:firstForm.id,expectedVersion:firstForm.version,scaleMax:4,rubricVersion:2},teachers[0].code);
 });
 
 await check('solo Subdirección sortea; se exige confirmar las editoriales y se ignora cualquier orden suministrado',async()=>{
@@ -120,7 +122,7 @@ await check('nuevas fichas invalidan la vigencia del ranking anterior y la regen
   let existing=(await ok('snapshot',{},teacher.code)).state.presentationEvaluations.find(item=>item.publisherId===publisher.id);
   if(existing?.status==='closed'){await ok('presentation_reopen',{evaluationId:existing.id,expectedVersion:existing.version,reason:'Ensayo de cierre definitivo de todas las fichas'});existing=(await ok('snapshot',{},teacher.code)).state.presentationEvaluations.find(item=>item.id===existing.id);}
   const form=await ok('presentation_save',field(publisher.id,teacherIndex===0?0:4,existing?.version??0),teacher.code);
-  await ok('presentation_close',{evaluationId:form.id,expectedVersion:form.version,scaleMax:4},teacher.code);
+  await ok('presentation_close',{evaluationId:form.id,expectedVersion:form.version,scaleMax:4,rubricVersion:2},teacher.code);
  }
  assert.equal(sql("select public.textos_jornada_ranking_current(state) from public.textos_datasets where id='demo'"),'f');
  assert.equal((await state()).presentationRanking.stale,true);

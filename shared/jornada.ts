@@ -1,6 +1,7 @@
 import type { Area, Block, PresentationCategoryAssessment, Publisher, State, Teacher } from './types.js';
 import { AREAS, BLOCKS } from './domain.js';
-import { presentationPublisherAvailable, presentationScore, presentationUsesCurrentScale } from './presentation.js';
+import { presentationQuestionForPublisher, isQuestionAnswered } from './questions.js';
+import { presentationPublisherAvailable, presentationScore, presentationUsesCurrentScale, presentationUsesCurrentRubric } from './presentation.js';
 
 /** Frozen names and order from one server-side draw; completion follows the live-room controls. */
 export interface PresentationDraw {
@@ -52,7 +53,7 @@ export function teacherProgress(state: JornadaState, scope: ProgressScope = {}):
         for (const publisher of state.publishers.filter(item => presentationPublisherAvailable(state, item.id, validArea, block))) {
           expectedSheets += 1;
           const forms = (state.presentationEvaluations ?? []).filter(form => form.teacherId === teacher.id && form.publisherId === publisher.id && form.area === validArea && form.block === block);
-          if (forms.some(form => !presentationUsesCurrentScale(form))) historicalSheets += 1;
+          if (forms.some(form => !presentationUsesCurrentRubric(form))) historicalSheets += 1;
           if (forms.length > 1) { conflictingSheets += 1; continue; }
           const form = forms[0];
           if (!form || !presentationUsesCurrentScale(form)) continue;
@@ -61,10 +62,13 @@ export function teacherProgress(state: JornadaState, scope: ProgressScope = {}):
           let completeScore: number | null;
           try { completeScore = presentationScore(form); } catch { conflictingSheets += 1; continue; }
           markedCriteria += form.scores.filter(score => score !== null).length;
-          if (form.status === 'closed' && completeScore !== null) closedSheets += 1;
+          const question = presentationQuestionForPublisher(state, publisher.id);
+          const currentResponse = presentationUsesCurrentRubric(form) && isQuestionAnswered(question) && form.questionVersion === question?.version && form.responseScore !== null && form.responseScore !== undefined;
+          if (currentResponse) markedCriteria += 1;
+          if (form.status === 'closed' && completeScore !== null && currentResponse) closedSheets += 1;
         }
       }
-      const expectedCriteria = expectedSheets * 10;
+      const expectedCriteria = expectedSheets * 11;
       return { teacher, categories, expectedSheets, closedSheets, startedSheets, pendingSheets: expectedSheets - closedSheets,
         markedCriteria, expectedCriteria, percentage: expectedCriteria ? Math.round(markedCriteria / expectedCriteria * 1000) / 10 : 0,
         historicalSheets, conflictingSheets,
@@ -76,7 +80,7 @@ export function teacherProgress(state: JornadaState, scope: ProgressScope = {}):
 
 export function presentationDrawFinished(state: JornadaState): boolean {
   const draw = state.presentationDraw;
-  return !!draw && draw.publishers.length > 0 && draw.publishers.every(publisher => draw.completedPublisherIds.includes(publisher.id));
+  return !!draw && draw.publishers.length > 0 && draw.publishers.every(publisher => draw.completedPublisherIds.includes(publisher.id) && (state.settings.evaluationMode !== 'presentation' || isQuestionAnswered(presentationQuestionForPublisher(state, publisher.id))));
 }
 
 export interface RankedPresentationRow {

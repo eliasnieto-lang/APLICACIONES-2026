@@ -15,10 +15,11 @@ async function reject(action,payload={},status=400,code=director){const r=await 
 for(let n=0;n<60;n++){try{if((await fetch(url)).ok)break}catch{}await new Promise(r=>setTimeout(r,100));}
 const state=JSON.parse(sql('select public.textos_empty_state()'));
 state.publishers=[1,2,3].map(n=>({id:`paper-publisher-${n}`,version:1,name:`Editorial papel ${n}`,samplesReceived:false,sampleNote:''}));
+state.presentationQuestions=state.publishers.map(publisher=>({id:`q-${publisher.id}`,version:1,publisherId:publisher.id,representativeName:'Portavoz del ensayo',area:'MAT',question:'Pregunta del ensayo',answer:'Respuesta del ensayo',status:'answered',askedAt:'2026-11-04T10:00:00Z',answeredAt:'2026-11-04T10:00:01Z',updatedAt:'2026-11-04T10:00:01Z'}));
 state.teachers=['MAT','COM'].map(area=>({id:`paper-teacher-${area}`,version:1,name:`Docente ${area}`,firstNames:'Docente',lastNames:area,area,categories:['P1'],attended:true,attendanceEvidence:''}));
 state.presentationDraw={id:'paper-draw',version:1,publishers:state.publishers.map(({id,name})=>({id,name})),completedPublisherIds:state.publishers.map(p=>p.id),createdAt:'2026-11-04T15:00:00Z',createdBy:'Subdirección'};
 state.turn={publisherId:state.publishers[2].id,status:'finished',startedAt:'2026-11-04T15:00:00Z',pausedAt:'2026-11-04T15:10:00Z',pausedMilliseconds:0};
-state.presentationEvaluations=state.teachers.flatMap(t=>state.publishers.map((p,i)=>({id:`paper-evaluation-${t.area}-${i}`,version:1,publisherId:p.id,teacherId:t.id,area:t.area,block:'P1',scores:Array(10).fill(4-i),scaleMax:4,notes:Array(10).fill(''),generalObservation:'',physicalText:'',status:'closed',closedAt:'2026-11-04T15:10:00Z',updatedAt:'2026-11-04T15:10:00Z',rulesVersion:1})));
+state.presentationEvaluations=state.teachers.flatMap(t=>state.publishers.map((p,i)=>({id:`paper-evaluation-${t.area}-${i}`,version:1,publisherId:p.id,teacherId:t.id,area:t.area,block:'P1',scores:Array(10).fill(4-i),scaleMax:4,rubricVersion:2,responseScore:4-i,questionVersion:1,notes:Array(10).fill(''),generalObservation:'',physicalText:'',status:'closed',closedAt:'2026-11-04T15:10:00Z',updatedAt:'2026-11-04T15:10:00Z',rulesVersion:1})));
 sql(`update public.textos_datasets set state=${asSql(state)} where id='demo'`);
 director=sql("select public.textos_bootstrap_local('demo')");
 const teacherCode=sql("select public.textos_code()");
@@ -94,10 +95,9 @@ await check('no se crea una votación si el ranking se volvió provisional u obs
  const current=(await ok('snapshot')).state;current.teachers.push({id:'late-teacher',version:1,name:'Docente tardío',area:'MAT',categories:['P1'],attended:false,attendanceEvidence:''});sql(`update public.textos_datasets set state=${asSql(current)} where id='demo'`);
  await reject('paper_poll_create',{block:'P1',areas:['MAT','COM'],rankingId:ranking.id,expectedRankingVersion:ranking.version},423);
 });
-await check('dos editoriales reales bastan sin inventar una tercera alternativa',async()=>{
- const two=structuredClone(state);two.publishers=two.publishers.slice(0,2);two.presentationEvaluations=two.presentationEvaluations.filter(e=>two.publishers.some(p=>p.id===e.publisherId));two.presentationDraw.publishers=two.presentationDraw.publishers.slice(0,2);two.presentationDraw.completedPublisherIds=two.publishers.map(p=>p.id);two.turn.publisherId=two.publishers[1].id;
+await check('dos editoriales no habilitan una votación que requiere tres clasificadas',async()=>{
+ const two=structuredClone(state);two.publishers=two.publishers.slice(0,2);two.presentationQuestions=two.presentationQuestions.filter(q=>two.publishers.some(p=>p.id===q.publisherId));two.presentationEvaluations=two.presentationEvaluations.filter(e=>two.publishers.some(p=>p.id===e.publisherId));two.presentationDraw.publishers=two.presentationDraw.publishers.slice(0,2);two.presentationDraw.completedPublisherIds=two.publishers.map(p=>p.id);two.turn.publisherId=two.publishers[1].id;
  const ranked=JSON.parse(sql(`select public.textos_jornada_action(${asSql(two)},'presentation_ranking_generate','{"expectedVersion":0}'::jsonb,'coordinator','paper-owner','Prueba','demo',now())`));
- const prepared=JSON.parse(sql(`select public.textos_paper_action(${asSql(ranked.state)},'paper_poll_create',${asSql({block:'P1',areas:['MAT','COM'],rankingId:ranked.result.id,expectedRankingVersion:1})},'coordinator','paper-owner','Prueba','demo',now())`));
- assert.equal(prepared.result.options.MAT.length,2);assert.equal(prepared.result.options.COM.length,2);assert.deepEqual(prepared.result.options.MAT.map(o=>o.id),two.publishers.map(p=>p.id));
+ assert.throws(()=>sql(`select public.textos_paper_action(${asSql(ranked.state)},'paper_poll_create',${asSql({block:'P1',areas:['MAT','COM'],rankingId:ranked.result.id,expectedRankingVersion:1})},'coordinator','paper-owner','Prueba','demo',now())`),/tres editoriales/);
 });
 console.log(`PASS ${checks}/${checks} grupos SQL/HTTP de votación A5 en papel`);

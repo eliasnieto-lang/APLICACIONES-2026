@@ -26,9 +26,10 @@ async function rpc(action, payload = {}, code = owner) {
 const seeded = emptyState();
 seeded.publishers = ['alfa', 'beta', 'gamma'].map(id => ({ id: `jornada-${id}`, version: 1, name: `Editorial ${id.toUpperCase()}`, samplesReceived: true, sampleNote: 'Ejemplar físico del ensayo' }));
 seeded.teachers = ['MAT', 'MAT', 'COM', 'COM'].map((area, index) => ({ id: `jornada-docente-${index}`, version: 1, name: `Ensayo ${index + 1} Docente`, firstNames: 'Docente', lastNames: `Ensayo ${index + 1}`, area, categories: ['P1'], attended: true, attendanceEvidence: 'Ensayo local', selfRegistered: true }));
+seeded.presentationQuestions = seeded.publishers.map(publisher => ({ id: `jornada-pregunta-${publisher.id}`, version: 1, publisherId: publisher.id, representativeName: 'Representante del ensayo', area: 'MAT', question: '¿Cómo se atienden los diferentes ritmos de aprendizaje?', answer: 'Con actividades de refuerzo y profundización y orientaciones para el docente.', status: 'answered', askedAt: '2026-11-04T15:00:00Z', answeredAt: '2026-11-04T15:00:00Z', updatedAt: '2026-11-04T15:00:00Z' }));
 for (const [teacherIndex, teacher] of seeded.teachers.entries()) for (const [publisherIndex, publisher] of seeded.publishers.entries()) {
   const value = teacher.area === 'MAT' ? publisherIndex === 0 ? teacherIndex : publisherIndex + 2 : 4 - publisherIndex;
-  seeded.presentationEvaluations.push({ ...newPresentationEvaluation({ publisherId: publisher.id, teacherId: teacher.id, area: teacher.area, block: 'P1' }), id: `jornada-ficha-${teacherIndex}-${publisherIndex}`, version: 1, scores: Array(10).fill(value), status: 'closed', closedAt: '2026-11-04T15:00:00Z', updatedAt: '2026-11-04T15:00:00Z', generalObservation: privateObservation });
+  seeded.presentationEvaluations.push({ ...newPresentationEvaluation({ publisherId: publisher.id, teacherId: teacher.id, area: teacher.area, block: 'P1' }), id: `jornada-ficha-${teacherIndex}-${publisherIndex}`, version: 1, rubricVersion: 2, responseScore: value, questionVersion: 1, scores: Array(10).fill(value), status: 'closed', closedAt: '2026-11-04T15:00:00Z', updatedAt: '2026-11-04T15:00:00Z', generalObservation: privateObservation });
 }
 mkdirSync('test-results', { recursive: true });
 rmSync('test-results/jornada-local-browser-results.json', { force: true });

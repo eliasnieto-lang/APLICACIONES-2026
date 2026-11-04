@@ -4,8 +4,11 @@ import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { emptyState } from '../shared/defaults.ts';
+import { createServer } from 'vite';
 
-const base = process.env.TEXTOS_BROWSER_URL || 'http://127.0.0.1:5173';
+const vite = process.env.TEXTOS_BROWSER_URL ? null : await createServer({ server: { host: '127.0.0.1', port: 0 }, logLevel: 'error' });
+if (vite) await vite.listen();
+const base = process.env.TEXTOS_BROWSER_URL || `http://127.0.0.1:${vite.httpServer.address().port}`;
 if (!/^http:\/\/(127\.0\.0\.1|localhost):[0-9]+$/.test(base)) throw Error('Use a local Vite installation.');
 const state = emptyState();
 const names = ['Editorial Media', 'Editorial Alfa', 'Editorial Beta', 'Editorial Gamma', 'Editorial Histórica'];
@@ -13,17 +16,21 @@ state.publishers = names.map((name, index) => ({ id: `p${index}`, version: 1, na
 state.teachers = Array.from({ length: 5 }, (_, index) => ({ id: `t${index}`, version: 1, name: `Docente ${index + 1}`, area: 'MAT', categories: ['P1', 'P2'], attended: true, attendanceEvidence: '' }));
 state.teachers.push({ id: 'com', version: 1, name: 'Docente Comunicación', area: 'COM', categories: ['S1'], attended: true, attendanceEvidence: '' });
 const at = '2026-11-04T15:00:00.000Z';
+state.presentationQuestions = state.publishers.map(publisher => ({ id: `q-${publisher.id}`, publisherId: publisher.id, version: 1, representativeName: 'Portavoz de prueba', area: 'MAT', question: 'Pregunta del ensayo', answer: 'Respuesta del ensayo', status: 'answered', askedAt: at, answeredAt: at, updatedAt: at }));
 for (let publisher = 0; publisher < names.length; publisher++) {
   for (let teacher = 0; teacher < 5; teacher++) {
     const scores = publisher === 0 ? Array(10).fill(teacher)
       : publisher === 1 ? Array(10).fill(4)
         : publisher === 2 ? [...Array(8).fill(4), 3, 3]
           : publisher === 3 ? [...Array(6).fill(4), ...Array(4).fill(3)] : Array(10).fill(0);
-    state.presentationEvaluations.push({ id: `e-${publisher}-${teacher}`, version: 1, publisherId: `p${publisher}`, teacherId: `t${teacher}`, area: 'MAT', block: 'P1', scaleMax: 4, scores, notes: Array(10).fill(''), generalObservation: teacher === 0 ? 'Observación privada de ficha' : '', physicalText: '', status: 'closed', closedAt: at, updatedAt: at, rulesVersion: 1 });
+    state.presentationEvaluations.push({ id: `e-${publisher}-${teacher}`, version: 1, publisherId: `p${publisher}`, teacherId: `t${teacher}`, area: 'MAT', block: 'P1', scaleMax: 4, rubricVersion: 2, responseScore: publisher === 0 ? teacher : publisher === 1 ? 4 : publisher === 2 ? 3 : publisher === 3 ? 2 : 0, questionVersion: 1, scores, notes: Array(10).fill(''), generalObservation: teacher === 0 ? 'Observación privada de ficha' : '', physicalText: '', status: 'closed', closedAt: at, updatedAt: at, rulesVersion: 1 });
   }
 }
 // One old completed record must remain readable, and count as pending in the current mean.
 delete state.presentationEvaluations.find(item => item.id === 'e-4-0').scaleMax;
+delete state.presentationEvaluations.find(item => item.id === 'e-4-0').rubricVersion;
+delete state.presentationEvaluations.find(item => item.id === 'e-4-0').responseScore;
+delete state.presentationEvaluations.find(item => item.id === 'e-4-0').questionVersion;
 state.presentationEvaluations.find(item => item.id === 'e-4-0').scores = Array(10).fill(2);
 state.presentationShortlists.push({ id: 'archived', version: 1, categoryId: 'MAT-P1', area: 'MAT', block: 'P1', publisherIds: ['p1', 'p2', 'p3'], status: 'superseded', statement: 'Acuerdo anterior', folio: 'H-01', directorApproved: true, publishedAt: at, rulesVersion: 1, snapshot: { assessment: { categoryId: 'MAT-P1', area: 'MAT', block: 'P1', state: 'ready', registered: 5, closed: 25, pending: 0, ranked: [], finalists: ['p1', 'p2', 'p3'], tied: [], reasons: [] }, publishers: state.publishers, threshold: 70 } });
 const snapshot = () => ({ state, actor: { id: 'director', name: 'Subdirector de prueba', role: 'coordinator' }, dataset: 'demo', serverNow: at });
@@ -83,7 +90,7 @@ try {
     assert.match(await row('Editorial Media').innerText(), /50[.,]00/);
     await page.getByRole('button', { name: 'Ver criterios de Editorial Media', exact: true }).click();
     const dialog = page.getByRole('dialog');
-    assert.match(await dialog.innerText(), /Promedio oficial: 50[.,]00/);
+    assert.match(await dialog.innerText(), /Promedio docente: 50[.,]00/);
     assert.match(await dialog.locator('tbody tr').first().innerText(), /2[.,]00/);
     await close();
   });
@@ -110,7 +117,7 @@ try {
     assert.equal(await table().locator('tbody tr').count(), 1);
     assert.match(await table().locator('tbody tr').innerText(), /Escala anterior 0–2/);
     await page.getByRole('button', { name: 'Ver ficha de Docente 1 · Editorial Histórica', exact: true }).click();
-    assert.match(await page.getByRole('dialog').innerText(), /Escala anterior 0–2/);
+    assert.match(await page.getByRole('dialog').innerText(), /Ficha anterior: resultado conservado/);
     assert.equal(await page.getByRole('button', { name: 'Reabrir ficha con motivo', exact: true }).count(), 0);
     await page.keyboard.press('Escape');
     assert.equal(await page.getByRole('dialog').count(), 0);
@@ -127,7 +134,7 @@ try {
     await page.getByLabel('Dirección validó la terna y su acuerdo.', { exact: true }).check();
     assert.equal(await page.getByRole('button', { name: 'Publicar terna validada', exact: true }).isDisabled(), true);
     await close();
-    state.presentationEvaluations.find(item => item.id === 'e-4-0').scaleMax = 4;
+    Object.assign(state.presentationEvaluations.find(item => item.id === 'e-4-0'), { scaleMax: 4, rubricVersion: 2, responseScore: 0, questionVersion: 1 });
     state.presentationEvaluations.find(item => item.id === 'e-4-0').scores = Array(10).fill(0);
     await page.getByRole('button', { name: 'Actualizar información', exact: true }).click();
     await page.getByRole('button', { name: 'Revisar terna', exact: true }).click();
@@ -177,4 +184,4 @@ try {
   });
   assert.deepEqual(pageErrors, []);
   writeFileSync('test-results/consolidation-filters.json', JSON.stringify({ fixture: 'intercepted local UI requests', checks, pageErrors }, null, 2));
-} finally { await context.close(); await browser.close(); }
+} finally { await context.close(); await browser.close(); await vite?.close(); }

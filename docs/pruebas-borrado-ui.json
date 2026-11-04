@@ -1,0 +1,16 @@
+{
+  "at": "2026-11-04T17:33:05.172Z",
+  "backend": "isolated UI fixture; all API requests intercepted",
+  "passed": 8,
+  "checks": [
+    "real coordinator can open cleanup without any preview or delete mutation",
+    "publisher selection previews exact cascading consequences and can cancel without deleting",
+    "full cleanup requires the exact typed phrase and confirmation while backup remains optional",
+    "a refreshed state version invalidates an old preview and prevents applying it",
+    "server conflict preserves the teacher and a new reviewed deletion keeps the director signed in",
+    "catalog, historical and editorial-question scopes expose their own records and filtered select-all",
+    "confirmed full cleanup empties current information and retains school settings and coordinator access",
+    "teacher and secretary cannot access deletion controls; coordinator cleanup fits a 390px phone"
+  ],
+  "pageErrors": []
+}

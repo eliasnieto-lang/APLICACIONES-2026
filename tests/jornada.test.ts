@@ -9,10 +9,13 @@ function state(teachers = 1): JornadaState {
   const s = emptyState();
   s.publishers = ['a', 'b'].map(id => ({ id, version: 1, name: `Editorial ${id}`, samplesReceived: false, sampleNote: '' }));
   s.teachers = Array.from({ length: teachers }, (_, index) => ({ id: `t${index}`, version: 1, name: `Docente ${index}`, area: 'MAT' as const, categories: ['P1', 'P2'] as Block[], attended: false, attendanceEvidence: '' }));
+  s.presentationQuestions = s.publishers.map(publisher => ({ id: `q-${publisher.id}`, version: 1, publisherId: publisher.id,
+    representativeName: 'Portavoz del ensayo', area: 'MAT', question: 'Pregunta del ensayo', answer: 'Respuesta del ensayo',
+    status: 'answered', askedAt: '2026-11-04T10:00:00Z', answeredAt: '2026-11-04T10:00:01Z', updatedAt: '2026-11-04T10:00:01Z' }));
   return s;
 }
 function form(s: JornadaState, publisherId: string, block: Block, scores: PresentationScore[], closed = false, scaleMax: 2 | 4 = 4) {
-  const value = { ...newPresentationEvaluation({ publisherId, teacherId: 't0', area: 'MAT', block }), id: `${publisherId}-${block}`, version: 1, scores, scaleMax, status: closed ? 'closed' as const : 'draft' as const };
+  const value = { ...newPresentationEvaluation({ publisherId, teacherId: 't0', area: 'MAT', block }), id: `${publisherId}-${block}`, version: 1, scores, scaleMax, rubricVersion: scaleMax === 4 ? 2 as const : undefined, responseScore: scaleMax === 4 && scores.every(value => value !== null) ? 0 as const : null, questionVersion: scaleMax === 4 && scores.every(value => value !== null) ? 1 : null, status: closed ? 'closed' as const : 'draft' as const };
   s.presentationEvaluations.push(value); return value;
 }
 
@@ -33,9 +36,9 @@ test('teacher progress includes every chosen category and explicit zero, but doe
   form(s, 'a', 'P2', Array(10).fill(2), true, 2);
   const rows = teacherProgress(s);
   assert.equal(rows.length, 8);
-  assert.deepEqual({ expected: rows[0].expectedSheets, marked: rows[0].markedCriteria, denominator: rows[0].expectedCriteria, percentage: rows[0].percentage, closed: rows[0].closedSheets, historical: rows[0].historicalSheets }, { expected: 4, marked: 15, denominator: 40, percentage: 37.5, closed: 1, historical: 1 });
+  assert.deepEqual({ expected: rows[0].expectedSheets, marked: rows[0].markedCriteria, denominator: rows[0].expectedCriteria, percentage: rows[0].percentage, closed: rows[0].closedSheets, historical: rows[0].historicalSheets }, { expected: 4, marked: 16, denominator: 44, percentage: 36.4, closed: 1, historical: 1 });
   const scoped = teacherProgress(s, { area: 'MAT', block: 'P1' })[0];
-  assert.equal(scoped.expectedSheets, 2); assert.equal(scoped.percentage, 75); assert.equal(scoped.closedSheets, 1);
+  assert.equal(scoped.expectedSheets, 2); assert.equal(scoped.percentage, 72.7); assert.equal(scoped.closedSheets, 1);
   assert.deepEqual(teacherProgress(s, { area: 'COM' }), []);
 });
 
@@ -80,4 +83,5 @@ test('ranking readiness requires a nonempty draw and completion of all its publi
   s.presentationDraw.publishers = [{ id: 'a', name: 'Editorial a' }, { id: 'b', name: 'Editorial b' }];
   s.presentationDraw.completedPublisherIds = ['a']; assert.equal(presentationDrawFinished(s), false);
   s.presentationDraw.completedPublisherIds.push('b'); assert.equal(presentationDrawFinished(s), true);
+  s.presentationQuestions = []; assert.equal(presentationDrawFinished(s), false);
 });

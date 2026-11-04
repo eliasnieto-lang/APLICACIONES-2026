@@ -1,3 +1,4 @@
+import MineduReference from '../components/MineduReference';
 import { useState } from 'react';
 import type { Snapshot } from '../../shared/types';
 import { AREAS, BLOCKS } from '../../shared/domain';
@@ -17,6 +18,7 @@ export default function PresentationPublicView({ data, refresh }: { data: Snapsh
   return <main className="stack" style={{ maxWidth: 1400, margin: '0 auto', padding: 'clamp(18px,4vw,45px)' }}>
     <header className="row between"><div><span className="eyebrow">{s.settings.school} · {data.dataset === 'demo' ? 'DEMOSTRACIÓN' : 'SALA PÚBLICA'}</span><h1>{s.settings.title}</h1></div><button disabled={busy} onClick={() => void sync()}>{busy ? 'Actualizando…' : 'Actualizar'}</button></header>
     {error && <div className="notice danger" role="alert">{error}</div>}
+    <MineduReference compact />
     {(active || published.length === 0 || Boolean(s.presentationDraw && s.presentationDraw.completedPublisherIds.length < s.presentationDraw.publishers.length)) && <>
       <section className="card stack" style={{ textAlign: 'center' }}>
         <span className="status">{s.turn.status === 'paused' ? 'Exposición pausada' : timing.transition ? 'Registro y cambio' : s.turn.status === 'ready' ? 'Antes de iniciar' : 'Exposición editorial'}</span>

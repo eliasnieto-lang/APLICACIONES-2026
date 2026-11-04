@@ -1,0 +1,24 @@
+✔ MINEDU reference keeps the supplied forty-page document intact and its points total one hundred (250.874011ms)
+✔ documentary weights distinguish disqualification, a partial zero and undefined intermediate levels (2.899253ms)
+✔ area references point to the correct primary or secondary matrix and keep coverage separate from PEI (0.685188ms)
+✔ families can see that the institutional score and informative seventy-point reference do not certify a formal review (17.258124ms)
+✔ live A4 teacher PDF contains eleven scores and own observations without a dossier or peer data (267.764164ms)
+✔ blank live A4 form keeps scores pending and rejects a sheet from another scope (66.731965ms)
+✔ live shortlist A4 preserves its aggregate snapshot and omits all individual teacher data (73.085522ms)
+✔ private XLSX exports unlimited live profiles and own sheet data with historical collections labeled (167.049766ms)
+✔ live shortlist PDF states the advisory role and family choice without imposing a threshold (65.150427ms)
+✔ historical live teacher PDF preserves the original A/B rubric and 14/20 as 70 (71.032989ms)
+✔ an explicit zero is printed as a current response and keeps a zero total (69.974499ms)
+✔ historical shortlist PDF preserves its frozen score and old I2 scale (46.161875ms)
+✔ private XLSX retains each scale, raw sum and original score without mixing legacy forms (60.765037ms)
+✔ old ten-criterion 0–4 PDF retains 30/40 = 75 and never attaches an eleventh grade (60.496022ms)
+✔ answer grades 0 and 4 retain the fixed maximum of 44 in PDF and XLSX (256.803458ms)
+✔ a PDF never attributes an old answer score to a newly changed question (70.144946ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3143.383494

@@ -1,23 +1,24 @@
+import MineduReference, { MineduIndicatorReference } from '../components/MineduReference';
 import { useEffect, useId, useRef, useState } from 'react';
 import type { Area, Block, PresentationEvaluation, PresentationScore, Publisher, Snapshot, ViewProps } from '../../shared/types';
 import { AREAS, BLOCKS } from '../../shared/domain';
-import { PRESENTATION_INDICATORS, PRESENTATION_SCALE, presentationScore, presentationTeacherInScope } from '../../shared/presentation';
+import { PRESENTATION_INDICATORS, PRESENTATION_SCALE, presentationScore, presentationTeacherInScope, presentationUsesCurrentRubric } from '../../shared/presentation';
 import { loadDraft, removeDraft, saveDraft } from '../drafts';
 import { LEGACY_PRESENTATION_INDICATORS } from '../../shared/presentation-legacy';
 import { presentationOrderedPublishers } from '../../shared/jornada';
 
-interface Fields { scores: PresentationScore[]; notes: string[]; generalObservation: string; physicalText: string }
-interface LocalDraft extends Fields { scaleMax: 4; baseVersion: number; savedAt: string; closePending?: boolean }
+interface Fields { responseScore: PresentationScore; questionVersion: number | null; scores: PresentationScore[]; notes: string[]; generalObservation: string; physicalText: string }
+interface LocalDraft extends Fields { scaleMax: 4; rubricVersion: 2; legacyTen?: boolean; baseVersion: number; savedAt: string; closePending?: boolean }
 const memoryDrafts = new Map<string, { owner: symbol; value: LocalDraft }>();
-const emptyFields = (): Fields => ({ scores: Array<PresentationScore>(10).fill(null), notes: Array<string>(10).fill(''), generalObservation: '', physicalText: '' });
-const fieldsOf = (value?: PresentationEvaluation): Fields => value ? { scores: [...value.scores], notes: [...value.notes], generalObservation: value.generalObservation, physicalText: value.physicalText } : emptyFields();
+const emptyFields = (): Fields => ({ responseScore: null, questionVersion: null, scores: Array<PresentationScore>(10).fill(null), notes: Array<string>(10).fill(''), generalObservation: '', physicalText: '' });
+const fieldsOf = (value?: PresentationEvaluation): Fields => value ? { responseScore: value.responseScore ?? null, questionVersion: value.questionVersion ?? null, scores: [...value.scores], notes: [...value.notes], generalObservation: value.generalObservation, physicalText: value.physicalText } : emptyFields();
 const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error);
 function isConflict(error: unknown) {
   const candidate = error as { code?: string; status?: number };
   return candidate?.code === 'PT409' || candidate?.status === 409 || /409|conflicto|otra pestaña|versión.*cambi|version.*conflict/i.test(messageOf(error));
 }
 function validDraft(value: LocalDraft): boolean {
-  return value.scaleMax === 4 && Array.isArray(value.scores) && value.scores.length === 10 && value.scores.every(score => score === null || Number.isInteger(score) && score >= 0 && score <= 4)
+  return value.scaleMax === 4 && value.rubricVersion === 2 && (value.responseScore === null || Number.isInteger(value.responseScore) && value.responseScore >= 0 && value.responseScore <= 4) && (value.responseScore === null ? value.questionVersion === null : Number.isInteger(value.questionVersion) && value.questionVersion! > 0) && Array.isArray(value.scores) && value.scores.length === 10 && value.scores.every(score => score === null || Number.isInteger(score) && score >= 0 && score <= 4)
     && Array.isArray(value.notes) && value.notes.length === 10 && value.notes.every(note => typeof note === 'string')
     && typeof value.generalObservation === 'string' && typeof value.physicalText === 'string'
     && Number.isInteger(value.baseVersion) && value.baseVersion >= 0 && typeof value.savedAt === 'string';
@@ -37,7 +38,7 @@ export default function PresentationEvaluations(props: ViewProps) {
   const hasDraw = !!snapshot.state.presentationDraw;
   if (snapshot.actor.role !== 'teacher') return <div className="notice">La ficha de exposición requiere su acceso individual de docente.</div>;
   if (!scope) return <div className="notice">Complete su registro al ingresar con sus nombres, apellidos, área y uno o más bloques para evaluar las exposiciones. Las fichas históricas por texto conservan sus respuestas.</div>;
-  const closed = own.filter(item => item.area === scope.area && item.block === scope.block && item.status === 'closed' && item.scaleMax === 4 && publishers.some(publisher => publisher.id === item.publisherId)).length;
+  const closed = own.filter(item => item.area === scope.area && item.block === scope.block && item.status === 'closed' && presentationUsesCurrentRubric(item) && publishers.some(publisher => publisher.id === item.publisherId)).length;
   return <div className="stack">
     <div><h1>Evaluar exposición</h1><p className="muted">{snapshot.actor.name} · Escuche la presentación de la editorial y revise el ejemplar físico. Complete una ficha por editorial, área y bloque.</p></div>
     <div className="tabs" aria-label="Área y bloque de evaluación">{scopes.map(item => {
@@ -54,14 +55,14 @@ export default function PresentationEvaluations(props: ViewProps) {
       <div className="grid" aria-label="Editoriales">{publishers.map(item => {
         const evaluation = own.find(value => value.publisherId === item.id && value.area === scope.area && value.block === scope.block);
         const current = item.current;
-        const currentClosed = evaluation?.status === 'closed' && evaluation.scaleMax === 4;
+        const currentClosed = evaluation?.status === 'closed' && presentationUsesCurrentRubric(evaluation);
         return <button type="button" key={item.id} className={`card stack ${publisher?.id === item.id ? 'selected' : 'secondary'}`} aria-pressed={publisher?.id === item.id} onClick={() => setSelectedPublisher(item.id)} style={{ alignItems: 'flex-start', textAlign: 'left', gap: 8 }}>
-          <strong>{item.participationOrder ? `${item.participationOrder}. ` : ''}{item.name}</strong>{hasDraw && !item.drawn && <span className="status pending">Registrada después del sorteo</span>}{item.completed && <span className="status">Presentación finalizada</span>}<span className={`status ${currentClosed ? 'closed' : 'pending'}`}>{evaluation && evaluation.scaleMax !== 4 ? 'Escala anterior · pendiente de actualizar' : currentClosed ? 'Ficha cerrada' : evaluation ? 'Borrador' : 'Sin iniciar'}</span>{current && <span className="status">Turno actual de exposición</span>}
+          <strong>{item.participationOrder ? `${item.participationOrder}. ` : ''}{item.name}</strong>{hasDraw && !item.drawn && <span className="status pending">Registrada después del sorteo</span>}{item.completed && <span className="status">Presentación finalizada</span>}<span className={`status ${currentClosed ? 'closed' : 'pending'}`}>{evaluation && !presentationUsesCurrentRubric(evaluation) ? 'Ficha anterior · completar la pregunta' : currentClosed ? 'Ficha cerrada' : evaluation ? 'Borrador' : 'Sin iniciar'}</span>{current && <span className="status">Turno actual de exposición</span>}
         </button>;
       })}</div>
       {publisher && <PresentationEditor key={`${snapshot.actor.id}/${publisher.id}/${scope.area}/${scope.block}`} {...props} publisher={publisher} area={scope.area} block={scope.block} onNext={() => {
         const index = publishers.findIndex(item => item.id === publisher.id);
-        const next = [...publishers.slice(index + 1), ...publishers.slice(0, index)].find(item => !own.some(value => value.publisherId === item.id && value.area === scope.area && value.block === scope.block && value.status === 'closed' && value.scaleMax === 4));
+        const next = [...publishers.slice(index + 1), ...publishers.slice(0, index)].find(item => !own.some(value => value.publisherId === item.id && value.area === scope.area && value.block === scope.block && value.status === 'closed' && presentationUsesCurrentRubric(value)));
         if (next) setSelectedPublisher(next.id);
       }} />}
     </>}
@@ -76,7 +77,21 @@ function PresentationEditor(props: EditorProps) {
   const evaluation = updated && updated.version >= (saved?.version ?? 0) ? updated : saved;
   return evaluation && evaluation.scaleMax !== 4
     ? <HistoricalPresentation {...props} evaluation={evaluation} onEvaluation={setUpdated} />
-    : <CurrentPresentationEditor {...props} evaluation={evaluation} onEvaluation={setUpdated} />;
+    : evaluation && !presentationUsesCurrentRubric(evaluation) ? <PreviousTenPresentation {...props} evaluation={evaluation} onEvaluation={setUpdated} />
+      : <CurrentPresentationEditor {...props} evaluation={evaluation} onEvaluation={setUpdated} />;
+}
+
+function PreviousTenPresentation({ api, refresh, notify, publisher, area, block, evaluation, onEvaluation }: EditorProps & { evaluation: PresentationEvaluation; onEvaluation(value: PresentationEvaluation): void }) {
+  const [busy, setBusy] = useState(false); const [error, setError] = useState('');
+  async function enable() {
+    setBusy(true); setError('');
+    try {
+      const result = await api.call<PresentationEvaluation>('presentation_enable_question', { evaluationId: evaluation.id, expectedVersion: evaluation.version, rubricVersion: 2 });
+      if (!presentationUsesCurrentRubric(result) || result.responseScore !== null) throw new Error('El servidor aún no confirmó la ficha ampliada.');
+      onEvaluation(result); await refresh(); notify('Diez valoraciones conservadas. Complete la respuesta a la pregunta obligatoria.');
+    } catch (problem) { setError(messageOf(problem)); } finally { setBusy(false); }
+  }
+  return <section className="card stack"><h2>{publisher.name}</h2><p>{AREAS.find(item => item.id === area)?.label} · {BLOCKS.find(item => item.id === block)?.label}</p><span className="status">Ficha anterior de diez criterios · resultado original conservado</span><p>Su nota anterior: {presentationScore(evaluation)?.toFixed(2) ?? 'pendiente'} /100. Los diez puntajes y observaciones se conservarán. Para usar la ficha actual debe añadir la valoración de la pregunta, con máximo total de 44 puntos.</p><button disabled={busy} onClick={() => void enable()}>{busy ? 'Preparando ficha…' : 'Completar ficha con la pregunta'}</button>{error && <div className="notice error" role="alert">{error}</div>}</section>;
 }
 
 function HistoricalPresentation({ api, refresh, notify, publisher, area, block, evaluation, onEvaluation }: EditorProps & { evaluation: PresentationEvaluation; onEvaluation(value: PresentationEvaluation): void }) {
@@ -87,7 +102,7 @@ function HistoricalPresentation({ api, refresh, notify, publisher, area, block, 
   async function restart() {
     setRestarting(true); setError('');
     try {
-      const result = await api.call<PresentationEvaluation>('presentation_restart_scale', { evaluationId: evaluation.id, expectedVersion: evaluation.version, scaleMax: 4 });
+      const result = await api.call<PresentationEvaluation>('presentation_restart_scale', { evaluationId: evaluation.id, expectedVersion: evaluation.version, scaleMax: 4, rubricVersion: 2 });
       if (result.scaleMax !== 4 || result.scores.length !== 10 || result.scores.some(value => value !== null)) throw new Error('El servidor aún no ha confirmado la nueva ficha sin valoraciones.');
       onEvaluation(result);
       notify('Nueva ficha lista. Su evaluación anterior se conserva en el historial.');
@@ -115,7 +130,7 @@ function HistoricalPresentation({ api, refresh, notify, publisher, area, block, 
 
 function CurrentPresentationEditor({ snapshot, api, refresh, notify, publisher, area, block, onNext, evaluation: initial, onEvaluation }: EditorProps & { evaluation?: PresentationEvaluation; onEvaluation(value: PresentationEvaluation): void }) {
   const fieldPrefix = useId();
-  const draftId = JSON.stringify(['presentation-v2', snapshot.actor.id, publisher.id, area, block]);
+  const draftId = JSON.stringify(['presentation-v3', snapshot.actor.id, publisher.id, area, block]);
   const memoryKey = JSON.stringify([api.draftSecret(), api.dataset, draftId]);
   const [fields, setFields] = useState<Fields>(() => fieldsOf(initial));
   const fieldsRef = useRef(fields);
@@ -143,11 +158,13 @@ function CurrentPresentationEditor({ snapshot, api, refresh, notify, publisher, 
   const closePendingRef = useRef(false);
   const [closePending, setClosePending] = useState(false);
   const [tick, setTick] = useState(0);
-  const completed = fields.scores.filter(value => value !== null).length;
-  const score = presentationScore({ scores: fields.scores, scaleMax: 4 });
-  const total = fields.scores.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+  const question = snapshot.state.presentationQuestions?.find(item => item.publisherId === publisher.id && item.status === 'answered');
+  const responseCurrent = !!question && fields.questionVersion === question.version;
+  const completed = fields.scores.filter(value => value !== null).length + (fields.responseScore === null ? 0 : 1);
+  const score = presentationScore({ scores: fields.scores, scaleMax: 4, rubricVersion: 2, responseScore: fields.responseScore, questionVersion: fields.questionVersion });
+  const total = fields.scores.reduce<number>((sum, value) => sum + (value ?? 0), 0) + (fields.responseScore ?? 0);
 
-  function localValue(): LocalDraft { return { ...fieldsRef.current, scaleMax: 4, baseVersion: versionRef.current, savedAt: new Date().toISOString(), closePending: closePendingRef.current }; }
+  function localValue(): LocalDraft { return { ...fieldsRef.current, scaleMax: 4, rubricVersion: 2, baseVersion: versionRef.current, savedAt: new Date().toISOString(), closePending: closePendingRef.current }; }
   async function persistLocal() {
     if (closedRef.current) return;
     const previous = memoryDrafts.get(memoryKey);
@@ -179,7 +196,7 @@ function CurrentPresentationEditor({ snapshot, api, refresh, notify, publisher, 
     if (alive.current) { setSaving(true); setStatus('Guardando…'); setError(''); }
     const sentRevision = revision.current;
     try {
-      const saved = await api.call<PresentationEvaluation>('presentation_save', { publisherId: publisher.id, area, block, ...fieldsRef.current, scaleMax: 4, expectedVersion: versionRef.current });
+      const saved = await api.call<PresentationEvaluation>('presentation_save', { publisherId: publisher.id, area, block, ...fieldsRef.current, scaleMax: 4, rubricVersion: 2, expectedVersion: versionRef.current });
       versionRef.current = saved.version; evaluationId.current = saved.id;
       if (sentRevision === revision.current) {
         dirty.current = false;
@@ -248,15 +265,21 @@ function CurrentPresentationEditor({ snapshot, api, refresh, notify, publisher, 
     return () => { window.removeEventListener('online', online); window.removeEventListener('beforeunload', leave); };
   }, []);
 
+  useEffect(() => {
+    if (!closed && fieldsRef.current.responseScore !== null && (!question || fieldsRef.current.questionVersion !== question.version)) edit({ ...fieldsRef.current, responseScore: null, questionVersion: null });
+  // Published question revisions never reuse a rating of a different response.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [question?.version, closed]);
+
   async function closeEvaluation() {
-    if (completed !== 10 || conflictRef.current || busy.current || closedRef.current) return;
+    if (completed !== 11 || !responseCurrent || conflictRef.current || busy.current || closedRef.current) return;
     setClosing(true); closePendingRef.current = true; setClosePending(true);
     await persistLocal();
     if (dirty.current) await saveCurrent();
     if (dirty.current || conflictRef.current || !evaluationId.current) { if (alive.current) setClosing(false); return; }
     busy.current = true;
     try {
-      const result = await api.call<PresentationEvaluation>('presentation_close', { evaluationId: evaluationId.current, expectedVersion: versionRef.current, scaleMax: 4 });
+      const result = await api.call<PresentationEvaluation>('presentation_close', { evaluationId: evaluationId.current, expectedVersion: versionRef.current, scaleMax: 4, rubricVersion: 2 });
       if (result.status !== 'closed') throw new Error('El servidor aún no ha confirmado el cierre.');
       versionRef.current = result.version; closedRef.current = true; closePendingRef.current = false; dirty.current = false;
       await clearLocal();
@@ -277,7 +300,7 @@ function CurrentPresentationEditor({ snapshot, api, refresh, notify, publisher, 
       const remote = (latest.state.presentationEvaluations ?? []).find(item => item.publisherId === publisher.id && item.teacherId === snapshot.actor.id && item.area === area && item.block === block) ?? null;
       setServerConflict(remote); setConflictChecked(true);
       if (discard) {
-        if (remote && remote.scaleMax !== 4) {
+        if (remote && !presentationUsesCurrentRubric(remote)) {
           blockedLocal.current = false; dirty.current = false; closePendingRef.current = false;
           await clearLocal(); onEvaluation(remote); await refresh().catch(() => undefined); return;
         }
@@ -293,10 +316,10 @@ function CurrentPresentationEditor({ snapshot, api, refresh, notify, publisher, 
 
   return <div className="stack">
     <section className="card stack">
-      <div className="row between"><div><h2>{publisher.name}</h2><p>{AREAS.find(item => item.id === area)?.label} · {BLOCKS.find(item => item.id === block)?.label}</p></div><span className={`status ${closed ? 'closed' : 'pending'}`}>{closed ? 'Ficha cerrada' : `${completed}/10 valoraciones`}</span></div>
+      <div className="row between"><div><h2>{publisher.name}</h2><p>{AREAS.find(item => item.id === area)?.label} · {BLOCKS.find(item => item.id === block)?.label}</p></div><span className={`status ${closed ? 'closed' : 'pending'}`}>{closed ? 'Ficha cerrada' : `${completed}/11 valoraciones`}</span></div>
       {snapshot.state.turn.publisherId === publisher.id && <div className="notice">Esta editorial está en el turno actual de exposición.</div>}
-      <div className="row between"><strong role="status" aria-live="polite">{status}</strong><span>Total: {total} / 40 · Mi nota: {score === null ? 'pendiente' : `${score.toFixed(2)} / 100`}</span></div>
-      <p className="muted">Valore lo presentado y el ejemplar físico disponible. Las observaciones y referencias son opcionales. Los puntajes de otros docentes permanecen privados.</p>
+      <div className="row between"><strong role="status" aria-live="polite">{status}</strong><span>Total: {total} / 44 · Mi nota: {score === null ? 'pendiente' : `${score.toFixed(2)} / 100`}</span></div>
+      <p className="muted">Ficha adaptada y orientativa: valore lo presentado y las páginas del ejemplar físico que revisó. Las observaciones y referencias son opcionales. Los puntajes de otros docentes permanecen privados.</p>
       {error && <div className="notice error" role="alert">{error}</div>}
       {localError && <div className="notice warning stack" role="alert"><span>{localError}</span>{blockedLocal.current && <button type="button" className="secondary" onClick={async () => {
         await clearLocal(true); blockedLocal.current = false; setLocalError(''); if (dirty.current) await persistLocal();
@@ -305,27 +328,33 @@ function CurrentPresentationEditor({ snapshot, api, refresh, notify, publisher, 
         const value = recovery; setRecovery(null); blockedLocal.current = false;
         closePendingRef.current = !!value.closePending; setClosePending(!!value.closePending);
         if (value.baseVersion !== versionRef.current) { conflictRef.current = true; setConflict(true); setConflictChecked(false); }
-        edit({ scores: value.scores, notes: value.notes, generalObservation: value.generalObservation, physicalText: value.physicalText });
+        edit({ responseScore: value.responseScore, questionVersion: value.questionVersion, scores: value.scores, notes: value.notes, generalObservation: value.generalObservation, physicalText: value.physicalText });
       }}>Recuperar borrador</button><button type="button" className="secondary" onClick={() => { setRecovery(null); blockedLocal.current = false; void clearLocal(true); }}>Descartar borrador y usar servidor</button></div></div>}
-      {conflict && <div className="notice warning stack" role="alert"><strong>La ficha cambió en el servidor. Sus valores locales se conservan.</strong><div className="row"><button type="button" className="secondary" onClick={() => void retrieveConflict(true)}>Recargar ficha del servidor</button><button type="button" onClick={() => void retrieveConflict(false)}>Consultar versión del servidor</button></div>{conflictChecked && <><p>{serverConflict ? `Servidor: versión ${serverConflict.version}, escala de 0 a ${serverConflict.scaleMax ?? 2}, ${serverConflict.status === 'closed' ? 'cerrada' : 'borrador'}. Puntajes: ${serverConflict.scores.map(value => value ?? '—').join(' · ')}.` : 'No hay una ficha guardada en el servidor.'}</p>{serverConflict && serverConflict.scaleMax !== 4 && <p>Esta es una ficha anterior. Recárguela para revisarla antes de iniciar una evaluación con la nueva escala.</p>}{serverConflict?.status !== 'closed' && (!serverConflict || serverConflict.scaleMax === 4) && <button type="button" onClick={() => {
+      {conflict && <div className="notice warning stack" role="alert"><strong>La ficha cambió en el servidor. Sus valores locales se conservan.</strong><div className="row"><button type="button" className="secondary" onClick={() => void retrieveConflict(true)}>Recargar ficha del servidor</button><button type="button" onClick={() => void retrieveConflict(false)}>Consultar versión del servidor</button></div>{conflictChecked && <><p>{serverConflict ? `Servidor: versión ${serverConflict.version}, escala de 0 a ${serverConflict.scaleMax ?? 2}, ${serverConflict.status === 'closed' ? 'cerrada' : 'borrador'}. Puntajes: ${serverConflict.scores.map(value => value ?? '—').join(' · ')}.` : 'No hay una ficha guardada en el servidor.'}</p>{serverConflict && !presentationUsesCurrentRubric(serverConflict) && <p>Esta es una ficha anterior. Recárguela para revisarla antes de iniciar una evaluación con la nueva escala.</p>}{serverConflict?.status !== 'closed' && (!serverConflict || presentationUsesCurrentRubric(serverConflict)) && <button type="button" onClick={() => {
         versionRef.current = serverConflict?.version ?? 0; evaluationId.current = serverConflict?.id ?? ''; conflictRef.current = false; setConflict(false); setServerConflict(null); setConflictChecked(false); dirty.current = true;
         void saveCurrent();
       }}>Guardar mis valores sobre esta versión revisada</button>}</>}</div>}
     </section>
 
-    <div className="notice">Seleccione un nivel por criterio: 0 Sin valoración · 1 En inicio · 2 En proceso · 3 Logrado · 4 Destacado. El 0 es una respuesta válida y suma cero puntos. Un criterio sin selección queda pendiente. Complete los diez para cerrar. Total máximo: 40 puntos; nota sobre 100 = total × 2,5.</div>
+    <MineduReference compact />
+    <div className="notice">Seleccione un nivel por criterio: 0 Sin valoración · 1 En inicio · 2 En proceso · 3 Logrado · 4 Destacado. El 0 es una respuesta válida y suma cero puntos. Un criterio sin selección queda pendiente. Complete los once para cerrar, incluida la respuesta a la pregunta obligatoria. Total máximo: 44 puntos; nota sobre 100 = total × 100 / 44. La valoración orienta la clasificación; la decisión final corresponde a los padres.</div>
     <fieldset className="stack" disabled={!ready || !!recovery || closed || closing} style={{ border: 0, padding: 0, margin: 0 }}>
       <legend className="visually-hidden">Valoración de la exposición de {publisher.name}</legend>
       {PRESENTATION_INDICATORS.map((indicator, index) => {
         return <section className="card stack" key={indicator.id}>
           <h3 id={`${fieldPrefix}-criterion-${index}`}>{indicator.id}. {indicator.label}</h3>
           <p id={`${fieldPrefix}-description-${index}`} style={{ fontSize: 16, lineHeight: 1.65 }}>{indicator.variants?.[area]?.description ?? indicator.description}</p>
+          <MineduIndicatorReference indicatorId={indicator.id} area={area} block={block} />
           <div className="score-buttons presentation-score-buttons" role="group" aria-labelledby={`${fieldPrefix}-criterion-${index}`} aria-describedby={`${fieldPrefix}-description-${index}`} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 130px), 1fr))', gap: 8 }}>
             {PRESENTATION_SCALE.map(({ value, label }) => <button type="button" key={value} aria-pressed={fields.scores[index] === value} className={fields.scores[index] === value ? 'selected' : 'secondary'} onClick={() => editArray('scores', index, value)} style={{ minWidth: 0, minHeight: 88, padding: '12px 8px', flexDirection: 'column', gap: 4, lineHeight: 1.3 }} aria-label={`${indicator.id}: ${value} puntos · ${label}`}><strong style={{ fontSize: 24 }}>{value}</strong><span style={{ fontSize: 15 }}>{label}</span></button>)}
           </div>
           <div className="field"><label htmlFor={`${fieldPrefix}-notes-${index}`}>Observación del criterio (opcional)</label><textarea id={`${fieldPrefix}-notes-${index}`} aria-describedby={`${fieldPrefix}-criterion-${index}`} value={fields.notes[index]} rows={2} onChange={event => editArray('notes', index, event.target.value)} placeholder="Puede anotar lo observado durante la presentación o en el ejemplar" /></div>
         </section>;
       })}
+      <section className="card stack"><h3 id={`${fieldPrefix}-question`}>I11. Respuesta a la pregunta obligatoria</h3><p>Valore la claridad, pertinencia y sustento de la respuesta que escuchó, aunque la pregunta corresponda a cualquiera de las dos áreas. Este es un complemento institucional de la jornada.</p>{question ? <><p><strong>Pregunta:</strong> {question.question}</p><p><strong>Respuesta registrada:</strong> {question.answer}</p><p className="muted">Versión {question.version} · {AREAS.find(item => item.id === question.area)?.label}</p></> : <div className="notice warning">Un representante docente debe formular la pregunta y Subdirección registrar la respuesta en Sala en vivo. Puede guardar los otros diez criterios mientras tanto.</div>}
+        <div className="score-buttons presentation-score-buttons" role="group" aria-labelledby={`${fieldPrefix}-question`} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 130px), 1fr))', gap: 8 }}>{PRESENTATION_SCALE.map(({ value, label }) => <button type="button" key={value} disabled={!question} aria-pressed={fields.responseScore === value && responseCurrent} className={fields.responseScore === value && responseCurrent ? 'selected' : 'secondary'} onClick={() => edit({ ...fieldsRef.current, responseScore: value, questionVersion: question!.version })} style={{ minWidth: 0, minHeight: 88, padding: '12px 8px', flexDirection: 'column', gap: 4 }} aria-label={`I11: ${value} puntos · ${label}`}><strong style={{ fontSize: 24 }}>{value}</strong><span style={{ fontSize: 15 }}>{label}</span></button>)}</div>
+        {fields.responseScore !== null && !responseCurrent && <div className="notice warning">La versión de la respuesta cambió. Vuelva a puntuar este criterio antes de cerrar.</div>}
+      </section>
       <section className="card stack">
         <div className="field"><label htmlFor={`${fieldPrefix}-physical`}>Referencia del ejemplar físico (opcional)</label><input id={`${fieldPrefix}-physical`} value={fields.physicalText} onChange={event => edit({ ...fieldsRef.current, physicalText: event.target.value })} placeholder="Ej.: serie, edición, ejemplar o páginas revisadas" /></div>
         <div className="field"><label htmlFor={`${fieldPrefix}-observation`}>Observación general (opcional)</label><textarea id={`${fieldPrefix}-observation`} value={fields.generalObservation} rows={3} onChange={event => edit({ ...fieldsRef.current, generalObservation: event.target.value })} /></div>
@@ -333,9 +362,9 @@ function CurrentPresentationEditor({ snapshot, api, refresh, notify, publisher, 
     </fieldset>
     <section className="card stack">
       {closed ? <><div className="notice success">El servidor confirmó el cierre de esta ficha. Para corregirla, solicite a coordinación una reapertura con motivo.</div><button type="button" onClick={onNext}>Continuar con otra editorial pendiente</button></> : <>
-        <p>{completed}/10 criterios valorados · Las observaciones son opcionales.</p>
+        <p>{completed}/11 criterios valorados · Las observaciones son opcionales.</p>
         {closePending && <div className="notice warning" role="status">Cierre pendiente. La ficha seguirá abierta hasta recibir la confirmación del servidor. Reintente el cierre cuando recupere la conexión.</div>}
-        <div className="row"><button type="button" className="secondary" disabled={!ready || saving || closing || conflict || !!recovery} onClick={() => void saveCurrent()}>{saving ? 'Guardando…' : 'Guardar ahora'}</button><button type="button" disabled={!ready || completed !== 10 || saving || closing || conflict || !!recovery} onClick={() => void closeEvaluation()}>{closing ? 'Esperando confirmación…' : closePending ? 'Reintentar cierre' : 'Cerrar mi ficha'}</button></div>
+        <div className="row"><button type="button" className="secondary" disabled={!ready || saving || closing || conflict || !!recovery} onClick={() => void saveCurrent()}>{saving ? 'Guardando…' : 'Guardar ahora'}</button><button type="button" disabled={!ready || completed !== 11 || !responseCurrent || saving || closing || conflict || !!recovery} onClick={() => void closeEvaluation()}>{closing ? 'Esperando confirmación…' : closePending ? 'Reintentar cierre' : 'Cerrar mi ficha'}</button></div>
         <p className="muted">Los cambios se guardan automáticamente. El borrador local se cifra para su acceso individual; el cierre requiere confirmación del servidor.</p>
       </>}
     </section>

@@ -128,7 +128,7 @@ await check('restaurar una copia 002 preserva vectores previos y retira su publi
   assert.deepEqual(restored.evaluations, before.evaluations);
 });
 const update004 = readFileSync(new URL('../supabase/migrations/004-sorteo-seguimiento-voto-a5.sql', import.meta.url));
-assert.equal(update004.toString(), readFileSync(new URL('../supabase/schema.sql', import.meta.url)).toString());
+assert.equal(createHash('sha256').update(update004).digest('hex'), '385aa6eafcba27399c88670af1f9605637ea2f8667eab86c1c8ceef5e9547a89');
 const apply004 = () => execFileSync('docker', ['--host=unix:///var/run/docker.sock', 'exec', '-i', db, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres'], { env: dockerEnv, input: update004, stdio: ['pipe', 'pipe', 'pipe'] });
 await check('004 incorpora sorteo y papel sin alterar ningún registro, credencial ni historial de 003', async () => {
   const unchanged = sql("select jsonb_build_object('datasets',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_datasets t),'history',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_history t),'access',(select jsonb_agg(to_jsonb(t) order by code_hash) from public.textos_access t))");
@@ -144,4 +144,18 @@ await check('repetir 004 conserva el orden ya sorteado y no añade versiones ni 
   assert.equal(sql("select jsonb_build_object('datasets',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_datasets t),'history',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_history t))"), unchanged);
   assert.deepEqual((await state()).presentationDraw.publishers, draw.publishers);
 });
-console.log(`${checks} pruebas de migración 002→003→004 SQL/HTTP aprobadas.`);
+const update005 = readFileSync(new URL('../supabase/migrations/005-borrado-preguntas-y-clasificacion.sql', import.meta.url));
+assert.equal(update005.toString(), readFileSync(new URL('../supabase/schema.sql', import.meta.url)).toString());
+const apply005 = () => execFileSync('docker', ['--host=unix:///var/run/docker.sock', 'exec', '-i', db, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres'], { env: dockerEnv, input: update005, stdio: ['pipe', 'pipe', 'pipe'] });
+await check('005 añade borrado y rúbrica adaptada sin eliminar datos ni alterar puntajes, códigos o historial al instalarse', async () => {
+  const unchanged = sql("select jsonb_build_object('datasets',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_datasets t),'history',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_history t),'access',(select jsonb_agg(to_jsonb(t) order by code_hash) from public.textos_access t),'credentials',(select jsonb_agg(to_jsonb(t) order by dataset) from public.textos_director_credentials t))");
+  apply005();
+  assert.equal(sql("select jsonb_build_object('datasets',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_datasets t),'history',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_history t),'access',(select jsonb_agg(to_jsonb(t) order by code_hash) from public.textos_access t),'credentials',(select jsonb_agg(to_jsonb(t) order by dataset) from public.textos_director_credentials t))"), unchanged);
+});
+await check('repetir 005 y previsualizar el borrado no modifica la jornada ni ejecuta una eliminación', async () => {
+  const unchanged = sql("select jsonb_build_object('datasets',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_datasets t),'history',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_history t),'access',(select jsonb_agg(to_jsonb(t) order by code_hash) from public.textos_access t))");
+  const preview = await ok('data_delete_preview', { scope: 'all', ids: [] }); assert.equal(preview.requiresFullConfirmation, true); assert.equal(preview.counts.publishers, 3);
+  apply005();
+  assert.equal(sql("select jsonb_build_object('datasets',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_datasets t),'history',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_history t),'access',(select jsonb_agg(to_jsonb(t) order by code_hash) from public.textos_access t))"), unchanged);
+});
+console.log(`${checks} pruebas de migración 002→003→004→005 SQL/HTTP aprobadas.`);

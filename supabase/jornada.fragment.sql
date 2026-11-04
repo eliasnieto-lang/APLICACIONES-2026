@@ -17,6 +17,8 @@ create or replace function public.textos_jornada_fingerprint(s jsonb) returns te
 language sql immutable set search_path=pg_catalog,public as $$
  select encode(sha256(convert_to(jsonb_build_object(
   'publishers',coalesce(s->'publishers','[]'),
+  'series',coalesce(s->'series','[]'),'offers',coalesce(s->'offers','[]'),
+  'questions',coalesce(s->'presentationQuestions','[]'),
   'teachers',coalesce(s->'teachers','[]'),
   'evaluations',coalesce(s->'presentationEvaluations','[]'),
   'rules',s#>'{settings,rules}',
@@ -146,6 +148,7 @@ begin
   if exists(select 1 from jsonb_array_elements(s->'publishers') p where not exists(select 1 from jsonb_array_elements(s#>'{presentationDraw,publishers}') q where q->>'id'=p->>'id')) then
    perform public.textos_fail('Hay editoriales nuevas que no participaron en el sorteo. Revise el registro de la jornada.','PT423');
   end if;
+  if s#>>'{settings,evaluationMode}'='presentation' and exists(select 1 from jsonb_array_elements(s#>'{presentationDraw,publishers}') p where not public.textos_question_can_finish(s,p->>'id')) then perform public.textos_fail('Registre la pregunta obligatoria y la respuesta de cada editorial antes de generar el ranking.','PT423'); end if;
   foreach area in array array['MAT','COM'] loop
    foreach block in array array['P1','P2','S1'] loop
     assessment:=public.textos_presentation_category(s,area,block);
@@ -171,6 +174,9 @@ language plpgsql immutable set search_path=pg_catalog,public as $$
 #variable_conflict use_column
 declare d jsonb:=s->'presentationDraw'; nextid text; currentid text:=s#>>'{turn,publisherId}'; n integer;
 begin
+ if expected_turn is not null and expected_turn is distinct from s->'turn' then
+  perform public.textos_fail('El turno cambió en otra pantalla. Actualice antes de controlar el reloj.','PT409');
+ end if;
  if d is null or d='null'::jsonb then return s; end if;
  perform public.textos_jornada_validate(s);
  if expected_turn is distinct from s->'turn' then

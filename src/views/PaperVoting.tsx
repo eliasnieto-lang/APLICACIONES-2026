@@ -66,7 +66,7 @@ export default function PaperVoting({ snapshot, api, refresh, notify }: ViewProp
   const locked = busy || processing;
   const pending = readings.filter(item => ['review', 'error', 'analyzing', 'submitting'].includes(item.status)).length;
   const rankingReady = !!rank && !rank.provisional && !rank.stale;
-  const configuredAreasReady = areas.length > 0 && areas.every(area => (rank?.categories.find(category => category.area === area && category.block === block)?.ranked.filter(row => row.score !== null).length ?? 0) >= 2);
+  const configuredAreasReady = areas.length > 0 && areas.every(area => (rank?.categories.find(category => category.area === area && category.block === block)?.ranked.filter(row => row.score !== null).length ?? 0) >= 3);
 
   useEffect(() => {
     if (!selectedId && polls.length) setSelectedId(polls.find(item => item.status === 'open')?.id ?? polls.at(-1)!.id);
@@ -200,13 +200,13 @@ export default function PaperVoting({ snapshot, api, refresh, notify }: ViewProp
 
   if (!coordinator) return <section className="card"><h1>Votación familiar en papel</h1><p>La generación y lectura de fichas corresponde a Subdirección.</p></section>;
   return <div className="paper-voting stack"><style>{paperStyles}</style>
-    <div><span className="eyebrow">ELECCIÓN DE LAS FAMILIAS</span><h1>Votación en papel</h1><p className="muted">Imprima fichas A5, lea sus fotos y revise el escrutinio de cada área.</p></div>
+    <div><span className="eyebrow">ELECCIÓN DE LAS FAMILIAS</span><h1>Votación en papel</h1><p className="muted">Imprima fichas A5, lea sus fotos y revise el escrutinio de cada área. La valoración docente orienta la clasificación de tres editoriales; los padres eligen libremente entre ellas y su votación determina la elección final.</p></div>
     {error && <div className="notice danger" role="alert">{error}</div>}
     <details open={!polls.length}><summary>Preparar votación desde el ranking final</summary><div className="stack">
       {!rankingReady && <div className="notice warning">Primero complete las presentaciones y las fichas docentes y genere el ranking final en <strong>Ranking / Top</strong>. Un ranking provisional o desactualizado no abre la votación.</div>}
       <div className="field-row"><label className="field">Categoría de la votación<select aria-label="Categoría de la votación" disabled={locked} value={block} onChange={event => setBlock(event.target.value as Block)}>{BLOCKS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label><div className="notice"><strong>Matemática y Comunicación</strong><br />Ambas áreas en una misma ficha A5, para esta categoría.</div></div>
-      <p className="muted">Se usarán hasta las tres primeras editoriales del ranking de cada área y categoría. La ficha no pide nombre ni sección del votante.</p>
-      {areas.length > 0 && <div className="grid">{areas.map(area => { const category = rank?.categories.find(item => item.area === area && item.block === block); return <div key={area}><h3>{areaName(area)}</h3><ol>{category?.ranked.filter(item => item.score !== null).slice(0, 3).map(item => <li key={item.publisherId}>{state.publishers.find(publisher => publisher.id === item.publisherId)?.name ?? item.publisherId}</li>)}</ol>{(category?.ranked.filter(item => item.score !== null).length ?? 0) < 2 && <p className="notice warning">Se necesitan al menos dos editoriales valoradas para esta área.</p>}</div>; })}</div>}
+      <p className="muted">Se usarán las tres editoriales clasificadas del ranking de cada área y categoría. La ficha no pide nombre ni sección del votante.</p>
+      {areas.length > 0 && <div className="grid">{areas.map(area => { const category = rank?.categories.find(item => item.area === area && item.block === block); return <div key={area}><h3>{areaName(area)}</h3><ol>{category?.ranked.filter(item => item.score !== null).slice(0, 3).map(item => <li key={item.publisherId}>{state.publishers.find(publisher => publisher.id === item.publisherId)?.name ?? item.publisherId}</li>)}</ol>{(category?.ranked.filter(item => item.score !== null).length ?? 0) < 3 && <p className="notice warning">Se necesitan tres editoriales valoradas para esta área.</p>}</div>; })}</div>}
       <label><input type="checkbox" disabled={locked} checked={reviewedSamples} onChange={event => setReviewedSamples(event.target.checked)} />Confirmo que las familias pudieron revisar los ejemplares físicos y que estas son las opciones que se imprimirán.</label>
       <button className="primary" disabled={locked || !rankingReady || !configuredAreasReady || !reviewedSamples} onClick={() => void createPoll()}><FilePlus2 size={18} />Crear votación en papel</button>
     </div></details>

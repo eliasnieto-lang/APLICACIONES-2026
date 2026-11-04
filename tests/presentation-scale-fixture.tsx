@@ -7,8 +7,8 @@ import { loadDraft, saveDraft } from '../src/drafts';
 import '../src/styles.css';
 
 const secret = 'isolated-scale-ui-fixture-secret';
-const currentDraft = JSON.stringify(['presentation-v2', 'scale-teacher', 'scale-publisher', 'MAT', 'P1']);
-const legacyDraft = JSON.stringify(['presentation', 'scale-teacher', 'scale-publisher', 'MAT', 'P1']);
+const currentDraft = JSON.stringify(['presentation-v3', 'scale-teacher', 'scale-publisher', 'MAT', 'P1']);
+const legacyDraft = JSON.stringify(['presentation-v2', 'scale-teacher', 'scale-publisher', 'MAT', 'P1']);
 const api: Api = {
   dataset: 'demo', draftSecret: () => secret,
   async call<T>(action: string, payload: Record<string, unknown> = {}): Promise<T> {
@@ -25,18 +25,21 @@ declare global {
       currentDraft(): Promise<unknown>;
       legacyDraft(): Promise<unknown>;
       seedLegacyDraft(): Promise<void>;
+      refresh(): Promise<void>;
     };
   }
 }
 window.presentationScaleFixture = {
   currentDraft: () => loadDraft(secret, 'demo', currentDraft),
   legacyDraft: () => loadDraft(secret, 'demo', legacyDraft),
-  seedLegacyDraft: () => saveDraft(secret, 'demo', legacyDraft, { scores: Array(10).fill(2), notes: Array(10).fill(''), generalObservation: 'respaldo de escala anterior', physicalText: '', baseVersion: 0, savedAt: new Date().toISOString() }),
+  refresh: async () => undefined,
+  seedLegacyDraft: () => saveDraft(secret, 'demo', legacyDraft, { scaleMax: 4, scores: Array(10).fill(2), notes: Array(10).fill(''), generalObservation: 'respaldo de escala anterior', physicalText: '', baseVersion: 0, savedAt: new Date().toISOString() }),
 };
 
 function Fixture() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const refresh = async () => { setSnapshot(await api.call<Snapshot>('snapshot')); };
+  window.presentationScaleFixture.refresh = refresh;
   useEffect(() => { void refresh(); }, []);
   return <main className="main-content">{snapshot && <PresentationEvaluations snapshot={snapshot} api={api} refresh={refresh} notify={() => undefined} />}</main>;
 }

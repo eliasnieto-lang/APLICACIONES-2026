@@ -54,3 +54,14 @@ Una ronda restaurada desde antes del último voto queda suspendida y conserva el
 `paper_scan_cast` recibe `pollId`, código y `choices` para todas las áreas: id de editorial, `null` para blanco o `__invalid__` para nulo. Consume el código e incrementa los agregados en una transacción; una repetición devuelve PT409. Las fotos y píxeles no salen del navegador. La detección de marcas requiere el formato generado y las lecturas dudosas pasan a revisión. No se escribe el código ni las selecciones en auditoría.
 
 `paper_poll_close` requiere versión, cierra recepción y devuelve resultados separados por área, sin declarar ganador en empate o ausencia de votos válidos. El respaldo incluye `paperTokens` como huellas; su restauración no puede reducir conteos, perder códigos emitidos ni volver a habilitar un código consumido. La votación actual por exposición se conserva separada de las rondas históricas por libro y grado.
+
+
+## Actualización 005: valoración adaptada y eliminación
+
+La rúbrica vigente usa `scaleMax:4`, `rubricVersion:2`, diez `scores` y `responseScore` adicional; `questionVersion` identifica la pregunta respondida. El máximo es44 y la nota orientativa es la suma de los once criterios ×100/44. El cero seleccionado cuenta cero; `null` sigue pendiente. Las notas anteriores de diez criterios0–4 conservan /40 y las0–2, /20. `presentation_enable_question` conserva las diez respuestas de una ficha0–4 anterior y archiva su versión antes de añadir I11. Los clientes anteriores deben actualizarse antes de guardar.
+
+`presentation_question_save` es exclusivo de coordinación. Registra representante, área, pregunta, resumen y confirmación; el servidor exige CAS, conserva historial y bloquea cambios después del cierre o de una valoración cerrada vinculada. `turn_control.finish` requiere una pregunta respondida por editorial. Cerrar la ficha exige once valoraciones y versión actual de pregunta. El ranking orienta la clasificación de tres editoriales sin mínimo de puntos; la votación familiar calcula su propio resultado, independiente del primer puesto técnico.
+
+`data_delete_preview` y `data_delete_apply` están disponibles exclusivamente para coordinación, en el dataset actual (`real` o `demo`). La previsualización no modifica datos; `apply` exige la versión previsualizada y confirmación exacta. Admite catorce ámbitos de registros, cascadas referenciales, revocación de accesos docentes y retirada de votos/resultados dependientes. El vaciado total conserva configuración y credenciales administrativas. Instalar/repetir el SQL no ejecuta el borrado.
+
+Las referencias MINEDU son documentales: el colegio conserva su escala0–4; no convierte automáticamente esos niveles al instrumento integral0–2 de la guía. Se identifican verificaciones pendientes, el mínimo formal de70 se muestra como información y se proporciona el PDF adjunto.

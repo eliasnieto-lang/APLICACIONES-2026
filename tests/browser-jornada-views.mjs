@@ -11,10 +11,11 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PAT
 const errors = [], checks = [];
 const state = emptyState();
 state.publishers = ['a', 'b', 'c'].map(id => ({ id, name: `Editorial ${id}`, version: 1, samplesReceived: false, sampleNote: '' }));
+state.presentationQuestions = state.publishers.map(publisher => ({ id: `q-${publisher.id}`, publisherId: publisher.id, version: 1, representativeName: 'Portavoz de prueba', area: 'MAT', question: 'Pregunta del ensayo', answer: 'Respuesta del ensayo', status: 'answered', askedAt: '2026-11-04T15:00:00Z', answeredAt: '2026-11-04T15:00:00Z', updatedAt: '2026-11-04T15:00:00Z' }));
 state.teachers = Array.from({ length: 9 }, (_, index) => ({ id: `teacher-${index}`, name: `Docente ${index}`, version: 1, area: 'MAT', categories: ['P1'], attended: false, attendanceEvidence: '' }));
 state.presentationDraw = { id: 'draw-ui', version: 1, publishers: [state.publishers[2], state.publishers[0], state.publishers[1]].map(({ id, name }) => ({ id, name })), completedPublisherIds: ['c'], createdAt: new Date().toISOString(), createdBy: 'Subdirector' };
 state.turn = { publisherId: 'a', status: 'running', startedAt: new Date().toISOString(), pausedAt: null, pausedMilliseconds: 0 };
-const form = (id, publisherId, scores, status = 'draft', scaleMax = 4) => ({ ...newPresentationEvaluation({ publisherId, teacherId: 'teacher-0', area: 'MAT', block: 'P1' }), id, version: 1, scores, status, scaleMax });
+const form = (id, publisherId, scores, status = 'draft', scaleMax = 4) => ({ ...newPresentationEvaluation({ publisherId, teacherId: 'teacher-0', area: 'MAT', block: 'P1' }), id, version: 1, scores, status, scaleMax, rubricVersion: scaleMax === 4 ? 2 : undefined, responseScore: scaleMax === 4 && scores.every(value => value !== null) ? 0 : null, questionVersion: scaleMax === 4 && scores.every(value => value !== null) ? 1 : null });
 state.presentationEvaluations = [form('c-form', 'c', Array(10).fill(0), 'closed'), form('a-form', 'a', [0, 4, ...Array(8).fill(null)]), form('b-form', 'b', Array(10).fill(2), 'closed', 2)];
 const context = await browser.newContext({ viewport: { width: 1360, height: 980 } });
 await context.route('**/src/main.tsx', route => route.fulfill({ contentType: 'application/javascript', body: "import '/tests/jornada-fixture.tsx';" }));
@@ -48,7 +49,7 @@ try {
     await page.goto(`${base}/?jornadaView=progress`); await page.getByRole('heading', { name: 'Docentes y avance', exact: true }).waitFor();
     assert.equal(await page.locator('.progress-table tbody tr').count(), 9);
     const first = page.locator('.progress-table tbody tr').filter({ hasText: 'Docente 0' });
-    assert((await first.innerText()).includes('40 %')); assert((await first.innerText()).includes('1 / 3')); assert((await first.innerText()).includes('1 con escala anterior'));
+    assert((await first.innerText()).includes('39,4 %') || (await first.innerText()).includes('39.4 %')); assert((await first.innerText()).includes('1 / 3')); assert((await first.innerText()).includes('1 con escala anterior'));
     await page.getByLabel('Estado', { exact: true }).selectOption('not_started'); assert.equal(await page.locator('.progress-table tbody tr').count(), 8);
     await page.getByLabel('Área', { exact: true }).selectOption('COM'); await page.getByText('No hay docentes con estos filtros.', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Limpiar filtros', exact: true }).click();

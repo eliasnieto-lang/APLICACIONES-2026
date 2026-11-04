@@ -1,13 +1,15 @@
 {
-  "at": "2026-11-04T14:34:39.248Z",
+  "at": "2026-11-04T17:32:24.511Z",
   "backend": "isolated browser UI fixture with CAS and encrypted browser drafts",
-  "passed": 6,
+  "passed": 8,
   "checks": [
     "mobile: one description, five labeled choices, no default; all editorial and category choices remain available",
-    "0 is explicit, persists as zero, counts toward all ten answers and closes at 0/100",
-    "ten Destacado values close at 40 points and 100/100 with optional notes empty",
-    "offline draft recovers 0 and 4 in isolated encrypted v2 storage; old encrypted draft is preserved",
+    "0 is explicit, persists as zero, counts toward all eleven answers and closes at 0/100",
+    "eleven Destacado values close at 44 points and 100/100 with optional notes empty",
+    "offline draft recovers 0 and 4 in isolated encrypted v3 storage; old encrypted draft is preserved",
     "legacy 0–2 values remain read only at their original total until explicit CAS restart archives them",
+    "a ten-criterion 0–4 history stays at 75/100 until its author explicitly adds I11 without discarding the ten ratings",
+    "before the common question is answered only the first ten criteria can save and the sheet cannot close",
     "two tabs retain CAS protection; local changes never silently overwrite the newer version"
   ],
   "pageErrors": []

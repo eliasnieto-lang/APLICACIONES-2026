@@ -173,13 +173,20 @@ export function demoState(): State {
       firstNames: name, lastNames: 'Demostración', area: 'MAT', categories: ['P1', 'P2', 'S1'],
       selfRegistered: true, attended: true, attendanceEvidence: 'Registro ficticio para la exposición en vivo.' });
   }
+  state.presentationQuestions = state.publishers.map(publisher => ({
+    id: `demo-question-${publisher.id}`, version: 1, publisherId: publisher.id,
+    representativeName: 'Representante docente · DEMOSTRACIÓN', area: 'MAT',
+    question: 'Pregunta ficticia: ¿cómo apoya la propuesta a estudiantes con diferentes ritmos de aprendizaje?',
+    answer: 'Respuesta ficticia: el material incluye orientaciones y actividades de refuerzo y profundización.',
+    status: 'answered', askedAt: at, answeredAt: at, updatedAt: at,
+  }));
   for (const [publisherIndex, publisher] of state.publishers.entries()) for (const block of BLOCKS) {
     if (!presentationPublisherAvailable(state, publisher.id, 'MAT', block.id)) continue;
     for (const [teacherIndex, teacher] of state.teachers.entries()) {
       const evaluation: PresentationEvaluation = {
         id: `demo-presentation-${publisher.id}-${block.id}-${teacher.id}`, version: 1,
         publisherId: publisher.id, teacherId: teacher.id, area: 'MAT', block: block.id,
-        scaleMax: 4, scores: presentationScoreArray(publisherIndex < 3 ? [90, 85, 80][publisherIndex] : 60),
+        scaleMax: 4, rubricVersion: 2, responseScore: publisherIndex < 3 ? [4, 3, 2][publisherIndex] as PresentationScore : 1, questionVersion: 1, scores: presentationScoreArray(publisherIndex < 3 ? [90, 85, 80][publisherIndex] : 60),
         notes: Array.from({ length: 10 }, (_, indicator) => indicator === 1 && teacherIndex === 0
           ? 'Observación ficticia: explicó una situación y la contrastó con la actividad del ejemplar.' : ''),
         generalObservation: 'Ficha sintética de exposición en vivo; no constituye una recomendación real.',

@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { Turn, ViewProps } from '../../shared/types';
 import type { PresentationDraw } from '../../shared/jornada';
+import { AREAS } from '../../shared/domain';
+import { isQuestionAnswered, presentationQuestionForPublisher, type PresentationQuestion } from '../../shared/questions';
 import { timerAudioSample, useTimerSound } from '../timer-audio';
 
 export function useServerClock(serverNow: string) {
@@ -54,6 +56,67 @@ export function TimerSoundControls({ sound }: { sound: ReturnType<typeof useTime
   </div>;
 }
 
+interface QuestionFields { representativeName: string; area: '' | 'MAT' | 'COM'; question: string; answer: string }
+const questionFields = (question?: PresentationQuestion): QuestionFields => ({ representativeName: question?.representativeName ?? '', area: question?.area ?? '', question: question?.question ?? '', answer: question?.answer ?? '' });
+
+function MandatoryQuestion({ snapshot, api, refresh, notify, publisherId, publisherName, disabled }: ViewProps & { publisherId: string; publisherName: string; disabled: boolean }) {
+  const prefix = useId();
+  const record = presentationQuestionForPublisher(snapshot.state, publisherId);
+  const [fields, setFields] = useState<QuestionFields>(() => questionFields(record));
+  const [baseVersion, setBaseVersion] = useState(record?.version ?? 0);
+  const [dirty, setDirty] = useState(false); const [busy, setBusy] = useState(false);
+  const [confirmed, setConfirmed] = useState(false); const [editing, setEditing] = useState(false);
+  const [reason, setReason] = useState(''); const [error, setError] = useState(''); const [remoteChanged, setRemoteChanged] = useState(false);
+  const finished = Boolean(snapshot.state.presentationDraw?.completedPublisherIds.includes(publisherId)
+    || snapshot.state.turn.publisherId === publisherId && snapshot.state.turn.status === 'finished'
+    || snapshot.state.presentationEvaluations.some(evaluation => {
+      const graded = evaluation as typeof evaluation & { questionVersion?: number; responseScore?: number | null };
+      return graded.publisherId === publisherId && graded.status === 'closed' && graded.questionVersion === record?.version && typeof graded.responseScore === 'number';
+    }));
+  const answered = isQuestionAnswered(record);
+  const readOnly = answered && (!editing || finished);
+  const canConfirm = Boolean(fields.representativeName.trim() && fields.area && fields.question.trim() && fields.answer.trim()
+    && confirmed && (!answered || reason.trim().length >= 8) && snapshot.state.turn.publisherId === publisherId
+    && ['running', 'paused', 'finished'].includes(snapshot.state.turn.status));
+  useEffect(() => {
+    const nextVersion = record?.version ?? 0;
+    if (nextVersion === baseVersion) return;
+    if (dirty) { setRemoteChanged(true); return; }
+    setFields(questionFields(record)); setBaseVersion(nextVersion); setEditing(false); setConfirmed(false); setRemoteChanged(false);
+  }, [record?.id, record?.version]);
+  function change<K extends keyof QuestionFields>(key: K, value: QuestionFields[K]) { setFields(current => ({ ...current, [key]: value })); setDirty(true); setConfirmed(false); }
+  function reload() { setFields(questionFields(record)); setBaseVersion(record?.version ?? 0); setDirty(false); setEditing(false); setConfirmed(false); setRemoteChanged(false); setError(''); }
+  async function save(status: 'draft' | 'answered') {
+    if (disabled || busy || readOnly || remoteChanged || !fields.area || status === 'answered' && !canConfirm) return;
+    setBusy(true); setError('');
+    try {
+      const saved = await api.call<PresentationQuestion>('presentation_question_save', { publisherId, expectedVersion: baseVersion,
+        ...fields, status, ...(answered ? { reason: reason.trim() } : {}) });
+      setFields(questionFields(saved)); setBaseVersion(saved.version); setDirty(false); setEditing(false); setConfirmed(false); setReason('');
+      await refresh(); notify(status === 'answered' ? 'Pregunta y respuesta confirmadas. Ya puede finalizar esta exposición.' : 'Borrador de pregunta guardado.');
+    } catch (problem) { setError(problem instanceof Error ? problem.message : 'No se pudo guardar la pregunta.'); }
+    finally { setBusy(false); }
+  }
+  return <section className="card stack" aria-label="Pregunta obligatoria de la editorial" id="pregunta-obligatoria">
+    <div><span className="eyebrow">CIERRE DE CADA EXPOSICIÓN</span><h2>Pregunta obligatoria · {publisherName}</h2><p>Un representante docente debe formular una pregunta, de Matemática o Comunicación, y la editorial debe responder antes de finalizar su turno.</p><p className="muted">Después de escuchar la respuesta, cada docente la puntuará de 0 a 4 en el criterio 11 de su ficha. Esa valoración orienta la clasificación; la elección final corresponde a los padres.</p></div>
+    {answered && <div className="notice"><strong>Pregunta y respuesta registradas.</strong> La valoración docente orienta la clasificación; los padres eligen finalmente entre las editoriales clasificadas.</div>}
+    {error && <div className="notice danger" role="alert">{error}</div>}
+    {remoteChanged && <div className="notice warning" role="alert">El registro cambió en otra pantalla. Su texto local se conserva. <button type="button" disabled={busy} onClick={reload}>Consultar el registro del servidor</button></div>}
+    <div className="field-row"><label className="field" htmlFor={`${prefix}-representative`}>Representante docente que pregunta<input id={`${prefix}-representative`} aria-label="Representante docente que pregunta" disabled={disabled || busy || readOnly || remoteChanged} autoComplete="name" maxLength={160} value={fields.representativeName} onChange={event => change('representativeName', event.target.value)} placeholder="Apellidos y nombres" /></label>
+      <label className="field" htmlFor={`${prefix}-area`}>Área de la pregunta<select id={`${prefix}-area`} aria-label="Área de la pregunta" disabled={disabled || busy || readOnly || remoteChanged} value={fields.area} onChange={event => change('area', event.target.value as QuestionFields['area'])}><option value="">Seleccione el área</option>{AREAS.map(area => <option key={area.id} value={area.id}>{area.label}</option>)}</select></label></div>
+    <label className="field" htmlFor={`${prefix}-question`}>Pregunta formulada a la editorial<textarea id={`${prefix}-question`} aria-label="Pregunta formulada a la editorial" disabled={disabled || busy || readOnly || remoteChanged} maxLength={2000} value={fields.question} onChange={event => change('question', event.target.value)} placeholder="Registre la pregunta que hizo el representante" /></label>
+    <label className="field" htmlFor={`${prefix}-answer`}>Resumen de la respuesta de la editorial<textarea id={`${prefix}-answer`} aria-label="Resumen de la respuesta de la editorial" disabled={disabled || busy || readOnly || remoteChanged} maxLength={3000} value={fields.answer} onChange={event => change('answer', event.target.value)} placeholder="Anote lo principal de la respuesta observada" /></label>
+    {readOnly ? finished ? <p className="muted">La exposición ya finalizó o su respuesta fue valorada. Este registro se conserva para que todos evalúen la misma respuesta.</p>
+      : <button type="button" disabled={disabled || busy} onClick={() => { setEditing(true); setConfirmed(false); }}>Corregir registro antes de finalizar</button>
+      : <>
+        {answered && <label className="field" htmlFor={`${prefix}-reason`}>Motivo de la corrección<textarea id={`${prefix}-reason`} aria-label="Motivo de la corrección" disabled={disabled || busy || remoteChanged} maxLength={1000} value={reason} onChange={event => setReason(event.target.value)} placeholder="Explique el motivo; el registro anterior se conserva en el historial" /></label>}
+        <label className="row"><input type="checkbox" disabled={disabled || busy || remoteChanged} checked={confirmed} onChange={event => setConfirmed(event.target.checked)} />Confirmo que el representante hizo la pregunta y que la editorial respondió.</label>
+        <div className="row">{!answered && <button type="button" className="secondary" disabled={disabled || busy || remoteChanged || !fields.area || !dirty} onClick={() => void save('draft')}>Guardar borrador de pregunta</button>}<button type="button" className="primary" disabled={disabled || busy || remoteChanged || !canConfirm} onClick={() => void save('answered')}>{busy ? 'Guardando…' : 'Confirmar pregunta y respuesta'}</button>{answered && <button type="button" className="secondary" disabled={busy} onClick={reload}>Cancelar corrección</button>}</div>
+        {!['running', 'paused', 'finished'].includes(snapshot.state.turn.status) && <p className="muted">Puede preparar la pregunta. Su respuesta se confirma durante la exposición de esta editorial.</p>}
+      </>}
+  </section>;
+}
+
 export default function LiveRoom({ snapshot, api, refresh, notify }: ViewProps) {
   const { state } = snapshot;
   const draw = state.presentationDraw;
@@ -67,6 +130,8 @@ export default function LiveRoom({ snapshot, api, refresh, notify }: ViewProps) 
   const timing = turnTiming(state.turn, now, state.settings.rules.presentationSeconds, state.settings.rules.transitionSeconds);
   const sound = useTimerSound(timerAudioSample(state.turn, timing.elapsed, state.settings.rules.presentationSeconds));
   const current = state.publishers.find(p => p.id === state.turn.publisherId);
+  const currentQuestion = current ? presentationQuestionForPublisher(state, current.id) : undefined;
+  const questionComplete = isQuestionAnswered(currentQuestion);
   const nextPublisher = draw?.publishers.find(publisher => !draw.completedPublisherIds.includes(publisher.id));
   const scheduledId = draw ? nextPublisher?.id || '' : publisherId;
   const unscheduled = draw ? state.publishers.filter(publisher => !draw.publishers.some(item => item.id === publisher.id)) : [];
@@ -132,13 +197,15 @@ export default function LiveRoom({ snapshot, api, refresh, notify }: ViewProps) 
           <button disabled={busy || !scheduledId || state.turn.status !== 'ready'} onClick={() => void action('start')}>Iniciar</button>
           <button disabled={busy || state.turn.status !== 'running'} onClick={() => void action('pause')}>Pausar</button>
           <button disabled={busy || state.turn.status !== 'paused'} onClick={() => void action('resume')}>Reanudar</button>
-          <button disabled={busy || !['running', 'paused'].includes(state.turn.status)} onClick={() => void action('finish')}>Finalizar</button>
+          <button disabled={busy || !['running', 'paused'].includes(state.turn.status) || !questionComplete} onClick={() => void action('finish')}>Finalizar</button>
           <button disabled={busy || !scheduledId || state.turn.status !== 'finished'} onClick={() => void action('next')}>Siguiente editorial</button>
         </div>
       </div>}
+      {snapshot.actor.role === 'coordinator' && ['running', 'paused'].includes(state.turn.status) && !questionComplete && <p className="notice warning">Antes de finalizar, registre y confirme la pregunta obligatoria y la respuesta de la editorial en el formulario siguiente.</p>}
       {snapshot.actor.role === 'secretary' && <p className="muted">Subdirección controla los turnos. Secretaría puede registrar aquí la recepción de muestras.</p>}
       <hr /><TimerSoundControls sound={sound} />
     </section>
+    {snapshot.actor.role === 'coordinator' && current && <MandatoryQuestion key={current.id} snapshot={snapshot} api={api} refresh={refresh} notify={notify} publisherId={current.id} publisherName={current.name} disabled={busy} />}
     <section className="card"><h2>Guion de exposición</h2><div className="table-wrap"><table><thead><tr><th>Minutos de referencia</th><th>Contenido</th></tr></thead><tbody>{ROOM_SCRIPT.map(([time, label]) => <tr key={time}><th>{time}</th><td>{label}</td></tr>)}</tbody></table></div><p className="muted">El docente valora la exposición y revisa el ejemplar físico. El fin del tiempo conserva las fichas guardadas.</p></section>
     {canManage && <section className="card"><h2>Recepción de muestras</h2>{!state.publishers.length && <p>Registre primero las editoriales en Preparación.</p>}<div className="stack">{state.publishers.map(p => <div className="row" key={p.id}><strong>{p.name}</strong><span className="status">{p.samplesReceived ? 'Recibidas' : 'Pendiente'}</span><input aria-label={`Constancia de muestras de ${p.name}`} placeholder="Mesa, cantidad o constancia" value={sampleNotes[p.id] ?? p.sampleNote} onChange={e => setSampleNotes(old => ({ ...old, [p.id]: e.target.value }))} /><button disabled={busy} onClick={() => void saveSample(p.id, true)}>Guardar recepción</button></div>)}</div></section>}
     {snapshot.actor.role === 'coordinator' && <section className="card"><h2>Retiro de las editoriales</h2><p>Después de la última exposición, registre el retiro de todas las editoriales antes de publicar las ternas.</p><label className="field">Constancia o referencia<input value={withdrawal} onChange={e => setWithdrawal(e.target.value)} /></label><button disabled={busy || !withdrawal.trim()} onClick={() => void saveWithdrawal()}>{state.settings.editorsWithdrawn ? 'Actualizar constancia de retiro' : 'Confirmar retiro de todas las editoriales'}</button>{state.settings.editorsWithdrawn && <p className="status">Retiro registrado: {state.settings.withdrawalReference}</p>}</section>}
