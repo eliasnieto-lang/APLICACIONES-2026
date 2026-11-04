@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-04T18:06:37.317Z",
+  "at": "2026-11-04T18:47:06.082Z",
   "fixture": "isolated intercepted server and instrumented audio driver",
   "checks": [
     "draw requires arrivals confirmation and uses only the persisted server result",

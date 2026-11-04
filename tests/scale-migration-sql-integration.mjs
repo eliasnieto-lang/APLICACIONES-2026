@@ -145,7 +145,7 @@ await check('repetir 004 conserva el orden ya sorteado y no añade versiones ni 
   assert.deepEqual((await state()).presentationDraw.publishers, draw.publishers);
 });
 const update005 = readFileSync(new URL('../supabase/migrations/005-borrado-preguntas-y-clasificacion.sql', import.meta.url));
-assert.equal(update005.toString(), readFileSync(new URL('../supabase/schema.sql', import.meta.url)).toString());
+assert.equal(createHash('sha256').update(update005).digest('hex'), 'f738289ae8f97742feae294db8e743f10dbb663e7880077d901a3c3ee64a2bd1');
 const apply005 = () => execFileSync('docker', ['--host=unix:///var/run/docker.sock', 'exec', '-i', db, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres'], { env: dockerEnv, input: update005, stdio: ['pipe', 'pipe', 'pipe'] });
 await check('005 añade borrado y rúbrica adaptada sin eliminar datos ni alterar puntajes, códigos o historial al instalarse', async () => {
   const unchanged = sql("select jsonb_build_object('datasets',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_datasets t),'history',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_history t),'access',(select jsonb_agg(to_jsonb(t) order by code_hash) from public.textos_access t),'credentials',(select jsonb_agg(to_jsonb(t) order by dataset) from public.textos_director_credentials t))");
@@ -158,4 +158,58 @@ await check('repetir 005 y previsualizar el borrado no modifica la jornada ni ej
   apply005();
   assert.equal(sql("select jsonb_build_object('datasets',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_datasets t),'history',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_history t),'access',(select jsonb_agg(to_jsonb(t) order by code_hash) from public.textos_access t))"), unchanged);
 });
-console.log(`${checks} pruebas de migración 002→003→004→005 SQL/HTTP aprobadas.`);
+const update006 = readFileSync(new URL('../supabase/migrations/006-confirmacion-simple-e-i11-independiente.sql', import.meta.url));
+assert.equal(update006.toString(), readFileSync(new URL('../supabase/schema.sql', import.meta.url)).toString());
+const apply006 = () => execFileSync('docker', ['--host=unix:///var/run/docker.sock', 'exec', '-i', db, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres'], { env: dockerEnv, input: update006, stdio: ['pipe', 'pipe', 'pipe'] });
+const frozenDatabase = () => sql("select jsonb_build_object('datasets',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_datasets t),'history',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_history t),'access',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_access t),'credentials',(select jsonb_agg(to_jsonb(t) order by dataset) from public.textos_director_credentials t),'limits',(select jsonb_agg(to_jsonb(t) order by dataset) from public.textos_login_limits t),'ballots',(select jsonb_agg(to_jsonb(t) order by code_hash) from public.textos_ballots t),'paperTokens',(select jsonb_agg(to_jsonb(t) order by code_hash) from public.textos_paper_tokens t),'aggregates',(select jsonb_agg(to_jsonb(t) order by dataset,round_id,area,option_id) from public.textos_aggregates t))");
+let legacy005Form, legacy005Question;
+await check('005 conserva una pregunta transcrita y una ficha vigente cerrada con su versión de pregunta original', async () => {
+  const current = await state(); const publisherId = current.presentationDraw.publishers[0].id;
+  await ok('turn_control', { command: 'start', publisherId, expectedTurn: current.turn });
+  legacy005Question = await ok('presentation_question_save', { publisherId, expectedVersion: 0, representativeName: 'Representante original de 005', area: 'MAT', question: 'Pregunta original registrada antes de actualizar', answer: 'Respuesta original que debe conservarse íntegramente', status: 'answered' });
+  const old = (await state()).presentationEvaluations.find(form => form.teacherId === teachers[0].snapshot.actor.id && form.publisherId === publisherId);
+  const restarted = await ok('presentation_restart_scale', { evaluationId: old.id, expectedVersion: old.version, scaleMax: 4, rubricVersion: 2 }, teachers[0].code);
+  const saved = await ok('presentation_save', { publisherId, area: 'MAT', block: 'P1', scaleMax: 4, rubricVersion: 2, scores: Array(10).fill(3), responseScore: 1, questionVersion: legacy005Question.version, notes: Array(10).fill('Nota previa de la versión 005'), physicalText: 'Ejemplar que ya fue evaluado', generalObservation: 'Conservar junto con la respuesta observada', expectedVersion: restarted.version }, teachers[0].code);
+  legacy005Form = await ok('presentation_close', { evaluationId: saved.id, expectedVersion: saved.version, scaleMax: 4, rubricVersion: 2 }, teachers[0].code);
+  assert.equal(legacy005Form.questionVersion, legacy005Question.version); assert.equal(legacy005Form.responseScore, 1); assert.equal(legacy005Form.status, 'closed');
+});
+await check('006 se instala sin alterar datos, credenciales, accesos, notas, pregunta anterior ni historial', async () => {
+  const unchanged = frozenDatabase(); apply006(); assert.equal(frozenDatabase(), unchanged);
+  const after = await state();
+  assert.deepEqual(after.presentationEvaluations.find(form => form.id === legacy005Form.id), legacy005Form);
+  assert.deepEqual(after.presentationQuestions.find(question => question.id === legacy005Question.id), legacy005Question);
+  assert.equal((await ok('snapshot', {}, teachers[0].code)).actor.id, teachers[0].snapshot.actor.id);
+});
+await check('repetir 006 conserva exactamente los datos, versiones, registros privados y el historial', async () => {
+  const unchanged = frozenDatabase(); apply006(); apply006(); assert.equal(frozenDatabase(), unchanged);
+});
+await check('la confirmación simple se cambia sin transcripción ni motivo y no invalida la ficha heredada ni su I11', async () => {
+  let question = await ok('presentation_question_save', { publisherId: legacy005Question.publisherId, expectedVersion: legacy005Question.version, confirmed: false });
+  assert.equal(question.status, 'draft'); assert.equal(question.confirmed, false);
+  const afterUncheck = await state();
+  assert.deepEqual(afterUncheck.presentationEvaluations.find(form => form.id === legacy005Form.id), legacy005Form);
+  let category = await ok('presentation_summary', { area: 'MAT', block: 'P1' });
+  let result = category.ranked.find(item => item.publisherId === legacy005Form.publisherId);
+  assert.equal(result.closed, 1); assert.equal(result.score, 3100 / 44);
+  question = await ok('presentation_question_save', { publisherId: legacy005Question.publisherId, expectedVersion: question.version, confirmed: true });
+  assert.equal(question.status, 'answered'); assert.equal(question.confirmed, true);
+  assert.equal(question.question, legacy005Question.question); assert.equal(question.answer, legacy005Question.answer); assert.equal(question.representativeName, legacy005Question.representativeName);
+  assert.notEqual(question.version, legacy005Form.questionVersion);
+  assert.deepEqual((await state()).presentationEvaluations.find(form => form.id === legacy005Form.id), legacy005Form);
+  category = await ok('presentation_summary', { area: 'MAT', block: 'P1' }); result = category.ranked.find(item => item.publisherId === legacy005Form.publisherId);
+  assert.equal(result.closed, 1); assert.equal(result.score, 3100 / 44);
+});
+await check('tras 006 I11 puede guardarse y cerrarse sin turno ni confirmación de Sala; cero cuenta sobre 44', async () => {
+  sql("do $$ declare s jsonb; begin select state into s from public.textos_datasets where id='demo' for update; s:=jsonb_set(s,'{turn}',public.textos_empty_state()->'turn'); perform public.textos_validate_state(s); update public.textos_datasets set state=s where id='demo'; end $$;");
+  const current = await state(); assert.equal(current.turn.status, 'ready'); assert.equal(current.turn.publisherId, null);
+  const publisherId = publishers.find(publisher => publisher.id !== legacy005Form.publisherId).id;
+  assert.ok(!(current.presentationQuestions ?? []).some(question => question.publisherId === publisherId));
+  const teacher = await ok('teacher_register', { firstNames: 'Docente independiente', lastNames: 'Migración seis', area: 'MAT', categories: ['P1'] }, null);
+  const saved = await ok('presentation_save', { publisherId, area: 'MAT', block: 'P1', scaleMax: 4, rubricVersion: 2, scores: Array(10).fill(4), responseScore: 0, questionVersion: null, notes: Array(10).fill(''), physicalText: '', generalObservation: '', expectedVersion: 0 }, teacher.code);
+  const closed = await ok('presentation_close', { evaluationId: saved.id, expectedVersion: saved.version, scaleMax: 4, rubricVersion: 2 }, teacher.code);
+  assert.equal(closed.status, 'closed'); assert.equal(closed.responseScore, 0); assert.equal(closed.questionVersion, null);
+  const category = await ok('presentation_summary', { area: 'MAT', block: 'P1' }); const result = category.ranked.find(item => item.publisherId === publisherId);
+  assert.equal(result.closed, 1); assert.equal(result.score, 4000 / 44);
+  assert.ok(!((await state()).presentationQuestions ?? []).some(question => question.publisherId === publisherId));
+});
+console.log(`${checks} pruebas de migración 002→003→004→005→006 SQL/HTTP aprobadas.`);

@@ -643,8 +643,8 @@ select id,'11e4e537491f46dfff427e120b1dbfd99ef37ac8310a07f3f3d9e4ca5b2cb14b',120
 
 -- BEGIN QUESTION HELPERS
 -- BEGIN REQUIRED QUESTION HELPERS
--- The coordinator records one representative's question and the editorial's answer.
--- Grades, when applicable, remain in each evaluator's private rubric.
+-- Subdirección records a single confirmation that the required exchange occurred.
+-- Each evaluator scores I11 independently; this record never authorizes a grade.
 
 create or replace function public.textos_question_find(s jsonb,publisher_id text) returns jsonb
 language sql immutable set search_path=pg_catalog,public as $$
@@ -661,28 +661,39 @@ begin
  if jsonb_typeof(s->'presentationQuestions') is distinct from 'array' then perform public.textos_fail('El registro de preguntas debe ser una lista.'); end if;
  if exists(select 1 from jsonb_array_elements(s->'presentationQuestions') x group by x->>'id' having count(*)>1)
   or exists(select 1 from jsonb_array_elements(s->'presentationQuestions') x group by x->>'publisherId' having count(*)>1) then
-  perform public.textos_fail('Solo corresponde una pregunta obligatoria por editorial.');
+  perform public.textos_fail('Solo corresponde una confirmación de pregunta por editorial.');
  end if;
  for q in select value from jsonb_array_elements(s->'presentationQuestions') loop
   if jsonb_typeof(q) is distinct from 'object' or nullif(trim(q->>'id'),'') is null
    or public.textos_find(s,'publishers',q->>'publisherId') is null
    or not public.textos_int(q->'version') or (q->>'version')::int<1
-   or coalesce(q->>'area','') not in ('MAT','COM') or coalesce(q->>'status','') not in ('draft','answered') then
-   perform public.textos_fail('Registro de pregunta obligatorio inválido.');
+   or coalesce(q->>'status','') not in ('draft','answered')
+   or jsonb_typeof(q->'updatedAt') is distinct from 'string' then
+   perform public.textos_fail('Registro de confirmación de pregunta inválido.');
   end if;
-  foreach key in array array['representativeName','question','answer','updatedAt'] loop
-   if jsonb_typeof(q->key) is distinct from 'string' then perform public.textos_fail('El representante, la pregunta, la respuesta y su fecha deben ser texto.'); end if;
+  if q ? 'confirmed' and (jsonb_typeof(q->'confirmed') is distinct from 'boolean'
+   or (q->'confirmed'='true'::jsonb) is distinct from (q->>'status'='answered')) then
+   perform public.textos_fail('La confirmación de pregunta debe coincidir con su estado.');
+  end if;
+  -- The former detailed fields remain valid in existing records and backups.
+  foreach key in array array['representativeName','question','answer'] loop
+   if q ? key and jsonb_typeof(q->key) is distinct from 'string' then perform public.textos_fail('Los datos anteriores de la pregunta deben ser texto.'); end if;
   end loop;
+  if q ? 'area' and q->'area'<>'null'::jsonb and coalesce(q->>'area','') not in ('MAT','COM') then perform public.textos_fail('Área de pregunta inválida.'); end if;
   if length(q->>'representativeName')>160 or length(q->>'question')>2000 or length(q->>'answer')>3000 then perform public.textos_fail('El registro de pregunta supera la longitud permitida.'); end if;
   begin
-   if nullif(q->>'updatedAt','') is null then perform public.textos_fail('La pregunta requiere fecha de actualización.'); end if;
+   if nullif(q->>'updatedAt','') is null then perform public.textos_fail('La confirmación requiere fecha de actualización.'); end if;
    updated:=(q->>'updatedAt')::timestamptz;
    asked:=nullif(q->>'askedAt','')::timestamptz;
    answered:=nullif(q->>'answeredAt','')::timestamptz;
+   if not isfinite(updated) or asked is not null and not isfinite(asked) or answered is not null and not isfinite(answered) then perform public.textos_fail('La fecha de confirmación no es válida.'); end if;
   exception when invalid_datetime_format or datetime_field_overflow then perform public.textos_fail('La fecha de pregunta o respuesta no es válida.'); end;
-  if q->>'status'='answered' and (nullif(trim(q->>'representativeName'),'') is null or nullif(trim(q->>'question'),'') is null
-   or nullif(trim(q->>'answer'),'') is null or asked is null or answered is null or answered<asked or updated<answered) then
-   perform public.textos_fail('La confirmación requiere representante, pregunta, respuesta y fechas coherentes.');
+  if q->>'status'='answered' and (asked is null or answered is null or answered<asked or updated<answered) then
+   perform public.textos_fail('La confirmación requiere fechas coherentes.');
+  end if;
+  if q->>'status'='answered' and not(q ? 'confirmed') and (nullif(trim(q->>'representativeName'),'') is null
+   or coalesce(q->>'area','') not in ('MAT','COM') or nullif(trim(q->>'question'),'') is null or nullif(trim(q->>'answer'),'') is null) then
+   perform public.textos_fail('El registro anterior requiere conservar el representante, la pregunta y la respuesta.');
   end if;
  end loop;
 end $$;
@@ -690,26 +701,26 @@ end $$;
 create or replace function public.textos_question_can_finish(s jsonb,publisher_id text) returns boolean
 language sql immutable set search_path=pg_catalog,public as $$
  select exists(select 1 from jsonb_array_elements(coalesce(s->'presentationQuestions','[]')) q
-  where q->>'publisherId'=publisher_id and q->>'status'='answered' and q->>'area' in ('MAT','COM')
-  and nullif(trim(q->>'representativeName'),'') is not null and nullif(trim(q->>'question'),'') is not null
-  and nullif(trim(q->>'answer'),'') is not null and nullif(q->>'askedAt','') is not null and nullif(q->>'answeredAt','') is not null)
+  where q->>'publisherId'=publisher_id and q->>'status'='answered'
+  and nullif(q->>'askedAt','') is not null and nullif(q->>'answeredAt','') is not null
+  and (q->'confirmed'='true'::jsonb or not(q ? 'confirmed') and q->>'area' in ('MAT','COM')
+   and nullif(trim(q->>'representativeName'),'') is not null and nullif(trim(q->>'question'),'') is not null and nullif(trim(q->>'answer'),'') is not null))
 $$;
 
--- Public projection has no representative's identity, private grades or restored extra fields.
+-- Enumerate projections so restored private fields cannot become public.
 create or replace function public.textos_question_public(questions jsonb) returns jsonb
 language sql immutable set search_path=pg_catalog,public as $$
- select coalesce(jsonb_agg(jsonb_build_object('id',q->>'id','publisherId',q->>'publisherId','version',q->'version',
-  'representativeName','','area',q->>'area','question',q->>'question','answer',q->>'answer','status',q->>'status',
-  'askedAt',q->'askedAt','answeredAt',q->'answeredAt','updatedAt',q->>'updatedAt') order by ord),'[]'::jsonb)
+ select coalesce(jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',q->>'id','publisherId',q->>'publisherId','version',q->'version',
+  'confirmed',coalesce(q->'confirmed','true'::jsonb),'representativeName','','area',q->>'area','question',q->>'question','answer',q->>'answer','status',q->>'status',
+  'askedAt',q->'askedAt','answeredAt',q->'answeredAt','updatedAt',q->>'updatedAt')) order by ord),'[]'::jsonb)
  from jsonb_array_elements(coalesce(questions,'[]')) with ordinality item(q,ord) where q->>'status'='answered'
 $$;
 
--- Evaluators see the common question and its representative, never restored private extras.
 create or replace function public.textos_question_teacher(questions jsonb) returns jsonb
 language sql immutable set search_path=pg_catalog,public as $$
- select coalesce(jsonb_agg(jsonb_build_object('id',q->>'id','publisherId',q->>'publisherId','version',q->'version',
-  'representativeName',q->>'representativeName','area',q->>'area','question',q->>'question','answer',q->>'answer','status',q->>'status',
-  'askedAt',q->'askedAt','answeredAt',q->'answeredAt','updatedAt',q->>'updatedAt') order by ord),'[]'::jsonb)
+ select coalesce(jsonb_agg(jsonb_strip_nulls(jsonb_build_object('id',q->>'id','publisherId',q->>'publisherId','version',q->'version',
+  'confirmed',coalesce(q->'confirmed','true'::jsonb),'representativeName',q->>'representativeName','area',q->>'area','question',q->>'question','answer',q->>'answer','status',q->>'status',
+  'askedAt',q->'askedAt','answeredAt',q->'answeredAt','updatedAt',q->>'updatedAt')) order by ord),'[]'::jsonb)
  from jsonb_array_elements(coalesce(questions,'[]')) with ordinality item(q,ord) where q->>'status'='answered'
 $$;
 
@@ -717,56 +728,51 @@ create or replace function public.textos_question_action(s jsonb,p_action text,p
 language plpgsql volatile set search_path=pg_catalog,public as $$
 #variable_conflict use_column
 declare publisher_id text:=p_payload->>'publisherId'; old jsonb; entity jsonb; reason text:=trim(coalesce(p_payload->>'reason',''));
- history jsonb:='[]'; status text:=p_payload->>'status'; representative text:=trim(coalesce(p_payload->>'representativeName',''));
- key text; area text:=p_payload->>'area'; question text:=trim(coalesce(p_payload->>'question','')); answer text:=trim(coalesce(p_payload->>'answer',''));
- finished boolean; changed boolean;
+ history jsonb:='[]'; status text; key text; finished boolean; changed boolean;
 begin
- if actor_role is distinct from 'coordinator' then perform public.textos_fail('Solo Subdirección registra la pregunta del representante docente.','PT403'); end if;
+ if actor_role is distinct from 'coordinator' then perform public.textos_fail('Solo Subdirección confirma la pregunta y respuesta de la editorial.','PT403'); end if;
  if p_action is distinct from 'presentation_question_save' then perform public.textos_fail('Operación de preguntas desconocida.','PT404'); end if;
  if public.textos_find(s,'publishers',publisher_id) is null then perform public.textos_fail('La editorial no existe en esta jornada.','PT404'); end if;
+ if p_payload ? 'confirmed' then
+  if jsonb_typeof(p_payload->'confirmed') is distinct from 'boolean' then perform public.textos_fail('La confirmación debe ser una casilla válida.'); end if;
+  status:=case when p_payload->'confirmed'='true'::jsonb then 'answered' else 'draft' end;
+  if p_payload ? 'status' and p_payload->>'status' is distinct from status then perform public.textos_fail('La confirmación y el estado no coinciden.'); end if;
+ else
+  status:=p_payload->>'status';
+  if coalesce(status,'') not in ('draft','answered') then perform public.textos_fail('Confirme que la pregunta fue formulada y respondida.'); end if;
+ end if;
  foreach key in array array['representativeName','question','answer'] loop
-  if p_payload ? key and jsonb_typeof(p_payload->key) is distinct from 'string' then perform public.textos_fail('El nombre, la pregunta y la respuesta deben ser texto.'); end if;
+  if p_payload ? key and jsonb_typeof(p_payload->key) is distinct from 'string' then perform public.textos_fail('Los datos anteriores de la pregunta deben ser texto.'); end if;
  end loop;
- if coalesce(area,'') not in ('MAT','COM') or coalesce(status,'') not in ('draft','answered') then perform public.textos_fail('Seleccione el área y estado de la pregunta.'); end if;
- if length(representative)>160 or length(question)>2000 or length(answer)>3000 or length(reason)>1000 then perform public.textos_fail('El texto de la pregunta o respuesta supera la longitud permitida.'); end if;
+ if p_payload ? 'area' and coalesce(p_payload->>'area','') not in ('MAT','COM') then perform public.textos_fail('Área de pregunta inválida.'); end if;
+ if length(p_payload->>'representativeName')>160 or length(p_payload->>'question')>2000 or length(p_payload->>'answer')>3000 or length(reason)>1000 then perform public.textos_fail('El registro de pregunta supera la longitud permitida.'); end if;
  select q into old from jsonb_array_elements(coalesce(s->'presentationQuestions','[]')) q where q->>'publisherId'=publisher_id;
  if not public.textos_int(p_payload->'expectedVersion') or (p_payload->>'expectedVersion')::int<>coalesce((old->>'version')::int,0) then
-  perform public.textos_fail('La pregunta cambió en otra pantalla. Actualice antes de guardar.','PT409');
+  perform public.textos_fail('La confirmación cambió en otra pantalla. Actualice antes de guardar.','PT409');
  end if;
- changed:=old is null or old->>'representativeName' is distinct from representative or old->>'area' is distinct from area
-  or old->>'question' is distinct from question or old->>'answer' is distinct from answer or old->>'status' is distinct from status;
- if old->>'status'='answered' and changed then
-  finished:=coalesce(s#>'{presentationDraw,completedPublisherIds}' ? publisher_id,false)
-   or (s#>>'{turn,publisherId}'=publisher_id and s#>>'{turn,status}'='finished')
-   or exists(select 1 from jsonb_array_elements(coalesce(s->'presentationEvaluations','[]')) e where e->>'publisherId'=publisher_id
-    and e->>'status'='closed' and e->'rubricVersion'='2'::jsonb and e->'questionVersion'=old->'version' and e->'responseScore' is not null and e->'responseScore'<>'null'::jsonb);
-  if finished then perform public.textos_fail('La respuesta ya pertenece a una exposición finalizada o valorada. Conserve su registro; una corrección requiere revisar primero sus valoraciones.','PT423'); end if;
-  if status='draft' then perform public.textos_fail('Una respuesta confirmada no vuelve a borrador. Corrija su registro antes de finalizar.','PT423'); end if;
-  if length(reason)<8 then perform public.textos_fail('Explique el motivo de la corrección de la pregunta y respuesta.'); end if;
- end if;
- if status='answered' then
-  if representative='' or question='' or answer='' then perform public.textos_fail('Registre el representante, la pregunta y un resumen de la respuesta antes de confirmar.'); end if;
-  if s#>>'{turn,publisherId}' is distinct from publisher_id or coalesce(s#>>'{turn,status}','') not in ('running','paused','finished') then
-   perform public.textos_fail('Confirme la pregunta durante la exposición de esta editorial o al finalizarla.','PT423');
-  end if;
- end if;
- if not changed then return jsonb_build_object('state',s,'result',old,'referenceId',old->>'id','reason','Pregunta ya confirmada sin cambios','history',history); end if;
- -- New question versions start above the dataset revision, so deleting and recreating
- -- a question cannot make an old I11 grade match a different answer's version.
- entity:=jsonb_build_object('id',coalesce(old->>'id',gen_random_uuid()::text),'publisherId',publisher_id,'version',case when old is null then (s->>'version')::int+1 else (old->>'version')::int+1 end,
-  'representativeName',representative,'area',area,'question',question,'answer',answer,'status',status,
-  'askedAt',case when status='answered' then coalesce(old->'askedAt',to_jsonb(nowat)) else 'null'::jsonb end,
-  'answeredAt',case when status='answered' then to_jsonb(nowat) else 'null'::jsonb end,'updatedAt',nowat);
- -- json null is not SQL null; a first draft's askedAt must become a real timestamp on confirmation.
- if status='answered' and (entity->'askedAt' is null or entity->'askedAt'='null'::jsonb) then entity:=jsonb_set(entity,'{askedAt}',to_jsonb(nowat)); end if;
- if old is not null then history:=jsonb_build_array(jsonb_build_object('entity','presentationQuestions','referenceId',old->>'id','previous',old,'reason',coalesce(nullif(reason,''),'Actualización del registro de pregunta obligatoria'))); end if;
+ -- Checkbox-only requests preserve former transcripts without requiring them again.
+ entity:=coalesce(old,'{}');
+ foreach key in array array['representativeName','area','question','answer'] loop
+  if p_payload ? key then entity:=entity||jsonb_build_object(key,case when key='area' then p_payload->>key else trim(p_payload->>key) end); end if;
+ end loop;
+ changed:=old is null or old->>'status' is distinct from status
+  or (entity-'confirmed') is distinct from (old-'confirmed');
+ finished:=coalesce(s#>'{presentationDraw,completedPublisherIds}' ? publisher_id,false)
+  or coalesce(s#>>'{turn,publisherId}'=publisher_id and s#>>'{turn,status}'='finished',false);
+ -- A deleted confirmation can be restored after finalization without altering grades.
+ if old->>'status'='answered' and changed and finished then perform public.textos_fail('La exposición ya finalizó; su confirmación se conserva.','PT423'); end if;
+ if not changed then return jsonb_build_object('state',s,'result',old,'referenceId',old->>'id','reason','Confirmación ya registrada sin cambios','history',history); end if;
+ entity:=entity||jsonb_build_object('id',coalesce(old->>'id',gen_random_uuid()::text),'publisherId',publisher_id,
+  'version',case when old is null then (s->>'version')::int+1 else (old->>'version')::int+1 end,'confirmed',status='answered','status',status,
+  'askedAt',case when status='answered' then coalesce(nullif(old->'askedAt','null'::jsonb),to_jsonb(nowat)) else 'null'::jsonb end,
+  'answeredAt',case when status='answered' then coalesce(nullif(old->'answeredAt','null'::jsonb),to_jsonb(nowat)) else 'null'::jsonb end,'updatedAt',nowat);
+ if old is not null then history:=jsonb_build_array(jsonb_build_object('entity','presentationQuestions','referenceId',old->>'id','previous',old,'reason',coalesce(nullif(reason,''),'Actualización de la confirmación de pregunta obligatoria'))); end if;
  s:=public.textos_put(s,'presentationQuestions',entity);
  perform public.textos_question_validate(s);
  return jsonb_build_object('state',s,'result',entity,'referenceId',entity->>'id',
-  'reason',case when status='answered' then 'Pregunta del representante y respuesta de la editorial confirmadas' else 'Borrador de pregunta guardado' end,'history',history);
+  'reason',case when status='answered' then 'Pregunta del representante y respuesta de la editorial confirmadas' else 'Confirmación de pregunta desmarcada' end,'history',history);
 end $$;
 -- END REQUIRED QUESTION HELPERS
-
 -- END QUESTION HELPERS
 
 -- BEGIN LIVE PRESENTATION HELPERS
@@ -802,16 +808,15 @@ begin
  maximum:=case when e->'scaleMax'='4'::jsonb then 4 else 2 end;
  base:=public.textos_presentation_scores(e->'scores',maximum,complete);
  if e ? 'rubricVersion' and e->'rubricVersion' is distinct from '2'::jsonb then perform public.textos_fail('Versión de rúbrica inválida.'); end if;
+ if e ? 'questionVersion' and e->'questionVersion'<>'null'::jsonb and (not public.textos_int(e->'questionVersion') or (e->>'questionVersion')::numeric<1) then perform public.textos_fail('La versión histórica de pregunta debe ser un entero positivo o quedar vacía.'); end if;
  if e->'rubricVersion'='2'::jsonb then
   if maximum<>4 then perform public.textos_fail('La rúbrica de once criterios requiere escala 0–4.'); end if;
   response:=e->'responseScore';
   if response is null or response<>'null'::jsonb and (not public.textos_int(response) or response::numeric>4) then perform public.textos_fail('La respuesta requiere un entero de 0 a 4 o pendiente.'); end if;
   if response='null'::jsonb then
-   if e->'questionVersion' is distinct from 'null'::jsonb then perform public.textos_fail('Una respuesta pendiente no tiene versión valorada.'); end if;
    if complete then perform public.textos_fail('Falta valorar la respuesta a la pregunta obligatoria.'); end if;
    return null;
   end if;
-  if not public.textos_int(e->'questionVersion') or (e->>'questionVersion')::int<1 then perform public.textos_fail('Seleccione la versión de la pregunta respondida.'); end if;
   if base is null then return null; end if;
   return (base*40/100+response::numeric)*100/44;
  end if;
@@ -820,11 +825,9 @@ end $$;
 
 create or replace function public.textos_presentation_current(s jsonb, e jsonb) returns boolean
 language plpgsql stable set search_path=pg_catalog,public as $$
-declare question jsonb;
 begin
  if e is null or e->>'status'<>'closed' or e->'scaleMax' is distinct from '4'::jsonb or e->'rubricVersion' is distinct from '2'::jsonb then return false; end if;
- question:=public.textos_question_find(s,e->>'publisherId');
- return coalesce(question->'version'=e->'questionVersion' and public.textos_presentation_score_of(e,true) is not null,false);
+ return public.textos_presentation_score_of(e,true) is not null;
 end $$;
 
 create or replace function public.textos_presentation_teacher_matches(t jsonb, area text, block text) returns boolean
@@ -1041,16 +1044,12 @@ begin
  if p_action='presentation_save' then
   perform public.textos_presentation_scores(p_payload->'scores',4);
   perform public.textos_presentation_score_of(p_payload||jsonb_build_object('scaleMax',4),false);
-  if p_payload->'responseScore'<>'null'::jsonb then
-   question:=public.textos_question_find(s,publisher_id);
-   if question is null or question->'version' is distinct from p_payload->'questionVersion' then perform public.textos_fail('La pregunta o respuesta cambió. Actualice antes de puntuarla.','PT409'); end if;
-  end if;
   notes:=coalesce(p_payload->'notes','["","","","","","","","","",""]'::jsonb);
   if jsonb_typeof(notes) is distinct from 'array' then perform public.textos_fail('Observaciones inválidas.'); end if;
   if jsonb_array_length(notes)<>10 or exists(select 1 from jsonb_array_elements(notes) q where jsonb_typeof(q)<>'string') then perform public.textos_fail('Las diez observaciones son opcionales y deben ser texto.'); end if;
   if (p_payload ? 'generalObservation' and jsonb_typeof(p_payload->'generalObservation') is distinct from 'string') or (p_payload ? 'physicalText' and jsonb_typeof(p_payload->'physicalText') is distinct from 'string')
    or (p_payload ? 'materialViewed' and jsonb_typeof(p_payload->'materialViewed') is distinct from 'boolean') then perform public.textos_fail('Datos de observación inválidos.'); end if;
-  entity:=coalesce(ev,'{}')||jsonb_build_object('id',coalesce(ev->>'id',gen_random_uuid()::text),'version',coalesce((ev->>'version')::int,0)+1,'publisherId',publisher_id,'teacherId',actor_id,'area',area,'block',block,'scaleMax',4,'rubricVersion',2,'responseScore',p_payload->'responseScore','questionVersion',p_payload->'questionVersion','scores',p_payload->'scores','notes',notes,'generalObservation',coalesce(p_payload->>'generalObservation',''),'physicalText',coalesce(p_payload->>'physicalText',''),'status','draft','closedAt',null,'updatedAt',nowat,'rulesVersion',s#>'{settings,rules,version}');
+  entity:=coalesce(ev,'{}')||jsonb_build_object('id',coalesce(ev->>'id',gen_random_uuid()::text),'version',coalesce((ev->>'version')::int,0)+1,'publisherId',publisher_id,'teacherId',actor_id,'area',area,'block',block,'scaleMax',4,'rubricVersion',2,'responseScore',p_payload->'responseScore','questionVersion',coalesce(p_payload->'questionVersion',ev->'questionVersion','null'::jsonb),'scores',p_payload->'scores','notes',notes,'generalObservation',coalesce(p_payload->>'generalObservation',''),'physicalText',coalesce(p_payload->>'physicalText',''),'status','draft','closedAt',null,'updatedAt',nowat,'rulesVersion',s#>'{settings,rules,version}');
   if p_payload ? 'materialViewed' then entity:=entity||jsonb_build_object('materialViewed',p_payload->'materialViewed'); end if;
   if nullif(s#>>'{settings,rules,lockedAt}','') is null then
    s:=jsonb_set(s,'{settings,rules,lockedAt}',to_jsonb(nowat));
@@ -1058,8 +1057,6 @@ begin
   end if;
  elsif p_action='presentation_close' then
   perform public.textos_presentation_score_of(ev,true);
-  question:=public.textos_question_find(s,publisher_id);
-  if question is null or question->'version' is distinct from ev->'questionVersion' then perform public.textos_fail('Debe puntuar la respuesta vigente a la pregunta obligatoria.','PT423'); end if;
   entity:=ev||jsonb_build_object('status','closed','closedAt',nowat,'updatedAt',nowat,'version',(ev->>'version')::int+1);
  elsif p_action='presentation_restart_scale' then
   reason:='Actualización explícita de escala 0–2 a 0–4';
@@ -1122,7 +1119,6 @@ language sql immutable set search_path=pg_catalog,public as $$
  select encode(sha256(convert_to(jsonb_build_object(
   'publishers',coalesce(s->'publishers','[]'),
   'series',coalesce(s->'series','[]'),'offers',coalesce(s->'offers','[]'),
-  'questions',coalesce(s->'presentationQuestions','[]'),
   'teachers',coalesce(s->'teachers','[]'),
   'evaluations',coalesce(s->'presentationEvaluations','[]'),
   'rules',s#>'{settings,rules}',
@@ -1537,7 +1533,7 @@ begin
    foreach c in array array['books','assignments','evaluations','reviews','shortlists','sections','rounds'] loop removed:=jsonb_set(removed,array[c],coalesce((select jsonb_agg(x->>'id') from jsonb_array_elements(coalesce(s->c,'[]')) x),'[]')); end loop;
    consequences:=consequences||jsonb_build_array('Se eliminará el archivo por libro y grado; las editoriales, ofertas y evaluaciones de exposición se conservarán.');
   end if;
-  if scope in ('draw','question') then clear_draw:=true; clear_rank:=true; end if;
+  if scope='draw' then clear_draw:=true; clear_rank:=true; end if;
   if scope='ranking' then clear_rank:=true; labels:='["Ranking / Top"]'; end if;
   if scope='draw' then labels:='["Sorteo y cronómetro"]'; end if;
   -- Catalog dependencies can span reviews and their additional assignments.
@@ -1560,7 +1556,6 @@ begin
   for v in select value from jsonb_array_elements(coalesce(s->'offers','[]')) loop if removed->'offers' ? (v->>'id') then q:=public.textos_find(s,'series',v->>'seriesId'); affected:=affected||jsonb_build_array((v->>'area')||'-'||(v->>'block')); publishers:=publishers||jsonb_build_array(q->>'publisherId'); end if; end loop;
   for v in select value from jsonb_array_elements(coalesce(s->'presentationQuestions','[]')) loop
    if removed->'publishers' ? (v->>'publisherId') and not(removed->'presentationQuestions' ? (v->>'id')) then removed:=jsonb_set(removed,'{presentationQuestions}',removed->'presentationQuestions'||jsonb_build_array(v->>'id')); end if;
-   if removed->'presentationQuestions' ? (v->>'id') then publishers:=publishers||jsonb_build_array(v->>'publisherId'); end if;
   end loop;
   foreach c in array array['publishers','series','offers'] loop catalogstate:=public.textos_cleanup_without(catalogstate,c,removed->c); end loop;
   if jsonb_array_length(publishers)>0 then
@@ -1586,12 +1581,7 @@ begin
   nextstate:=jsonb_set(nextstate,'{deliveries}',coalesce((select jsonb_agg(v) from jsonb_array_elements(coalesce(s->'deliveries','[]')) v where not(removed->'rounds' ? (v->>'roundId')) and not(removed->'sections' ? (v->>'sectionId'))),'[]'));
   -- A removed book must not remain an unresolved supersedes reference.
   nextstate:=jsonb_set(nextstate,'{books}',coalesce((select jsonb_agg(case when removed->'books' ? (v->>'supersedesId') then v-'supersedesId' else v end) from jsonb_array_elements(coalesce(nextstate->'books','[]')) v),'[]'));
-  if scope='question' then
-   nextstate:=jsonb_set(nextstate,'{presentationEvaluations}',coalesce((select jsonb_agg(case when publishers ? (v->>'publisherId') and v->'rubricVersion'='2'::jsonb then v||jsonb_build_object('responseScore',null,'questionVersion',null,'status','draft','closedAt',null,'version',(v->>'version')::int+1) else v end) from jsonb_array_elements(coalesce(nextstate->'presentationEvaluations','[]')) v),'[]'));
-   select count(*) into response_count from jsonb_array_elements(coalesce(nextstate->'presentationEvaluations','[]')) v where publishers ? (v->>'publisherId') and v->'rubricVersion'='2'::jsonb;
-   select coalesce(jsonb_agg(v->>'id'),'[]') into rewritten from jsonb_array_elements(coalesce(nextstate->'presentationEvaluations','[]')) v where publishers ? (v->>'publisherId') and v->'rubricVersion'='2'::jsonb;
-   if response_count>0 then consequences:=consequences||jsonb_build_array('Se reabrirán '||response_count||' fichas para volver a valorar la respuesta; sus otros diez criterios se conservarán.'); end if;
-  end if;
+  if scope='question' then consequences:=consequences||jsonb_build_array('Se eliminará solo la confirmación; las fichas, sus puntajes, el sorteo y los resultados se conservarán.'); end if;
   if clear_draw then nextstate:=nextstate-'presentationDraw'; nextstate:=jsonb_set(nextstate,'{turn}',public.textos_empty_state()->'turn'); consequences:=consequences||jsonb_build_array('El sorteo y el cronómetro se reiniciarán.'); end if;
   if clear_rank then nextstate:=nextstate-'presentationRanking'; consequences:=consequences||jsonb_build_array('El ranking se eliminará y deberá generarse nuevamente.'); end if;
   select coalesce(jsonb_agg(x),'[]') into allids from jsonb_each(removed) e cross join lateral jsonb_array_elements(e.value) x;
@@ -1631,7 +1621,6 @@ begin
  delete from public.textos_history h where h.dataset=p_dataset and (scope='all' or plan->'allIds' ? h.reference_id or plan->'teacherNames' ? h.actor or public.textos_cleanup_mentions(h.previous,plan->'allIds'));
  return jsonb_build_object('state',plan->'state','result',jsonb_build_object('deleted',true,'preview',preview),'referenceId',scope,'reason','Eliminación administrativa de información confirmada','history','[]'::jsonb);
 end $$;
-
 -- END DATA CLEANUP HELPERS
 
 create or replace function public.textos_api(p_action text, p_payload jsonb default '{}'::jsonb, p_code text default null, p_dataset text default 'real') returns jsonb
@@ -1906,7 +1895,7 @@ begin
   end loop; result:=entity;
  elsif p_action='turn_control' then
   s:=public.textos_jornada_turn(s,p_payload->>'command',p_payload->>'publisherId',p_payload->'expectedTurn');
-  if p_payload->>'command'='finish' and s#>>'{settings,evaluationMode}'='presentation' and not public.textos_question_can_finish(s,s#>>'{turn,publisherId}') then perform public.textos_fail('Antes de finalizar, registre la pregunta obligatoria del representante docente y la respuesta de la editorial.','PT423'); end if;
+  if p_payload->>'command'='finish' and s#>>'{settings,evaluationMode}'='presentation' and not public.textos_question_can_finish(s,s#>>'{turn,publisherId}') then perform public.textos_fail('Antes de finalizar, marque la casilla que confirma que se hizo la pregunta y la editorial respondió.','PT423'); end if;
   entity:=s->'turn'; command:=p_payload->>'command';
   if command in ('start','next') then
    id:=p_payload->>'publisherId'; if public.textos_find(s,'publishers',id) is null then perform public.textos_fail('Seleccione una editorial.'); end if;

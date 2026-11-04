@@ -62,8 +62,7 @@ export function teacherProgress(state: JornadaState, scope: ProgressScope = {}):
           let completeScore: number | null;
           try { completeScore = presentationScore(form); } catch { conflictingSheets += 1; continue; }
           markedCriteria += form.scores.filter(score => score !== null).length;
-          const question = presentationQuestionForPublisher(state, publisher.id);
-          const currentResponse = presentationUsesCurrentRubric(form) && isQuestionAnswered(question) && form.questionVersion === question?.version && form.responseScore !== null && form.responseScore !== undefined;
+          const currentResponse = presentationUsesCurrentRubric(form) && form.responseScore !== null && form.responseScore !== undefined;
           if (currentResponse) markedCriteria += 1;
           if (form.status === 'closed' && completeScore !== null && currentResponse) closedSheets += 1;
         }

@@ -44,7 +44,7 @@ begin
    foreach c in array array['books','assignments','evaluations','reviews','shortlists','sections','rounds'] loop removed:=jsonb_set(removed,array[c],coalesce((select jsonb_agg(x->>'id') from jsonb_array_elements(coalesce(s->c,'[]')) x),'[]')); end loop;
    consequences:=consequences||jsonb_build_array('Se eliminará el archivo por libro y grado; las editoriales, ofertas y evaluaciones de exposición se conservarán.');
   end if;
-  if scope in ('draw','question') then clear_draw:=true; clear_rank:=true; end if;
+  if scope='draw' then clear_draw:=true; clear_rank:=true; end if;
   if scope='ranking' then clear_rank:=true; labels:='["Ranking / Top"]'; end if;
   if scope='draw' then labels:='["Sorteo y cronómetro"]'; end if;
   -- Catalog dependencies can span reviews and their additional assignments.
@@ -67,7 +67,6 @@ begin
   for v in select value from jsonb_array_elements(coalesce(s->'offers','[]')) loop if removed->'offers' ? (v->>'id') then q:=public.textos_find(s,'series',v->>'seriesId'); affected:=affected||jsonb_build_array((v->>'area')||'-'||(v->>'block')); publishers:=publishers||jsonb_build_array(q->>'publisherId'); end if; end loop;
   for v in select value from jsonb_array_elements(coalesce(s->'presentationQuestions','[]')) loop
    if removed->'publishers' ? (v->>'publisherId') and not(removed->'presentationQuestions' ? (v->>'id')) then removed:=jsonb_set(removed,'{presentationQuestions}',removed->'presentationQuestions'||jsonb_build_array(v->>'id')); end if;
-   if removed->'presentationQuestions' ? (v->>'id') then publishers:=publishers||jsonb_build_array(v->>'publisherId'); end if;
   end loop;
   foreach c in array array['publishers','series','offers'] loop catalogstate:=public.textos_cleanup_without(catalogstate,c,removed->c); end loop;
   if jsonb_array_length(publishers)>0 then
@@ -93,12 +92,7 @@ begin
   nextstate:=jsonb_set(nextstate,'{deliveries}',coalesce((select jsonb_agg(v) from jsonb_array_elements(coalesce(s->'deliveries','[]')) v where not(removed->'rounds' ? (v->>'roundId')) and not(removed->'sections' ? (v->>'sectionId'))),'[]'));
   -- A removed book must not remain an unresolved supersedes reference.
   nextstate:=jsonb_set(nextstate,'{books}',coalesce((select jsonb_agg(case when removed->'books' ? (v->>'supersedesId') then v-'supersedesId' else v end) from jsonb_array_elements(coalesce(nextstate->'books','[]')) v),'[]'));
-  if scope='question' then
-   nextstate:=jsonb_set(nextstate,'{presentationEvaluations}',coalesce((select jsonb_agg(case when publishers ? (v->>'publisherId') and v->'rubricVersion'='2'::jsonb then v||jsonb_build_object('responseScore',null,'questionVersion',null,'status','draft','closedAt',null,'version',(v->>'version')::int+1) else v end) from jsonb_array_elements(coalesce(nextstate->'presentationEvaluations','[]')) v),'[]'));
-   select count(*) into response_count from jsonb_array_elements(coalesce(nextstate->'presentationEvaluations','[]')) v where publishers ? (v->>'publisherId') and v->'rubricVersion'='2'::jsonb;
-   select coalesce(jsonb_agg(v->>'id'),'[]') into rewritten from jsonb_array_elements(coalesce(nextstate->'presentationEvaluations','[]')) v where publishers ? (v->>'publisherId') and v->'rubricVersion'='2'::jsonb;
-   if response_count>0 then consequences:=consequences||jsonb_build_array('Se reabrirán '||response_count||' fichas para volver a valorar la respuesta; sus otros diez criterios se conservarán.'); end if;
-  end if;
+  if scope='question' then consequences:=consequences||jsonb_build_array('Se eliminará solo la confirmación; las fichas, sus puntajes, el sorteo y los resultados se conservarán.'); end if;
   if clear_draw then nextstate:=nextstate-'presentationDraw'; nextstate:=jsonb_set(nextstate,'{turn}',public.textos_empty_state()->'turn'); consequences:=consequences||jsonb_build_array('El sorteo y el cronómetro se reiniciarán.'); end if;
   if clear_rank then nextstate:=nextstate-'presentationRanking'; consequences:=consequences||jsonb_build_array('El ranking se eliminará y deberá generarse nuevamente.'); end if;
   select coalesce(jsonb_agg(x),'[]') into allids from jsonb_each(removed) e cross join lateral jsonb_array_elements(e.value) x;

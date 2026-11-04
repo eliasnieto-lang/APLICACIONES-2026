@@ -1,10 +1,10 @@
 {
-  "at": "2026-11-04T18:03:33.168Z",
+  "at": "2026-11-04T18:54:34.481Z",
   "backend": "Node/Express + PostgreSQL + PostgREST reales; QR y OMR reales en Chromium",
   "passed": 8,
   "checks": [
     "server draw saves one random participation order and shares that exact order with teacher and public views",
-    "live-room controls start, finish and advance atomically through every drawn editorial",
+    "a single checkbox confirms each question and answer while existing teacher scores remain independent",
     "Subdirector home opens server-generated ranking with final values and every teacher reaches 100% confirmed progress",
     "paper UI creates an anonymous two-area election and serves the actual one-page A5 PDF through its CSP-permitted blob frame",
     "a real rasterized A5 photograph passes local QR and mark recognition and immediately updates server vote aggregates",

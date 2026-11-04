@@ -27,105 +27,137 @@ for (let index = 1; index <= 3; index++) publishers.push(await ok('publisher_sav
 const teacher = await ok('teacher_register', { firstNames: 'Lucía', lastNames: 'Representante reservado', area: 'MAT', categories: ['P1'] }, null);
 const secretary = await ok('access_create', { role: 'secretary', name: 'Mesa de preguntas' });
 const representative = 'Representante reservado Lucía';
-const base = (publisherId, expectedVersion = 0) => ({ publisherId, expectedVersion, representativeName: representative, area: 'COM', question: '¿Cómo acompaña el material la comprensión de textos?', answer: 'La editorial explicó una actividad y cómo retroalimentar la interpretación.', status: 'answered' });
-let first, draw;
+const confirmation = (publisherId, expectedVersion = 0, confirmed = true) => ({ publisherId, expectedVersion, confirmed });
+const details = (publisherId, expectedVersion = 0) => ({ publisherId, expectedVersion, representativeName: representative, area: 'COM', question: '¿Cómo acompaña el material la comprensión de textos?', answer: 'La editorial explicó una actividad y cómo retroalimentar la interpretación.', status: 'answered' });
+const fields = (publisherId, expectedVersion = 0, responseScore = 0) => ({ publisherId, expectedVersion, area: 'MAT', block: 'P1', scaleMax: 4, rubricVersion: 2, scores: Array(10).fill(0), responseScore, notes: Array(10).fill(''), generalObservation: '', physicalText: '' });
+let first, draw, independentlyClosed;
 
-await check('solo Subdirección registra la pregunta y se validan editorial y tipos', async () => {
-  await reject('presentation_question_save', base(publishers[0].id), 401, null);
-  await reject('presentation_question_save', base(publishers[0].id), 403, teacher.code);
-  await reject('presentation_question_save', base(publishers[0].id), 403, secretary.code);
-  await reject('presentation_question_save', base('missing'), 404);
-  await reject('presentation_question_save', { ...base(publishers[0].id), representativeName: 123 }, 400);
-  await reject('presentation_question_save', { ...base(publishers[0].id), area: 'SCI' }, 400);
+await check('solo Subdirección confirma la casilla y se validan editorial y tipos', async () => {
+  await reject('presentation_question_save', confirmation(publishers[0].id), 401, null);
+  await reject('presentation_question_save', confirmation(publishers[0].id), 403, teacher.code);
+  await reject('presentation_question_save', confirmation(publishers[0].id), 403, secretary.code);
+  await reject('presentation_question_save', confirmation('missing'), 404);
+  for (const confirmed of ['true', null, 1]) await reject('presentation_question_save', { ...confirmation(publishers[0].id), confirmed }, 400);
+  await reject('presentation_question_save', { ...confirmation(publishers[0].id), representativeName: 123 }, 400);
+  await reject('presentation_question_save', { ...confirmation(publishers[0].id), area: 'SCI' }, 400);
 });
 
-await check('una pregunta puede prepararse como borrador pero no habilita finalizar', async () => {
-  await reject('presentation_question_save', base(publishers[0].id), 423);
-  first = await ok('presentation_question_save', { ...base(publishers[0].id), question: '¿Qué evidencia propone?', answer: '', status: 'draft' });
-  assert(first.version > 0); assert.equal(first.status, 'draft'); assert.equal(first.askedAt, null); assert.equal(first.answeredAt, null);
+await check('I11 se puntúa y cierra antes de empezar la sala, sin autorización ni versión de pregunta', async () => {
+  assert.equal(((await state()).presentationQuestions ?? []).length, 0); assert.equal((await state()).turn.status, 'ready');
+  const draft = await ok('presentation_save', fields(publishers[0].id), teacher.code);
+  assert.equal(draft.responseScore, 0); assert.equal(draft.questionVersion, null);
+  independentlyClosed = await ok('presentation_close', { evaluationId: draft.id, expectedVersion: draft.version, scaleMax: 4, rubricVersion: 2 }, teacher.code);
+  assert.equal(independentlyClosed.status, 'closed'); assert.equal(independentlyClosed.responseScore, 0);
+  const summary = await ok('presentation_summary', { area: 'MAT', block: 'P1' });
+  assert.equal(summary.ranked.find(item => item.publisherId === publishers[0].id).closed, 1);
+  assert.equal(summary.ranked.find(item => item.publisherId === publishers[0].id).score, 0);
+});
+
+await check('una casilla desmarcada no confirma el hecho ni permite finalizar la exposición', async () => {
+  first = await ok('presentation_question_save', confirmation(publishers[0].id, 0, false));
+  assert(first.version > 0); assert.equal(first.status, 'draft'); assert.equal(first.confirmed, false); assert.equal(first.askedAt, null); assert.equal(first.answeredAt, null);
   assert.equal(sql(`select public.textos_question_can_finish(state,'${publishers[0].id}') from public.textos_datasets where id='demo'`), 'f');
   await ok('turn_control', { command: 'start', publisherId: publishers[0].id });
   const before = frozen(); await reject('turn_control', { command: 'finish' }, 423); assert.equal(frozen(), before);
 });
 
-await check('la respuesta exige nombre, pregunta y resumen pero puede ser de cualquier área', async () => {
-  for (const key of ['representativeName', 'question', 'answer']) await reject('presentation_question_save', { ...base(publishers[0].id, first.version), [key]: '  ' }, 400);
+await check('confirmar exige solo la casilla, sin nombre, área, pregunta ni transcripción de la respuesta', async () => {
   const previousVersion = first.version;
-  first = await ok('presentation_question_save', base(publishers[0].id, first.version));
-  assert.equal(first.status, 'answered'); assert.equal(first.area, 'COM'); assert.equal(first.representativeName, representative);
+  first = await ok('presentation_question_save', confirmation(publishers[0].id, first.version));
+  assert.equal(first.status, 'answered'); assert.equal(first.confirmed, true);
+  for (const key of ['representativeName', 'area', 'question', 'answer']) assert(!Object.hasOwn(first, key));
   assert(first.askedAt); assert(first.answeredAt); assert.equal(first.version, previousVersion + 1);
   assert.equal(sql(`select public.textos_question_can_finish(state,'${publishers[0].id}') from public.textos_datasets where id='demo'`), 't');
 });
 
-await check('las correcciones previas al cierre exigen CAS y motivo y conservan su historial', async () => {
-  await reject('presentation_question_save', { ...base(publishers[0].id, 1), answer: 'Otro resumen' }, 409);
-  await reject('presentation_question_save', { ...base(publishers[0].id, first.version), answer: 'Resumen corregido' }, 400);
-  const old = first;
-  first = await ok('presentation_question_save', { ...base(publishers[0].id, first.version), answer: 'Resumen corregido con la actividad observada.', reason: 'Aclaración de la respuesta escuchada antes de cerrar' });
-  assert.equal(first.version, old.version + 1);
-  assert((await ok('backup_get')).history.some(item => item.entity === 'presentationQuestions' && item.previous.id === old.id && item.previous.answer === old.answer));
+await check('antes de finalizar se corrige la casilla con CAS, sin motivo ni alterar fichas cerradas', async () => {
+  const originalForms = (await state()).presentationEvaluations;
+  const originalFingerprint = sql("select public.textos_jornada_fingerprint(state) from public.textos_datasets where id='demo'");
+  const stale = first.version;
+  first = await ok('presentation_question_save', confirmation(publishers[0].id, first.version, false));
+  assert.equal(first.status, 'draft');
+  await reject('presentation_question_save', confirmation(publishers[0].id, stale), 409);
+  first = await ok('presentation_question_save', confirmation(publishers[0].id, first.version));
+  assert.deepEqual((await state()).presentationEvaluations, originalForms);
+  assert.equal(sql("select public.textos_jornada_fingerprint(state) from public.textos_datasets where id='demo'"), originalFingerprint);
+  const summary = await ok('presentation_summary', { area: 'MAT', block: 'P1' }); assert.equal(summary.ranked.find(item => item.publisherId === publishers[0].id).closed, 1);
 });
 
-await check('finalizar no espera las notas pero conserva la respuesta que los docentes valorarán', async () => {
+await check('finalizar conserva la confirmación y una repetición idéntica no crea otra versión', async () => {
   await ok('turn_control', { command: 'finish' }); assert.equal((await state()).turn.status, 'finished');
   const before = frozen();
-  await reject('presentation_question_save', { ...base(publishers[0].id, first.version), answer: 'Cambio posterior', reason: 'No debe cambiar una respuesta después de finalizar' }, 423);
-  assert.equal(frozen(), before); assert.equal((await state()).presentationEvaluations.length, 0);
+  await reject('presentation_question_save', confirmation(publishers[0].id, first.version, false), 423);
+  assert.equal(frozen(), before);
+  const repeated = await ok('presentation_question_save', confirmation(publishers[0].id, first.version)); assert.deepEqual(repeated, first);
+  assert.deepEqual((await state()).presentationEvaluations.find(item => item.id === independentlyClosed.id), independentlyClosed);
 });
 
-await check('dos pantallas guardan una sola versión nueva y no sobrescriben la pregunta', async () => {
-  const payload = { ...base(publishers[1].id), status: 'draft', answer: '' };
-  const replies = await Promise.all([rpc('presentation_question_save', { ...payload, question: 'Pregunta desde pantalla A' }), rpc('presentation_question_save', { ...payload, question: 'Pregunta desde pantalla B' })]);
+await check('dos pantallas crean una sola confirmación y no sobrescriben el valor de la otra', async () => {
+  const replies = await Promise.all([rpc('presentation_question_save', confirmation(publishers[1].id, 0, false)), rpc('presentation_question_save', confirmation(publishers[1].id))]);
   assert.deepEqual(replies.map(item => item.status).sort(), [200, 409]);
   const questions = (await state()).presentationQuestions.filter(item => item.publisherId === publishers[1].id); assert.equal(questions.length, 1); assert(questions[0].version > 0);
 });
 
-await check('cada editorial sorteada requiere su propia pregunta y respuesta antes de avanzar', async () => {
+await check('la casilla conserva los datos anteriores de la pregunta sin volver a pedirlos', async () => {
+  const prior = (await state()).presentationQuestions.find(item => item.publisherId === publishers[1].id);
+  const detailed = await ok('presentation_question_save', details(publishers[1].id, prior.version));
+  assert.equal(detailed.area, 'COM'); assert.equal(detailed.representativeName, representative);
+  const off = await ok('presentation_question_save', confirmation(publishers[1].id, detailed.version, false));
+  const on = await ok('presentation_question_save', confirmation(publishers[1].id, off.version));
+  for (const key of ['representativeName', 'area', 'question', 'answer']) assert.equal(on[key], detailed[key]);
+});
+
+await check('cada editorial sorteada requiere su propia casilla antes de avanzar', async () => {
   draw = await ok('presentation_draw', { expectedVersion: 0, confirmArrivals: true });
   for (const [index, publisher] of draw.publishers.entries()) {
     await ok('turn_control', { command: index === 0 ? 'start' : 'next', publisherId: publisher.id });
     const question = (await state()).presentationQuestions.find(item => item.publisherId === publisher.id);
     if (question?.status !== 'answered') {
       await reject('turn_control', { command: 'finish' }, 423);
-      await ok('presentation_question_save', base(publisher.id, question?.version ?? 0));
+      await ok('presentation_question_save', confirmation(publisher.id, question?.version ?? 0));
     }
     await ok('turn_control', { command: 'finish' });
   }
   assert.deepEqual((await state()).presentationDraw.completedPublisherIds, draw.publishers.map(item => item.id));
 });
 
-await check('las preguntas respondidas se comparten sin publicar el nombre del representante ni campos privados', async () => {
+await check('la proyección comparte confirmaciones y datos antiguos sin filtrar identidad o campos privados', async () => {
   const backup = await ok('backup_get'); backup.state.presentationQuestions[0].privateTeacherNotes = 'NOTA PRIVADA DE PREGUNTAS';
   await ok('restore_apply', { backup, confirmation: 'RESTAURAR', reason: 'Ensayo de proyección enumerada de las preguntas' });
   const publicState = (await ok('public_snapshot', {}, null)).state;
-  assert.equal(publicState.presentationQuestions.length, 3); assert(publicState.presentationQuestions.every(item => item.status === 'answered'));
+  assert.equal(publicState.presentationQuestions.length, 3); assert(publicState.presentationQuestions.every(item => item.status === 'answered' && item.confirmed));
   assert(!JSON.stringify(publicState.presentationQuestions).includes(representative)); assert(!JSON.stringify(publicState.presentationQuestions).includes('NOTA PRIVADA DE PREGUNTAS'));
-  const own = (await ok('snapshot', {}, teacher.code)).state; assert(own.presentationQuestions.every(item => item.question && item.answer)); assert(!JSON.stringify(own.presentationQuestions).includes('NOTA PRIVADA DE PREGUNTAS'));
+  const own = (await ok('snapshot', {}, teacher.code)).state; assert.equal(own.presentationQuestions.length, 3); assert(!JSON.stringify(own.presentationQuestions).includes('NOTA PRIVADA DE PREGUNTAS'));
 });
 
-await check('los respaldos rechazan preguntas huérfanas, duplicadas o confirmadas sin respuesta', async () => {
+await check('los respaldos rechazan confirmaciones huérfanas, duplicadas o incoherentes', async () => {
   const backup = await ok('backup_get');
   const missing = structuredClone(backup); missing.state.presentationQuestions[0].publisherId = 'missing'; await reject('restore_preview', { backup: missing }, 400);
   const duplicate = structuredClone(backup); duplicate.state.presentationQuestions.push({ ...duplicate.state.presentationQuestions[0], id: 'duplicate-question' }); await reject('restore_preview', { backup: duplicate }, 400);
-  const empty = structuredClone(backup); empty.state.presentationQuestions[0].answer = ''; await reject('restore_preview', { backup: empty }, 400);
+  const mismatch = structuredClone(backup); mismatch.state.presentationQuestions[0].confirmed = false; await reject('restore_preview', { backup: mismatch }, 400);
+  const type = structuredClone(backup); type.state.presentationQuestions[0].confirmed = 'true'; await reject('restore_preview', { backup: type }, 400);
+  const previous = structuredClone(backup); previous.state.presentationQuestions[0] = { ...details(publishers[0].id), ...previous.state.presentationQuestions[0], question: '', representativeName: representative, area: 'COM', answer: 'Texto anterior' }; delete previous.state.presentationQuestions[0].confirmed; await reject('restore_preview', { backup: previous }, 400);
 });
 
-await check('reaplicar el esquema no borra preguntas, respuestas, cierres ni historial', async () => {
+await check('reaplicar el esquema no borra confirmaciones, notas, cierres ni historial', async () => {
   const before = frozen();
   execFileSync('docker', ['--host=unix:///var/run/docker.sock', 'exec', '-i', db, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres'], { env, input: readFileSync(new URL('../supabase/schema.sql', import.meta.url)), stdio: ['pipe', 'pipe', 'pipe'] });
   assert.equal(frozen(), before);
   const response = await fetch(`${url}/rpc/textos_question_can_finish`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ s: {}, publisher_id: 'x' }) });
   assert([401, 403].includes(response.status));
 });
-await check('recrear una pregunta borrada nunca reutiliza su versión ni acepta la nota de una respuesta anterior', async () => {
-  const previous = (await state()).presentationQuestions.find(item => item.publisherId === publishers[1].id);
+
+await check('borrar y recrear la confirmación no reabre ni cambia I11 y puede recuperarse tras finalizar', async () => {
+  const previous = (await state()).presentationQuestions.find(item => item.publisherId === publishers[0].id);
+  const originalForms = (await state()).presentationEvaluations;
   const preview = await ok('data_delete_preview', { scope: 'question', ids: [previous.id] });
+  assert.equal(preview.counts.responseScores, 0); assert.equal(preview.counts.presentationDraw, 0); assert.equal(preview.counts.presentationRanking, 0);
   await ok('data_delete_apply', { scope: 'question', ids: [previous.id], expectedVersion: preview.stateVersion, confirmation: 'ELIMINAR' });
-  await ok('turn_control', { command: 'start', publisherId: previous.publisherId });
-  const fresh = await ok('presentation_question_save', base(previous.publisherId)); assert(fresh.version > previous.version); assert.notEqual(fresh.id, previous.id);
-  const current = (await state()).presentationEvaluations.find(item => item.teacherId === teacher.snapshot.actor.id && item.publisherId === previous.publisherId && item.block === 'P1');
-  const fields = { publisherId: previous.publisherId, area: 'MAT', block: 'P1', scaleMax: 4, rubricVersion: 2, scores: Array(10).fill(0), responseScore: null, questionVersion: null, notes: Array(10).fill(''), generalObservation: '', physicalText: '', expectedVersion: current?.version ?? 0 };
-  const draft = await ok('presentation_save', fields, teacher.code);
-  await reject('presentation_save', { ...fields, expectedVersion: draft.version, responseScore: 4, questionVersion: previous.version }, 409, teacher.code);
+  assert.deepEqual((await state()).presentationEvaluations, originalForms); assert.deepEqual((await state()).presentationDraw.completedPublisherIds, draw.publishers.map(item => item.id));
+  const fresh = await ok('presentation_question_save', confirmation(previous.publisherId)); assert(fresh.version > previous.version); assert.notEqual(fresh.id, previous.id);
+  assert.deepEqual((await state()).presentationEvaluations, originalForms);
+  const independentlySaved = await ok('presentation_save', { ...fields(publishers[1].id, 0, 4), questionVersion: previous.version }, teacher.code);
+  const independentlyFinalized = await ok('presentation_close', { evaluationId: independentlySaved.id, expectedVersion: independentlySaved.version, scaleMax: 4, rubricVersion: 2 }, teacher.code);
+  assert.equal(independentlyFinalized.status, 'closed'); assert.equal(independentlyFinalized.responseScore, 4);
 });
-console.log(`${checks} pruebas SQL/HTTP de pregunta obligatoria aprobadas.`);
+console.log(`${checks} pruebas SQL/HTTP de confirmación simple e I11 independiente aprobadas.`);

@@ -44,8 +44,7 @@ async function fixture(evaluations = [], options = {}) {
     if (action === 'presentation_save') {
       assert.equal(payload.scores.length, 10); assert(payload.scores.every(value => value === null || Number.isInteger(value) && value >= 0 && value <= 4));
       assert(payload.responseScore === null || Number.isInteger(payload.responseScore) && payload.responseScore >= 0 && payload.responseScore <= 4);
-      if (payload.responseScore === null) assert.equal(payload.questionVersion, null);
-      else assert(state.presentationQuestions.some(question => question.publisherId === payload.publisherId && question.status === 'answered' && question.version === payload.questionVersion));
+      assert(payload.questionVersion === null || Number.isInteger(payload.questionVersion));
       const result = { ...(existing ?? fresh({ version: 0 })), ...payload, teacherId: 'scale-teacher', version: (existing?.version ?? 0) + 1, updatedAt: new Date().toISOString() };
       delete result.expectedVersion;
       state.presentationEvaluations = state.presentationEvaluations.filter(item => item.id !== result.id).concat(result);
@@ -53,7 +52,7 @@ async function fixture(evaluations = [], options = {}) {
     }
     assert(existing);
     if (action === 'presentation_close') {
-      assert(existing.scores.every(value => value !== null)); assert.equal(existing.scaleMax, 4); assert.equal(existing.rubricVersion, 2); assert.notEqual(existing.responseScore, null); assert(state.presentationQuestions.some(question => question.publisherId === existing.publisherId && question.status === 'answered' && question.version === existing.questionVersion));
+      assert(existing.scores.every(value => value !== null)); assert.equal(existing.scaleMax, 4); assert.equal(existing.rubricVersion, 2); assert.notEqual(existing.responseScore, null);
       Object.assign(existing, { version: existing.version + 1, status: 'closed', closedAt: new Date().toISOString() });
       return route.fulfill({ json: existing });
     }
@@ -74,7 +73,7 @@ async function fixture(evaluations = [], options = {}) {
     await result.goto(base); await result.getByRole('heading', { name: 'Evaluar exposición', exact: true }).waitFor();
     return result;
   }
-  return { context, state, calls, history, page, setOffline(value) { offline = value; }, answerQuestion() { state.presentationQuestions = structuredClone(questions); } };
+  return { context, state, calls, history, page, setOffline(value) { offline = value; }, answerQuestion() { state.presentationQuestions = structuredClone(questions); }, clearQuestion() { state.presentationQuestions = []; } };
 }
 
 try {
@@ -108,7 +107,7 @@ try {
       for (let i = 2; i <= 11; i++) await scoreButton(p, i, 0).click();
       await p.getByRole('button', { name: 'Cerrar mi ficha', exact: true }).click();
       await p.getByText('El servidor confirmó el cierre de esta ficha.', { exact: false }).waitFor();
-      assert.deepEqual(f.state.presentationEvaluations[0].scores, Array(10).fill(0)); assert.equal(f.state.presentationEvaluations[0].responseScore, 0); assert.equal(f.state.presentationEvaluations[0].questionVersion, 1);
+      assert.deepEqual(f.state.presentationEvaluations[0].scores, Array(10).fill(0)); assert.equal(f.state.presentationEvaluations[0].responseScore, 0); assert.equal(f.state.presentationEvaluations[0].questionVersion, null);
       await p.getByText('Total: 0 / 44 · Mi nota: 0.00 / 100', { exact: true }).waitFor();
       assert(f.calls.filter(call => call.action !== 'snapshot').every(call => call.payload.scaleMax === 4));
     } finally { await f.context.close(); }
@@ -133,7 +132,7 @@ try {
       f.setOffline(true); await scoreButton(p, 1, 0).click(); await scoreButton(p, 2, 4).click(); await scoreButton(p, 11, 4).click();
       await p.getByLabel('Observación general (opcional)', { exact: true }).fill('observación secreta del borrador actual');
       await p.getByText('Sin sincronizar; se reintentará al volver la conexión', { exact: true }).waitFor();
-      const local = await p.evaluate(() => window.presentationScaleFixture.currentDraft()); assert.equal(local.scaleMax, 4); assert.equal(local.rubricVersion, 2); assert.equal(local.responseScore, 4); assert.equal(local.questionVersion, 1); assert.deepEqual(local.scores, [0, 4, ...Array(8).fill(null)]);
+      const local = await p.evaluate(() => window.presentationScaleFixture.currentDraft()); assert.equal(local.scaleMax, 4); assert.equal(local.rubricVersion, 2); assert.equal(local.responseScore, 4); assert.equal(local.questionVersion, null); assert.deepEqual(local.scores, [0, 4, ...Array(8).fill(null)]);
       const raw = await p.evaluate(() => JSON.stringify({ ...localStorage })); assert(!raw.includes('observación secreta')); assert(!raw.includes('respaldo de escala anterior'));
       for (const [key, value] of Object.entries(oldKeys)) assert.equal(await p.evaluate(key => localStorage.getItem(key), key), value);
       await p.reload(); await p.getByRole('button', { name: 'Recuperar borrador', exact: true }).waitFor();
@@ -181,17 +180,34 @@ try {
     } finally { await f.context.close(); }
   });
 
-  await check('before the common question is answered only the first ten criteria can save and the sheet cannot close', async () => {
+  await check('all eleven criteria can save and close before any live-room turn or confirmation', async () => {
     const f = await fixture([], { answered: false });
     try {
-      const p = await f.page(); assert(await scoreButton(p, 11, 4).isDisabled());
+      const p = await f.page(); assert(await scoreButton(p, 11, 4).isEnabled());
+      assert.equal(f.state.turn.publisherId, null); assert.equal(f.state.presentationQuestions.length, 0);
       for (let criterion = 1; criterion <= 10; criterion++) await scoreButton(p, criterion, 4).click();
-      await waitFor(() => f.state.presentationEvaluations[0]?.scores.every(value => value === 4), 'Ten ratings were not saved');
-      assert.equal(f.state.presentationEvaluations[0].responseScore, null); assert.equal(f.state.presentationEvaluations[0].questionVersion, null);
-      assert(await p.getByRole('button', { name: 'Cerrar mi ficha', exact: true }).isDisabled()); assert.equal(f.calls.filter(call => call.action === 'presentation_close').length, 0);
-      f.answerQuestion(); await p.evaluate(() => window.presentationScaleFixture.refresh()); await scoreButton(p, 11, 0).click();
-      await p.getByRole('button', { name: 'Cerrar mi ficha', exact: true }).click(); await p.getByText('Total: 40 / 44 · Mi nota: 90.91 / 100', { exact: true }).waitFor();
-      assert.equal(f.state.presentationEvaluations[0].responseScore, 0); assert.equal(f.state.presentationEvaluations[0].status, 'closed');
+      await scoreButton(p, 11, 0).click();
+      await p.getByRole('button', { name: 'Cerrar mi ficha', exact: true }).click();
+      await p.getByText('Total: 40 / 44 · Mi nota: 90.91 / 100', { exact: true }).waitFor();
+      assert.equal(f.state.presentationEvaluations[0].responseScore, 0); assert.equal(f.state.presentationEvaluations[0].questionVersion, null);
+      assert.equal(f.state.presentationEvaluations[0].status, 'closed'); assert.equal(f.state.presentationQuestions.length, 0);
+    } finally { await f.context.close(); }
+  });
+
+  await check('confirming or withdrawing the live-room checkbox never clears an evaluator answer or creates an extra save', async () => {
+    const f = await fixture([], { answered: false });
+    try {
+      const p = await f.page(); await scoreButton(p, 11, 4).click();
+      await waitFor(() => f.state.presentationEvaluations[0]?.responseScore === 4, 'I11 did not save without a confirmation');
+      const saved = structuredClone(f.state.presentationEvaluations[0]);
+      const saves = f.calls.filter(call => call.action === 'presentation_save').length;
+      f.answerQuestion(); await p.evaluate(() => window.presentationScaleFixture.refresh());
+      assert.equal(await scoreButton(p, 11, 4).getAttribute('aria-pressed'), 'true');
+      f.clearQuestion(); await p.evaluate(() => window.presentationScaleFixture.refresh());
+      assert.equal(await scoreButton(p, 11, 4).getAttribute('aria-pressed'), 'true');
+      await p.waitForTimeout(1000);
+      assert.deepEqual(f.state.presentationEvaluations[0], saved);
+      assert.equal(f.calls.filter(call => call.action === 'presentation_save').length, saves);
     } finally { await f.context.close(); }
   });
 

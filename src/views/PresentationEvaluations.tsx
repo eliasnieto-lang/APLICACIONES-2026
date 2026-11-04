@@ -18,7 +18,7 @@ function isConflict(error: unknown) {
   return candidate?.code === 'PT409' || candidate?.status === 409 || /409|conflicto|otra pestaña|versión.*cambi|version.*conflict/i.test(messageOf(error));
 }
 function validDraft(value: LocalDraft): boolean {
-  return value.scaleMax === 4 && value.rubricVersion === 2 && (value.responseScore === null || Number.isInteger(value.responseScore) && value.responseScore >= 0 && value.responseScore <= 4) && (value.responseScore === null ? value.questionVersion === null : Number.isInteger(value.questionVersion) && value.questionVersion! > 0) && Array.isArray(value.scores) && value.scores.length === 10 && value.scores.every(score => score === null || Number.isInteger(score) && score >= 0 && score <= 4)
+  return value.scaleMax === 4 && value.rubricVersion === 2 && (value.responseScore === null || Number.isInteger(value.responseScore) && value.responseScore >= 0 && value.responseScore <= 4) && (value.questionVersion === null || Number.isInteger(value.questionVersion) && value.questionVersion! > 0) && Array.isArray(value.scores) && value.scores.length === 10 && value.scores.every(score => score === null || Number.isInteger(score) && score >= 0 && score <= 4)
     && Array.isArray(value.notes) && value.notes.length === 10 && value.notes.every(note => typeof note === 'string')
     && typeof value.generalObservation === 'string' && typeof value.physicalText === 'string'
     && Number.isInteger(value.baseVersion) && value.baseVersion >= 0 && typeof value.savedAt === 'string';
@@ -158,8 +158,6 @@ function CurrentPresentationEditor({ snapshot, api, refresh, notify, publisher, 
   const closePendingRef = useRef(false);
   const [closePending, setClosePending] = useState(false);
   const [tick, setTick] = useState(0);
-  const question = snapshot.state.presentationQuestions?.find(item => item.publisherId === publisher.id && item.status === 'answered');
-  const responseCurrent = !!question && fields.questionVersion === question.version;
   const completed = fields.scores.filter(value => value !== null).length + (fields.responseScore === null ? 0 : 1);
   const score = presentationScore({ scores: fields.scores, scaleMax: 4, rubricVersion: 2, responseScore: fields.responseScore, questionVersion: fields.questionVersion });
   const total = fields.scores.reduce<number>((sum, value) => sum + (value ?? 0), 0) + (fields.responseScore ?? 0);
@@ -265,14 +263,8 @@ function CurrentPresentationEditor({ snapshot, api, refresh, notify, publisher, 
     return () => { window.removeEventListener('online', online); window.removeEventListener('beforeunload', leave); };
   }, []);
 
-  useEffect(() => {
-    if (!closed && fieldsRef.current.responseScore !== null && (!question || fieldsRef.current.questionVersion !== question.version)) edit({ ...fieldsRef.current, responseScore: null, questionVersion: null });
-  // Published question revisions never reuse a rating of a different response.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [question?.version, closed]);
-
   async function closeEvaluation() {
-    if (completed !== 11 || !responseCurrent || conflictRef.current || busy.current || closedRef.current) return;
+    if (completed !== 11 || conflictRef.current || busy.current || closedRef.current) return;
     setClosing(true); closePendingRef.current = true; setClosePending(true);
     await persistLocal();
     if (dirty.current) await saveCurrent();
@@ -351,9 +343,8 @@ function CurrentPresentationEditor({ snapshot, api, refresh, notify, publisher, 
           <div className="field"><label htmlFor={`${fieldPrefix}-notes-${index}`}>Observación del criterio (opcional)</label><textarea id={`${fieldPrefix}-notes-${index}`} aria-describedby={`${fieldPrefix}-criterion-${index}`} value={fields.notes[index]} rows={2} onChange={event => editArray('notes', index, event.target.value)} placeholder="Puede anotar lo observado durante la presentación o en el ejemplar" /></div>
         </section>;
       })}
-      <section className="card stack"><h3 id={`${fieldPrefix}-question`}>I11. Respuesta a la pregunta obligatoria</h3><p>Valore la claridad, pertinencia y sustento de la respuesta que escuchó, aunque la pregunta corresponda a cualquiera de las dos áreas. Este es un complemento institucional de la jornada.</p>{question ? <><p><strong>Pregunta:</strong> {question.question}</p><p><strong>Respuesta registrada:</strong> {question.answer}</p><p className="muted">Versión {question.version} · {AREAS.find(item => item.id === question.area)?.label}</p></> : <div className="notice warning">Un representante docente debe formular la pregunta y Subdirección registrar la respuesta en Sala en vivo. Puede guardar los otros diez criterios mientras tanto.</div>}
-        <div className="score-buttons presentation-score-buttons" role="group" aria-labelledby={`${fieldPrefix}-question`} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 130px), 1fr))', gap: 8 }}>{PRESENTATION_SCALE.map(({ value, label }) => <button type="button" key={value} disabled={!question} aria-pressed={fields.responseScore === value && responseCurrent} className={fields.responseScore === value && responseCurrent ? 'selected' : 'secondary'} onClick={() => edit({ ...fieldsRef.current, responseScore: value, questionVersion: question!.version })} style={{ minWidth: 0, minHeight: 88, padding: '12px 8px', flexDirection: 'column', gap: 4 }} aria-label={`I11: ${value} puntos · ${label}`}><strong style={{ fontSize: 24 }}>{value}</strong><span style={{ fontSize: 15 }}>{label}</span></button>)}</div>
-        {fields.responseScore !== null && !responseCurrent && <div className="notice warning">La versión de la respuesta cambió. Vuelva a puntuar este criterio antes de cerrar.</div>}
+      <section className="card stack"><h3 id={`${fieldPrefix}-question`}>I11. Respuesta a la pregunta obligatoria</h3><p>Valore la claridad, pertinencia y sustento de la respuesta que escuchó, aunque la pregunta corresponda a cualquiera de las dos áreas. Este es un complemento institucional de la jornada.</p><p className="muted">Puede puntuar este criterio sin esperar la confirmación de Sala en vivo.</p>
+        <div className="score-buttons presentation-score-buttons" role="group" aria-labelledby={`${fieldPrefix}-question`} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 130px), 1fr))', gap: 8 }}>{PRESENTATION_SCALE.map(({ value, label }) => <button type="button" key={value} aria-pressed={fields.responseScore === value} className={fields.responseScore === value ? 'selected' : 'secondary'} onClick={() => edit({ ...fieldsRef.current, responseScore: value, questionVersion: null })} style={{ minWidth: 0, minHeight: 88, padding: '12px 8px', flexDirection: 'column', gap: 4 }} aria-label={`I11: ${value} puntos · ${label}`}><strong style={{ fontSize: 24 }}>{value}</strong><span style={{ fontSize: 15 }}>{label}</span></button>)}</div>
       </section>
       <section className="card stack">
         <div className="field"><label htmlFor={`${fieldPrefix}-physical`}>Referencia del ejemplar físico (opcional)</label><input id={`${fieldPrefix}-physical`} value={fields.physicalText} onChange={event => edit({ ...fieldsRef.current, physicalText: event.target.value })} placeholder="Ej.: serie, edición, ejemplar o páginas revisadas" /></div>
@@ -364,7 +355,7 @@ function CurrentPresentationEditor({ snapshot, api, refresh, notify, publisher, 
       {closed ? <><div className="notice success">El servidor confirmó el cierre de esta ficha. Para corregirla, solicite a coordinación una reapertura con motivo.</div><button type="button" onClick={onNext}>Continuar con otra editorial pendiente</button></> : <>
         <p>{completed}/11 criterios valorados · Las observaciones son opcionales.</p>
         {closePending && <div className="notice warning" role="status">Cierre pendiente. La ficha seguirá abierta hasta recibir la confirmación del servidor. Reintente el cierre cuando recupere la conexión.</div>}
-        <div className="row"><button type="button" className="secondary" disabled={!ready || saving || closing || conflict || !!recovery} onClick={() => void saveCurrent()}>{saving ? 'Guardando…' : 'Guardar ahora'}</button><button type="button" disabled={!ready || completed !== 11 || !responseCurrent || saving || closing || conflict || !!recovery} onClick={() => void closeEvaluation()}>{closing ? 'Esperando confirmación…' : closePending ? 'Reintentar cierre' : 'Cerrar mi ficha'}</button></div>
+        <div className="row"><button type="button" className="secondary" disabled={!ready || saving || closing || conflict || !!recovery} onClick={() => void saveCurrent()}>{saving ? 'Guardando…' : 'Guardar ahora'}</button><button type="button" disabled={!ready || completed !== 11 || saving || closing || conflict || !!recovery} onClick={() => void closeEvaluation()}>{closing ? 'Esperando confirmación…' : closePending ? 'Reintentar cierre' : 'Cerrar mi ficha'}</button></div>
         <p className="muted">Los cambios se guardan automáticamente. El borrador local se cifra para su acceso individual; el cierre requiere confirmación del servidor.</p>
       </>}
     </section>

@@ -109,6 +109,21 @@ try {
     await main().getByRole('button', { name: 'Cancelar eliminación', exact: true }).click();
     assert.equal(await summary().count(), 0); assert.deepEqual(await state(), before);
   });
+  await checked('deleting a question confirmation preserves every I11 score, closed ficha and clock state', async () => {
+    const before = await state();
+    await scope('question'); await choose(seeded.publishers[0].name);
+    const plan = await preview(); assert.equal(plan.counts.presentationQuestions, 1);
+    assert.equal(plan.counts.presentationEvaluations ?? 0, 0); assert.equal(plan.counts.responseScores ?? 0, 0);
+    await confirmBox().check(); await rpcUi(director, 'data_delete_apply', () => finalButton(false).click());
+    const after = await state(); assert.equal(after.presentationQuestions.length, 1);
+    assert.deepEqual(after.presentationEvaluations, before.presentationEvaluations); assert.deepEqual(after.turn, before.turn);
+    assert.deepEqual(after.presentationDraw, before.presentationDraw); assert.deepEqual(after.presentationRanking, before.presentationRanking);
+    const restored = await rpc('presentation_question_save', { publisherId: seeded.publishers[0].id, expectedVersion: 0, confirmed: true });
+    assert.equal(restored.confirmed, true); assert.equal(restored.status, 'answered');
+    assert.deepEqual((await state()).presentationEvaluations, before.presentationEvaluations);
+    await director.getByRole('button', { name: 'Actualizar información', exact: true }).click();
+    await scope('teacher'); await choose(seeded.teachers[0].name);
+  });
   await checked('confirming one teacher removes their closed evaluations and access while preserving the other teacher and Subdirector session', async () => {
     await preview(); assert(await finalButton(false).isDisabled()); await confirmBox().check();
     const deleted = await rpcUi(director, 'data_delete_apply', () => finalButton(false).click()); assert.equal(deleted.deleted, true);

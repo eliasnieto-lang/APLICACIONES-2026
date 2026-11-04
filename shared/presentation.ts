@@ -85,13 +85,13 @@ export function presentationScore(input: PresentationScore[] | PresentationScore
   return total * 100 / (response ? 44 : 10 * maximum);
 }
 
-/** Notes stay optional; eleven intentional values and the published question are required. */
+/** Notes stay optional; closure requires eleven intentional ratings, independently of live-room confirmation. */
 export function presentationEvaluationIssues(evaluation: PresentationEvaluation): string[] {
   if (!presentationUsesCurrentScale(evaluation)) return ['Pendiente actualizar escala: vuelva a valorar los diez indicadores con la escala de 0 a 4.'];
   if (!presentationUsesCurrentRubric(evaluation)) return ['Pendiente completar la ficha con la pregunta obligatoria. Sus diez puntajes anteriores se conservan.'];
   try {
     if (presentationScore(evaluation) === null) return ['Complete los once criterios con valores de 0 a 4 antes de cerrar.'];
-    return Number.isInteger(evaluation.questionVersion) && evaluation.questionVersion! > 0 ? [] : ['Falta confirmar la versión de la pregunta respondida.'];
+    return [];
   } catch (error) { return [error instanceof Error ? error.message : 'Puntajes inválidos.']; }
 }
 
@@ -107,9 +107,8 @@ export function presentationPublisherAvailable(state: State, publisherId: string
   return !offers.length || offers.some(offer => offer.status === 'offered' && offer.area === area && offer.block === block);
 }
 
-function validClosed(evaluation: PresentationEvaluation, state: State): boolean {
-  const question = state.presentationQuestions?.find(item => item.publisherId === evaluation.publisherId && item.status === 'answered');
-  return presentationUsesCurrentRubric(evaluation) && evaluation.status === 'closed' && presentationEvaluationIssues(evaluation).length === 0 && question?.version === evaluation.questionVersion;
+function validClosed(evaluation: PresentationEvaluation): boolean {
+  return presentationUsesCurrentRubric(evaluation) && evaluation.status === 'closed' && presentationEvaluationIssues(evaluation).length === 0;
 }
 
 export function presentationPublisherAssessment(state: State, publisherId: string, area: Area, block: Block): PresentationPublisherAssessment {
@@ -126,7 +125,7 @@ export function presentationPublisherAssessment(state: State, publisherId: strin
     if (own.some(evaluation => !presentationUsesCurrentScale(evaluation))) pendingScaleUpdate += 1;
     if (own.some(evaluation => presentationUsesCurrentScale(evaluation) && !presentationUsesCurrentRubric(evaluation))) pendingQuestionUpdate += 1;
     // Duplicate imported records cannot inflate the number of evaluators or silently override a form.
-    if (own.length === 1 && validClosed(own[0], state)) closed.push(own[0]);
+    if (own.length === 1 && validClosed(own[0])) closed.push(own[0]);
     else if (own.some(evaluation => evaluation.status === 'draft')) drafts += 1;
   }
   const registered = available ? teachers.length : 0;

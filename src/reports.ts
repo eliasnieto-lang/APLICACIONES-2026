@@ -154,11 +154,12 @@ export async function buildPresentationTeacherPdf(state: State, scope: Presentat
   if (currentRubric) {
     report.heading('I11. Respuesta a la pregunta obligatoria');
     report.write('Valore la claridad, pertinencia y sustento de la respuesta escuchada. La pregunta puede corresponder a cualquiera de las dos áreas.');
+    report.write('Esta valoración docente se registra de forma independiente de la casilla de confirmación de Sala en vivo.');
     const question = state.presentationQuestions?.find(item => item.publisherId === scope.publisherId && item.status === 'answered');
-    if (question && (!evaluation || question.version === evaluation.questionVersion)) {
+    if (question && (!evaluation || question.version === evaluation.questionVersion) && question.question && question.answer) {
       report.field('Pregunta formulada', question.question); report.field('Respuesta registrada', question.answer); report.field('Versión de pregunta', question.version);
     } else if (evaluation?.questionVersion) report.field('Versión de pregunta valorada', `${evaluation.questionVersion}; el texto de esa versión debe consultarse en su historial`);
-    else report.write('Pregunta y respuesta: pendientes de confirmar en Sala en vivo.');
+    else report.write(question ? 'Pregunta y respuesta: realización confirmada en Sala en vivo, sin transcripción.' : 'Confirmación de Sala en vivo: sin registrar. No condiciona el puntaje docente.');
     report.field('Puntaje 0 / 1 / 2 / 3 / 4', evaluation?.responseScore === null || evaluation?.responseScore === undefined
       ? 'Pendiente [  ] 0   [  ] 1   [  ] 2   [  ] 3   [  ] 4' : `${evaluation.responseScore} - ${presentationScaleLabel(evaluation.responseScore)}`);
   }

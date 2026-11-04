@@ -24,7 +24,7 @@ const currentClosed = (evaluation: PresentationEvaluation | undefined): evaluati
 
 export default function PresentationConsolidation({ snapshot, api, refresh, notify }: ViewProps) {
   const { state } = snapshot;
-  const currentClosedInState = (evaluation: PresentationEvaluation | undefined): evaluation is PresentationEvaluation => currentClosed(evaluation) && (state.presentationQuestions ?? []).some(question => question.publisherId === evaluation.publisherId && question.status === 'answered' && question.version === evaluation.questionVersion);
+  const currentClosedInState = currentClosed;
   const fieldPrefix = useId();
   const [area, setArea] = useState<Area>('MAT');
   const [block, setBlock] = useState<Block>('P1');

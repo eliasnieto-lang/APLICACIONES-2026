@@ -15,6 +15,7 @@ state.publishers = [{ id: 'question-one', version: 1, name: 'Editorial de pregun
 state.turn = { publisherId: 'question-one', status: 'running', startedAt: new Date().toISOString(), pausedAt: null, pausedMilliseconds: 0 };
 state.presentationQuestions = [];
 const calls = [];
+let saveFailure = null;
 async function open(role = 'coordinator') {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } }); contexts.push(context);
   await context.route('**/src/main.tsx', route => route.fulfill({ contentType: 'application/javascript', body: "import '/tests/questions-fixture.tsx';" }));
@@ -23,18 +24,20 @@ async function open(role = 'coordinator') {
     if (action === 'snapshot') return route.fulfill({ json: { state, actor: { id: 'question-director', name: 'Subdirector', role }, dataset: 'demo', serverNow: new Date().toISOString() } });
     if (action === 'presentation_question_save') {
       assert.equal(role, 'coordinator');
+      assert.deepEqual(Object.keys(payload).sort(), ['confirmed', 'expectedVersion', 'publisherId']);
+      assert.equal(typeof payload.confirmed, 'boolean');
+      if (saveFailure) { const message = saveFailure; saveFailure = null; return route.fulfill({ status: 503, json: { message } }); }
       const old = state.presentationQuestions.find(item => item.publisherId === payload.publisherId);
-      if (payload.expectedVersion !== (old?.version ?? 0)) return route.fulfill({ status: 409, json: { message: 'La pregunta cambió en otra pantalla. Actualice antes de guardar.' } });
-      if (payload.status === 'answered') assert(payload.representativeName && payload.area && payload.question && payload.answer);
+      if (payload.expectedVersion !== (old?.version ?? 0)) return route.fulfill({ status: 409, json: { message: 'La confirmación cambió en otra pantalla. Actualice antes de guardar.' } });
       const now = new Date().toISOString();
       const result = { id: old?.id ?? 'question-record', version: (old?.version ?? 0) + 1, publisherId: payload.publisherId,
-        representativeName: payload.representativeName, area: payload.area, question: payload.question, answer: payload.answer, status: payload.status,
-        askedAt: payload.status === 'answered' ? old?.askedAt || now : null, answeredAt: payload.status === 'answered' ? now : null, updatedAt: now };
+        confirmed: payload.confirmed, status: payload.confirmed ? 'answered' : 'draft',
+        askedAt: payload.confirmed ? old?.askedAt || now : null, answeredAt: payload.confirmed ? now : null, updatedAt: now };
       state.presentationQuestions = state.presentationQuestions.filter(item => item.publisherId !== payload.publisherId).concat(result);
       return route.fulfill({ json: result });
     }
     assert.equal(action, 'turn_control'); assert(isDeepStrictEqual(payload.expectedTurn, state.turn)); assert.equal(payload.command, 'finish');
-    if (!state.presentationQuestions.some(item => item.publisherId === state.turn.publisherId && item.status === 'answered')) return route.fulfill({ status: 423, json: { message: 'Falta confirmar la pregunta obligatoria.' } });
+    if (!state.presentationQuestions.some(item => item.publisherId === state.turn.publisherId && item.confirmed === true)) return route.fulfill({ status: 423, json: { message: 'Falta confirmar la pregunta obligatoria.' } });
     state.turn = { ...state.turn, status: 'finished', pausedAt: new Date().toISOString() };
     return route.fulfill({ json: state.turn });
   });
@@ -44,50 +47,86 @@ async function open(role = 'coordinator') {
 }
 try {
   const p = await open();
-  await check('manual exposition cannot finish before its required question and answer are confirmed', async () => {
+  const region = p.getByRole('region', { name: 'Pregunta obligatoria de la editorial' });
+  const checkbox = region.getByRole('checkbox', { name: 'Confirmo que un representante docente hizo la pregunta y la editorial respondió.', exact: true });
+  await check('room question is one checkbox with no name, area, transcription or save form', async () => {
+    assert.equal(await region.getByRole('checkbox').count(), 1);
+    assert.equal(await region.locator('input:not([type="checkbox"]), select, textarea, button').count(), 0);
     assert(await p.getByRole('button', { name: 'Finalizar', exact: true }).isDisabled());
-    assert(await p.getByRole('button', { name: 'Confirmar pregunta y respuesta', exact: true }).isDisabled());
     assert.equal(calls.filter(call => call.action !== 'snapshot').length, 0);
-    assert(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    assert(await region.getByText(/Cada docente puede puntuar la respuesta de 0 a 4 en I11 sin esperar esta confirmación/).isVisible());
   });
-  await check('a representative may ask from either area; saving only a draft keeps finalization blocked', async () => {
-    await p.getByLabel('Representante docente que pregunta', { exact: true }).fill('Docente representante de ensayo');
-    await p.getByLabel('Área de la pregunta', { exact: true }).selectOption('COM');
-    await p.getByLabel('Pregunta formulada a la editorial', { exact: true }).fill('¿Cómo retroalimentan una interpretación del texto?');
-    await p.getByRole('button', { name: 'Guardar borrador de pregunta', exact: true }).click();
-    await p.getByText('Borrador de pregunta guardado.', { exact: true }).waitFor();
-    assert.equal(state.presentationQuestions[0].status, 'draft'); assert.equal(state.presentationQuestions[0].area, 'COM');
-    assert(await p.getByRole('button', { name: 'Finalizar', exact: true }).isDisabled());
-  });
-  await check('an explicit observed answer unlocks finish without any minimum teacher score', async () => {
-    await p.getByLabel('Resumen de la respuesta de la editorial', { exact: true }).fill('Explicó una actividad y una devolución específica al estudiante.');
-    assert(await p.getByRole('button', { name: 'Confirmar pregunta y respuesta', exact: true }).isDisabled());
-    await p.getByRole('checkbox', { name: 'Confirmo que el representante hizo la pregunta y que la editorial respondió.', exact: true }).check();
-    await p.getByRole('button', { name: 'Confirmar pregunta y respuesta', exact: true }).click();
-    await p.getByText('Pregunta y respuesta confirmadas. Ya puede finalizar esta exposición.', { exact: true }).waitFor();
-    assert.equal(state.presentationQuestions[0].status, 'answered'); assert.equal(state.presentationEvaluations.length, 0);
+  await check('checking auto-saves only the minimal confirmation and enables finishing', async () => {
+    await checkbox.click();
+    await region.getByText('Pregunta y respuesta confirmadas.', { exact: true }).waitFor();
+    assert.equal(state.presentationQuestions[0].confirmed, true);
+    assert.equal(state.presentationQuestions[0].status, 'answered');
+    assert.equal(state.presentationQuestions[0].representativeName, undefined);
     assert(await p.getByRole('button', { name: 'Finalizar', exact: true }).isEnabled());
-    mkdirSync('test-results', { recursive: true }); await p.getByRole('region', { name: 'Pregunta obligatoria de la editorial' }).screenshot({ path: 'test-results/pregunta-obligatoria-movil.png' });
+    assert(await checkbox.isChecked());
+    assert.deepEqual(calls.filter(call => call.action === 'presentation_question_save').at(-1).payload,
+      { publisherId: 'question-one', expectedVersion: 0, confirmed: true });
   });
-  await check('a stale question save keeps local text and requires consulting the newer server record', async () => {
-    await p.getByRole('button', { name: 'Corregir registro antes de finalizar', exact: true }).click();
-    await p.getByLabel('Resumen de la respuesta de la editorial', { exact: true }).fill('Mi corrección local no se debe perder.');
-    await p.getByLabel('Motivo de la corrección', { exact: true }).fill('Aclaración de lo escuchado antes de terminar');
-    const remote = state.presentationQuestions[0]; remote.version++; remote.answer = 'Respuesta actualizada por otra pantalla.';
-    await p.getByRole('checkbox', { name: 'Confirmo que el representante hizo la pregunta y que la editorial respondió.', exact: true }).check();
-    await p.getByRole('button', { name: 'Confirmar pregunta y respuesta', exact: true }).click();
-    await p.getByRole('alert').filter({ hasText: 'La pregunta cambió en otra pantalla.' }).waitFor();
-    assert.equal(await p.getByLabel('Resumen de la respuesta de la editorial', { exact: true }).inputValue(), 'Mi corrección local no se debe perder.');
+  await check('closed teacher grades do not freeze the checkbox or change when it is unchecked', async () => {
+    const now = new Date().toISOString();
+    state.presentationEvaluations = [{ id: 'graded-zero', publisherId: 'question-one', teacherId: 'teacher-one', area: 'MAT', block: 'P1', scaleMax: 4, rubricVersion: 2, version: 1,
+      scores: Array(10).fill(0), notes: Array(10).fill(''), responseScore: 0, questionVersion: 1, status: 'closed', closedAt: now, updatedAt: now, generalObservation: '', physicalText: '', rulesVersion: 1 }];
     await p.getByRole('button', { name: 'Sincronizar', exact: true }).click();
-    await p.getByRole('button', { name: 'Consultar el registro del servidor', exact: true }).click();
-    assert.equal(await p.getByLabel('Resumen de la respuesta de la editorial', { exact: true }).inputValue(), 'Respuesta actualizada por otra pantalla.');
+    assert(await checkbox.isEnabled());
+    const grades = structuredClone(state.presentationEvaluations);
+    await checkbox.click();
+    await p.getByText('Confirmación retirada.', { exact: true }).waitFor();
+    assert.equal(state.presentationQuestions[0].confirmed, false);
+    assert(!await checkbox.isChecked());
+    assert(await p.getByRole('button', { name: 'Finalizar', exact: true }).isDisabled());
+    assert.deepEqual(state.presentationEvaluations, grades);
   });
-  await check('finalization freezes the shared answer and teaching/secretary roles cannot edit the question', async () => {
+  await check('a failed save leaves the persisted checkbox unchanged and allows retry', async () => {
+    saveFailure = 'No se pudo guardar por falta de conexión.';
+    await checkbox.click();
+    await region.getByRole('alert').filter({ hasText: 'No se pudo guardar por falta de conexión.' }).waitFor();
+    assert(!await checkbox.isChecked());
+    assert.equal(state.presentationQuestions[0].confirmed, false);
+    assert(await checkbox.isEnabled());
+  });
+  await check('a concurrent confirmation rejects stale CAS and refreshes before another change', async () => {
+    const remote = state.presentationQuestions[0]; remote.version++; remote.confirmed = true; remote.status = 'answered'; remote.askedAt = remote.answeredAt = new Date().toISOString();
+    const before = calls.filter(call => call.action === 'presentation_question_save').length;
+    await checkbox.click();
+    await region.getByRole('button', { name: 'Actualizar confirmación', exact: true }).waitFor();
+    assert(!await checkbox.isChecked()); assert(await checkbox.isDisabled());
+    assert.equal(calls.filter(call => call.action === 'presentation_question_save').length, before + 1);
+    await region.getByRole('button', { name: 'Actualizar confirmación', exact: true }).click();
+    await p.waitForFunction(() => document.querySelector('#pregunta-obligatoria input[type="checkbox"]')?.checked);
+    assert(await checkbox.isChecked()); assert(await checkbox.isEnabled());
+    await checkbox.click();
+    await p.waitForFunction(() => !document.querySelector('#pregunta-obligatoria input[type="checkbox"]')?.checked);
+    assert.equal(state.presentationQuestions[0].confirmed, false);
+    await checkbox.click();
+    await region.getByText('Pregunta y respuesta confirmadas.', { exact: true }).waitFor();
+  });
+  await check('finalization preserves the confirmation and other roles cannot edit it', async () => {
     await p.getByRole('button', { name: 'Finalizar', exact: true }).click();
-    await p.getByText('La exposición ya finalizó o su respuesta fue valorada. Este registro se conserva para que todos evalúen la misma respuesta.', { exact: true }).waitFor();
-    assert(await p.getByLabel('Resumen de la respuesta de la editorial', { exact: true }).isDisabled());
-    assert.equal(await p.getByRole('button', { name: 'Corregir registro antes de finalizar', exact: true }).count(), 0);
+    await region.getByText('La exposición finalizó. La confirmación se conserva.', { exact: true }).waitFor();
+    assert(await checkbox.isChecked()); assert(await checkbox.isDisabled());
     for (const role of ['teacher', 'secretary']) { const other = await open(role); assert.equal(await other.getByRole('region', { name: 'Pregunta obligatoria de la editorial' }).count(), 0); }
+  });
+  await check('a missing confirmation can be recovered after finishing without changing teacher grades', async () => {
+    const grades = structuredClone(state.presentationEvaluations);
+    state.presentationQuestions = [];
+    await p.getByRole('button', { name: 'Sincronizar', exact: true }).click();
+    await region.getByText('La exposición finalizó. Puede recuperar la confirmación si la pregunta se realizó y la editorial respondió.', { exact: true }).waitFor();
+    assert(!await checkbox.isChecked()); assert(await checkbox.isEnabled());
+    await checkbox.click();
+    await region.getByText('La exposición finalizó. La confirmación se conserva.', { exact: true }).waitFor();
+    assert(await checkbox.isChecked()); assert(await checkbox.isDisabled());
+    assert.equal(state.presentationQuestions[0].confirmed, true);
+    assert.equal(state.turn.status, 'finished');
+    assert.deepEqual(state.presentationEvaluations, grades);
+  });
+  await check('the confirmation fits a phone without horizontally scrolling', async () => {
+    assert(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    mkdirSync('test-results', { recursive: true }); await region.screenshot({ path: 'test-results/pregunta-obligatoria-movil.png' });
   });
   assert.deepEqual(errors, []);
   writeFileSync('test-results/questions-browser-results.json', JSON.stringify({ at: new Date().toISOString(), fixture: 'isolated server responses; no database changes', passed: checks.length, checks, pageErrors: errors }, null, 2));

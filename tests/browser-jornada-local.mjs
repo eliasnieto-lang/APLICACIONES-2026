@@ -26,10 +26,10 @@ async function rpc(action, payload = {}, code = owner) {
 const seeded = emptyState();
 seeded.publishers = ['alfa', 'beta', 'gamma'].map(id => ({ id: `jornada-${id}`, version: 1, name: `Editorial ${id.toUpperCase()}`, samplesReceived: true, sampleNote: 'Ejemplar físico del ensayo' }));
 seeded.teachers = ['MAT', 'MAT', 'COM', 'COM'].map((area, index) => ({ id: `jornada-docente-${index}`, version: 1, name: `Ensayo ${index + 1} Docente`, firstNames: 'Docente', lastNames: `Ensayo ${index + 1}`, area, categories: ['P1'], attended: true, attendanceEvidence: 'Ensayo local', selfRegistered: true }));
-seeded.presentationQuestions = seeded.publishers.map(publisher => ({ id: `jornada-pregunta-${publisher.id}`, version: 1, publisherId: publisher.id, representativeName: 'Representante del ensayo', area: 'MAT', question: '¿Cómo se atienden los diferentes ritmos de aprendizaje?', answer: 'Con actividades de refuerzo y profundización y orientaciones para el docente.', status: 'answered', askedAt: '2026-11-04T15:00:00Z', answeredAt: '2026-11-04T15:00:00Z', updatedAt: '2026-11-04T15:00:00Z' }));
+seeded.presentationQuestions = [];
 for (const [teacherIndex, teacher] of seeded.teachers.entries()) for (const [publisherIndex, publisher] of seeded.publishers.entries()) {
   const value = teacher.area === 'MAT' ? publisherIndex === 0 ? teacherIndex : publisherIndex + 2 : 4 - publisherIndex;
-  seeded.presentationEvaluations.push({ ...newPresentationEvaluation({ publisherId: publisher.id, teacherId: teacher.id, area: teacher.area, block: 'P1' }), id: `jornada-ficha-${teacherIndex}-${publisherIndex}`, version: 1, rubricVersion: 2, responseScore: value, questionVersion: 1, scores: Array(10).fill(value), status: 'closed', closedAt: '2026-11-04T15:00:00Z', updatedAt: '2026-11-04T15:00:00Z', generalObservation: privateObservation });
+  seeded.presentationEvaluations.push({ ...newPresentationEvaluation({ publisherId: publisher.id, teacherId: teacher.id, area: teacher.area, block: 'P1' }), id: `jornada-ficha-${teacherIndex}-${publisherIndex}`, version: 1, rubricVersion: 2, responseScore: value, questionVersion: null, scores: Array(10).fill(value), status: 'closed', closedAt: '2026-11-04T15:00:00Z', updatedAt: '2026-11-04T15:00:00Z', generalObservation: privateObservation });
 }
 mkdirSync('test-results', { recursive: true });
 rmSync('test-results/jornada-local-browser-results.json', { force: true });
@@ -125,7 +125,8 @@ try {
     const projected = (await rpc('public_snapshot')).state; assert.deepEqual(projected.presentationDraw.publishers, draw.publishers);
     assert(!JSON.stringify(projected).includes(privateObservation)); assert(!JSON.stringify(projected).includes(seeded.teachers[0].name));
   });
-  await checked('live-room controls start, finish and advance atomically through every drawn editorial', async () => {
+  await checked('a single checkbox confirms each question and answer while existing teacher scores remain independent', async () => {
+    const formsBefore = (await currentState()).presentationEvaluations;
     for (const [index, publisher] of draw.publishers.entries()) {
       await rpcUi(director, 'turn_control', () => director.getByRole('button', { name: index === 0 ? 'Iniciar' : 'Siguiente editorial', exact: true }).click());
       const running = await currentState(); assert.equal(running.turn.status, 'running'); assert.equal(running.turn.publisherId, publisher.id);
@@ -134,9 +135,19 @@ try {
       const direct = teacherPage.getByRole('button', { name: 'Ir a la editorial en exposición', exact: true });
       if (await direct.isEnabled()) await direct.click();
       assert((await teacherPage.locator('[aria-label="Editoriales"] button[aria-pressed=true] strong').innerText()).includes(publisher.name));
+      assert(await director.getByRole('button', { name: 'Finalizar', exact: true }).isDisabled());
+      assert.equal(await director.getByLabel('Representante docente que pregunta', { exact: true }).count(), 0);
+      assert.equal(await director.getByLabel('Área de la pregunta', { exact: true }).count(), 0);
+      assert.equal(await director.getByLabel('Pregunta formulada a la editorial', { exact: true }).count(), 0);
+      assert.equal(await director.getByLabel('Resumen de la respuesta de la editorial', { exact: true }).count(), 0);
+      const checkbox = director.getByRole('checkbox', { name: /Confirmo que un representante docente hizo la pregunta y la editorial respondió/ });
+      const confirmation = await rpcUi(director, 'presentation_question_save', () => checkbox.click());
+      assert.equal(confirmation.publisherId, publisher.id); assert.equal(confirmation.confirmed, true); assert.equal(confirmation.status, 'answered');
+      await director.waitForFunction(() => document.querySelector('#pregunta-obligatoria input[type=checkbox]')?.checked === true);
       await rpcUi(director, 'turn_control', () => director.getByRole('button', { name: 'Finalizar', exact: true }).click());
       const completed = await currentState(); assert.equal(completed.turn.status, 'finished'); assert.equal(completed.presentationDraw.completedPublisherIds.length, index + 1);
     }
+    assert.deepEqual((await currentState()).presentationEvaluations, formsBefore);
     await director.getByText('Todas las editoriales del sorteo finalizaron.', { exact: true }).waitFor();
     await director.screenshot({ path: 'test-results/sorteo-real-completado.png', fullPage: true });
   });

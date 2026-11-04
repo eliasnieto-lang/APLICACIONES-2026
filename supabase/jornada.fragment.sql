@@ -18,7 +18,6 @@ language sql immutable set search_path=pg_catalog,public as $$
  select encode(sha256(convert_to(jsonb_build_object(
   'publishers',coalesce(s->'publishers','[]'),
   'series',coalesce(s->'series','[]'),'offers',coalesce(s->'offers','[]'),
-  'questions',coalesce(s->'presentationQuestions','[]'),
   'teachers',coalesce(s->'teachers','[]'),
   'evaluations',coalesce(s->'presentationEvaluations','[]'),
   'rules',s#>'{settings,rules}',

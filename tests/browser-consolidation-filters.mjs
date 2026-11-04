@@ -16,14 +16,14 @@ state.publishers = names.map((name, index) => ({ id: `p${index}`, version: 1, na
 state.teachers = Array.from({ length: 5 }, (_, index) => ({ id: `t${index}`, version: 1, name: `Docente ${index + 1}`, area: 'MAT', categories: ['P1', 'P2'], attended: true, attendanceEvidence: '' }));
 state.teachers.push({ id: 'com', version: 1, name: 'Docente Comunicación', area: 'COM', categories: ['S1'], attended: true, attendanceEvidence: '' });
 const at = '2026-11-04T15:00:00.000Z';
-state.presentationQuestions = state.publishers.map(publisher => ({ id: `q-${publisher.id}`, publisherId: publisher.id, version: 1, representativeName: 'Portavoz de prueba', area: 'MAT', question: 'Pregunta del ensayo', answer: 'Respuesta del ensayo', status: 'answered', askedAt: at, answeredAt: at, updatedAt: at }));
+state.presentationQuestions = []; // Results depend on private teacher ratings, never a live-room authorization.
 for (let publisher = 0; publisher < names.length; publisher++) {
   for (let teacher = 0; teacher < 5; teacher++) {
     const scores = publisher === 0 ? Array(10).fill(teacher)
       : publisher === 1 ? Array(10).fill(4)
         : publisher === 2 ? [...Array(8).fill(4), 3, 3]
           : publisher === 3 ? [...Array(6).fill(4), ...Array(4).fill(3)] : Array(10).fill(0);
-    state.presentationEvaluations.push({ id: `e-${publisher}-${teacher}`, version: 1, publisherId: `p${publisher}`, teacherId: `t${teacher}`, area: 'MAT', block: 'P1', scaleMax: 4, rubricVersion: 2, responseScore: publisher === 0 ? teacher : publisher === 1 ? 4 : publisher === 2 ? 3 : publisher === 3 ? 2 : 0, questionVersion: 1, scores, notes: Array(10).fill(''), generalObservation: teacher === 0 ? 'Observación privada de ficha' : '', physicalText: '', status: 'closed', closedAt: at, updatedAt: at, rulesVersion: 1 });
+    state.presentationEvaluations.push({ id: `e-${publisher}-${teacher}`, version: 1, publisherId: `p${publisher}`, teacherId: `t${teacher}`, area: 'MAT', block: 'P1', scaleMax: 4, rubricVersion: 2, responseScore: publisher === 0 ? teacher : publisher === 1 ? 4 : publisher === 2 ? 3 : publisher === 3 ? 2 : 0, questionVersion: null, scores, notes: Array(10).fill(''), generalObservation: teacher === 0 ? 'Observación privada de ficha' : '', physicalText: '', status: 'closed', closedAt: at, updatedAt: at, rulesVersion: 1 });
   }
 }
 // One old completed record must remain readable, and count as pending in the current mean.
@@ -66,7 +66,7 @@ try {
   await page.getByRole('button', { name: 'Consolidación y ternas', exact: true }).click();
   await page.getByRole('heading', { name: 'Consolidación y ternas', exact: true }).waitFor();
 
-  await check('compact initial results and five-teacher 0–4 official mean', async () => {
+  await check('five-teacher 0–4 consolidated mean is available without any live-room confirmation', async () => {
     assert.equal(await page.locator('select').count(), 5);
     assert.equal(await table().locator('tbody tr').count(), 5);
     assert.match(await row('Editorial Media').innerText(), /50[.,]00/);
@@ -74,14 +74,14 @@ try {
     assert.equal(await page.getByText('Observación privada de ficha', { exact: true }).count(), 0);
     assert.deepEqual(await table().locator('tbody tr td:first-child strong').allTextContents(), ['Editorial Alfa', 'Editorial Beta', 'Editorial Gamma', 'Editorial Media', 'Editorial Histórica']);
   });
-  await check('editorial filter never changes the official terna', async () => {
+  await check('editorial filter never changes the consolidated terna', async () => {
     await page.getByLabel('Editorial', { exact: true }).selectOption('p0');
     assert.equal(await table().locator('tbody tr').count(), 1);
     const proposal = await page.locator('.consolidation-proposal').innerText();
     for (const name of names.slice(1, 4)) assert(proposal.includes(name));
     assert.match(await row('Editorial Media').innerText(), /50[.,]00/);
   });
-  await check('docente filter opens individual fichas and never narrows official averages', async () => {
+  await check('docente filter opens individual fichas and never narrows consolidated averages', async () => {
     await page.getByLabel('Docente · fichas', { exact: true }).selectOption('t0');
     assert.equal(await page.getByRole('tab', { name: 'Fichas docentes', exact: true }).getAttribute('aria-selected'), 'true');
     assert.equal(await table().locator('tbody tr').count(), 1);
@@ -134,7 +134,7 @@ try {
     await page.getByLabel('Dirección validó la terna y su acuerdo.', { exact: true }).check();
     assert.equal(await page.getByRole('button', { name: 'Publicar terna validada', exact: true }).isDisabled(), true);
     await close();
-    Object.assign(state.presentationEvaluations.find(item => item.id === 'e-4-0'), { scaleMax: 4, rubricVersion: 2, responseScore: 0, questionVersion: 1 });
+    Object.assign(state.presentationEvaluations.find(item => item.id === 'e-4-0'), { scaleMax: 4, rubricVersion: 2, responseScore: 0, questionVersion: null });
     state.presentationEvaluations.find(item => item.id === 'e-4-0').scores = Array(10).fill(0);
     await page.getByRole('button', { name: 'Actualizar información', exact: true }).click();
     await page.getByRole('button', { name: 'Revisar terna', exact: true }).click();

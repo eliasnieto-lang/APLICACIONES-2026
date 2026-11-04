@@ -1,9 +1,10 @@
 {
-  "at": "2026-11-04T18:04:00.919Z",
+  "at": "2026-11-04T18:55:03.183Z",
   "backend": "Node/Express + PostgreSQL + PostgREST reales; mutations restricted to demo",
-  "passed": 6,
+  "passed": 7,
   "checks": [
     "opening the Subdirector cleanup page and its preview never deletes or changes a record",
+    "deleting a question confirmation preserves every I11 score, closed ficha and clock state",
     "confirming one teacher removes their closed evaluations and access while preserving the other teacher and Subdirector session",
     "deleting an editorial cascades its ficha and shared question without removing unrelated records",
     "a stale deletion preview gets HTTP409 and cannot remove information added since the preview",

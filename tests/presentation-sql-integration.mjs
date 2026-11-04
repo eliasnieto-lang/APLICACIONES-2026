@@ -49,18 +49,19 @@ await check('CAS impide sobrescribir y puntajes fraccionarios o fuera de rango s
  for(const bad of [-1,5,1.5])await reject('presentation_save',{...fields(publishers[0].id,[bad,...Array(9).fill(4)],1)},teachers[0].code,400);
  await reject('presentation_save',{...fields(publishers[0].id,Array(9).fill(4),1)},teachers[0].code,400);
 });
-await check('los diez criterios se guardan antes de la pregunta, pero el undécimo exige respuesta vigente',async()=>{
- const saved=await ok('presentation_save',fields(publishers[0].id,scoreArray(40),first.version),teachers[0].code);first=saved;
- assert.equal(saved.responseScore,null);assert.equal(saved.questionVersion,null);
- await reject('presentation_close',{scaleMax:4,rubricVersion:2,evaluationId:saved.id,expectedVersion:saved.version},teachers[0].code,400);
- await reject('presentation_save',{...fields(publishers[0].id,scoreArray(40),saved.version),responseScore:4,questionVersion:1},teachers[0].code,409);
+await check('I11 se valora y cierra sin autorización de sala ni registro de pregunta',async()=>{
+ const saved=await ok('presentation_save',{...fields(publishers[0].id,scoreArray(40),first.version),responseScore:4},teachers[0].code);first=saved;
+ assert.equal(saved.responseScore,4);assert.equal(saved.questionVersion,null);assert.equal(((await ok('snapshot')).state.presentationQuestions??[]).length,0);
+ const closed=await ok('presentation_close',{scaleMax:4,rubricVersion:2,evaluationId:saved.id,expectedVersion:saved.version},teachers[0].code);
+ assert.equal(closed.status,'closed');assert.equal(Number(sql(`select public.textos_presentation_score_of('${JSON.stringify(closed)}'::jsonb,true)`)),100);
+ first=await ok('presentation_reopen',{evaluationId:closed.id,reason:'Continuar el ensayo independiente de los cinco evaluadores.'});
 });
-await check('cada editorial responde una pregunta de cualquier área antes de recibir su valoración I11',async()=>{
- for(const [index,publisher]of publishers.entries()){
+await check('la casilla confirma la pregunta de cada editorial sin determinar la validez de I11',async()=>{
+ for(const publisher of publishers){
   const turn=(await ok('snapshot')).state.turn;
   await ok('turn_control',{command:'start',publisherId:publisher.id,expectedTurn:turn});
-  const question=await ok('presentation_question_save',{publisherId:publisher.id,expectedVersion:0,status:'answered',representativeName:'Representante docente de prueba',area:index===0?'MAT':'COM',question:'¿Cómo sustenta la propuesta con un ejemplo de aprendizaje?',answer:'La editorial explica el ejemplo y sustenta su respuesta.'});
-  questionVersions.set(publisher.id,question.version);assert.equal(question.status,'answered');
+  const question=await ok('presentation_question_save',{publisherId:publisher.id,expectedVersion:0,confirmed:true});
+  questionVersions.set(publisher.id,question.version);assert.equal(question.status,'answered');assert.equal(question.confirmed,true);assert(!Object.hasOwn(question,'representativeName'));
   await ok('turn_control',{command:'finish',expectedTurn:(await ok('snapshot')).state.turn});
  }
  assert.equal((await ok('snapshot')).state.presentationQuestions.length,3);
@@ -196,13 +197,16 @@ await check('la reapertura conserva la escala histórica implícita y requiere r
  await reject('presentation_save',fields(publishers[1].id,scoreArray(40),reopened.version),teachers[1].code,409);
  const restarted=await ok('presentation_restart_scale',{scaleMax:4,rubricVersion:2,evaluationId:reopened.id,expectedVersion:reopened.version},teachers[1].code);assert.equal(restarted.scaleMax,4);assert.deepEqual(restarted.scores,Array(10).fill(null));
 });
-await check('la respuesta I11 acepta cero y cuatro, pero rechaza valores inválidos y versiones de otra pregunta',async()=>{
- const draft=(await ok('snapshot')).state.presentationEvaluations.find(e=>e.teacherId===teachers[1].id&&e.publisherId===publishers[1].id);
+await check('I11 acepta cero y cuatro sin vincularse a una versión; pendiente todavía impide cerrar',async()=>{
+ let draft=(await ok('snapshot')).state.presentationEvaluations.find(e=>e.teacherId===teachers[1].id&&e.publisherId===publishers[1].id);
  for(const invalid of [-1,5,1.5])await reject('presentation_save',{...fields(draft.publisherId,scoreArray(40),draft.version),responseScore:invalid},teachers[1].code,400);
+ for(const invalid of [-1,0,1.5,'2',{}])await reject('presentation_save',{...fields(draft.publisherId,scoreArray(40),draft.version),questionVersion:invalid},teachers[1].code,400);
  const absent=fields(draft.publisherId,scoreArray(40),draft.version);delete absent.responseScore;await reject('presentation_save',absent,teachers[1].code,400);
- await reject('presentation_save',{...fields(draft.publisherId,scoreArray(40),draft.version),responseScore:null},teachers[1].code,400);
- await reject('presentation_save',{...fields(draft.publisherId,scoreArray(40),draft.version),questionVersion:99},teachers[1].code,409);
- const zero=await ok('presentation_save',{...fields(draft.publisherId,scoreArray(40),draft.version),responseScore:0},teachers[1].code);
+ draft=await ok('presentation_save',{...fields(draft.publisherId,scoreArray(40),draft.version),responseScore:null},teachers[1].code);
+ await reject('presentation_close',{scaleMax:4,rubricVersion:2,evaluationId:draft.id,expectedVersion:draft.version},teachers[1].code,400);
+ draft=await ok('presentation_save',{...fields(draft.publisherId,scoreArray(40),draft.version),questionVersion:99},teachers[1].code);
+ assert.equal(draft.questionVersion,99);
+ const zero=await ok('presentation_save',{...fields(draft.publisherId,scoreArray(40),draft.version),responseScore:0,questionVersion:null},teachers[1].code);
  closeTo(Number(sql(`select public.textos_presentation_score_of(${sqlJson(zero)},true)`)),40*100/44);
  const four=await ok('presentation_save',{...fields(draft.publisherId,scoreArray(40),zero.version),responseScore:4},teachers[1].code);
  assert.equal(Number(sql(`select public.textos_presentation_score_of(${sqlJson(four)},true)`)),100);

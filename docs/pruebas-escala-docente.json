@@ -1,7 +1,7 @@
 {
-  "at": "2026-11-04T17:32:24.511Z",
+  "at": "2026-11-04T18:46:29.908Z",
   "backend": "isolated browser UI fixture with CAS and encrypted browser drafts",
-  "passed": 8,
+  "passed": 9,
   "checks": [
     "mobile: one description, five labeled choices, no default; all editorial and category choices remain available",
     "0 is explicit, persists as zero, counts toward all eleven answers and closes at 0/100",
@@ -9,7 +9,8 @@
     "offline draft recovers 0 and 4 in isolated encrypted v3 storage; old encrypted draft is preserved",
     "legacy 0–2 values remain read only at their original total until explicit CAS restart archives them",
     "a ten-criterion 0–4 history stays at 75/100 until its author explicitly adds I11 without discarding the ten ratings",
-    "before the common question is answered only the first ten criteria can save and the sheet cannot close",
+    "all eleven criteria can save and close before any live-room turn or confirmation",
+    "confirming or withdrawing the live-room checkbox never clears an evaluator answer or creates an extra save",
     "two tabs retain CAS protection; local changes never silently overwrite the newer version"
   ],
   "pageErrors": []

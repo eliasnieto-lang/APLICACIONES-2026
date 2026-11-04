@@ -1,15 +1,16 @@
 {
-  "at": "2026-11-04T18:01:44.163Z",
+  "at": "2026-11-04T18:53:08.414Z",
   "backend": "Node/Express + PostgreSQL + PostgREST reales",
-  "passed": 9,
+  "passed": 10,
   "checks": [
     "two direct entry choices; Subdirector password is checked by the server",
     "editorial registration makes live forms available without books or dossiers",
     "five teachers register without password and can choose multiple categories",
-    "live forms close with eleven observed scores and no preloaded physical-text metadata",
+    "I11 saves an explicit zero and all five forms close before any live-room question or turn exists",
     "all five teacher scores contribute to the category mean and remain private",
     "Subdirector dropdowns filter records without changing the official mean",
     "a second selected category has an independent empty form",
+    "one minimal live-room confirmation can change without reopening closed fichas or changing their scores",
     "legacy 0–2 grades retain 14/20=70 and require an explicit fresh 0–4 review",
     "public room excludes private observations and current unpublished teacher results"
   ],

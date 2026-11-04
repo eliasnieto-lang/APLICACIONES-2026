@@ -4,6 +4,7 @@ import { emptyState } from '../shared/defaults.js';
 import { newPresentationEvaluation, presentationCategoryAssessment } from '../shared/presentation.js';
 import { presentationDrawFinished, presentationOrderedPublishers, presentationRankingRows, teacherProgress, type JornadaState } from '../shared/jornada.js';
 import type { Block, PresentationScore } from '../shared/types.js';
+import { isQuestionAnswered } from '../shared/questions.js';
 
 function state(teachers = 1): JornadaState {
   const s = emptyState();
@@ -84,4 +85,29 @@ test('ranking readiness requires a nonempty draw and completion of all its publi
   s.presentationDraw.completedPublisherIds = ['a']; assert.equal(presentationDrawFinished(s), false);
   s.presentationDraw.completedPublisherIds.push('b'); assert.equal(presentationDrawFinished(s), true);
   s.presentationQuestions = []; assert.equal(presentationDrawFinished(s), false);
+});
+
+
+test('the single live-room confirmation accepts minimal records and preserves complete old records', () => {
+  const question = { id: 'q', version: 1, publisherId: 'a', status: 'answered' as const, confirmed: true,
+    askedAt: '2026-11-04T10:00:00Z', answeredAt: '2026-11-04T10:00:01Z', updatedAt: '2026-11-04T10:00:01Z' };
+  assert.equal(isQuestionAnswered(question), true);
+  assert.equal(isQuestionAnswered({ ...question, confirmed: false }), false);
+  assert.equal(isQuestionAnswered({ ...question, status: 'draft' }), false);
+  assert.equal(isQuestionAnswered({ ...question, confirmed: undefined }), false);
+  const old = state().presentationQuestions![0]; assert.equal(isQuestionAnswered(old), true);
+  assert.equal(isQuestionAnswered({ ...old, confirmed: false }), false);
+});
+
+test('teacher progress counts I11 without live-room confirmation and never retracts it when confirmation changes', () => {
+  const s = state(); s.teachers[0].categories = ['P1']; s.presentationQuestions = [];
+  const evaluation = form(s, 'a', 'P1', Array(10).fill(0), true); evaluation.questionVersion = null;
+  const before = structuredClone(evaluation);
+  const progress = teacherProgress(s)[0];
+  assert.equal(progress.markedCriteria, 11); assert.equal(progress.closedSheets, 1); assert.equal(progress.percentage, 50);
+  s.presentationQuestions = [{ id: 'q', version: 5, publisherId: 'a', confirmed: true, status: 'answered',
+    askedAt: '2026-11-04T10:00:00Z', answeredAt: '2026-11-04T10:00:01Z', updatedAt: '2026-11-04T10:00:01Z' }];
+  assert.deepEqual(teacherProgress(s)[0], progress);
+  s.presentationQuestions[0].confirmed = false; s.presentationQuestions[0].status = 'draft';
+  assert.deepEqual(teacherProgress(s)[0], progress); assert.deepEqual(evaluation, before);
 });

@@ -1,13 +1,16 @@
 {
-  "at": "2026-11-04T17:20:01.213Z",
+  "at": "2026-11-04T18:48:47.979Z",
   "fixture": "isolated server responses; no database changes",
-  "passed": 5,
+  "passed": 8,
   "checks": [
-    "manual exposition cannot finish before its required question and answer are confirmed",
-    "a representative may ask from either area; saving only a draft keeps finalization blocked",
-    "an explicit observed answer unlocks finish without any minimum teacher score",
-    "a stale question save keeps local text and requires consulting the newer server record",
-    "finalization freezes the shared answer and teaching/secretary roles cannot edit the question"
+    "room question is one checkbox with no name, area, transcription or save form",
+    "checking auto-saves only the minimal confirmation and enables finishing",
+    "closed teacher grades do not freeze the checkbox or change when it is unchecked",
+    "a failed save leaves the persisted checkbox unchanged and allows retry",
+    "a concurrent confirmation rejects stale CAS and refreshes before another change",
+    "finalization preserves the confirmation and other roles cannot edit it",
+    "a missing confirmation can be recovered after finishing without changing teacher grades",
+    "the confirmation fits a phone without horizontally scrolling"
   ],
   "pageErrors": []
 }

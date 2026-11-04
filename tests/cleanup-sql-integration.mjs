@@ -57,11 +57,11 @@ await check('borrar una ficha cerrada no borra al docente y una pestaña antigua
  await seed();const old=base.presentationEvaluations[0];await apply('presentationEvaluation',[old.id]);const s=await state();assert.equal(s.teachers.length,2);assert.equal(s.presentationEvaluations.length,5);
  await reject('presentation_save',{publisherId:old.publisherId,area:old.area,block:old.block,scaleMax:4,rubricVersion:2,scores:old.scores,responseScore:old.responseScore,questionVersion:1,expectedVersion:old.version},409,teacher);
 });
-await check('borrar una pregunta reabre solo I11 conservando sus otros diez criterios',async()=>{
- await seed(true);const p=await preview('question',['clean-q1']);assert.equal(p.counts.responseScores,2);assert.equal(p.counts.paperPolls,1);assert(p.consequences.some(s=>s.includes('cronómetro')));
- await apply('question',['clean-q1']);const s=await state();assert.equal(s.presentationQuestions.length,2);assert(!s.presentationDraw);assert(!s.presentationRanking);assert.equal(s.turn.status,'ready');assert.equal(s.paperPolls.length,0);
- for(const e of s.presentationEvaluations.filter(e=>e.publisherId==='clean-p1')){assert.deepEqual(e.scores,base.presentationEvaluations.find(x=>x.id===e.id).scores);assert.equal(e.responseScore,null);assert.equal(e.questionVersion,null);assert.equal(e.status,'draft');assert.equal(e.version,2);}
- assert(s.presentationEvaluations.filter(e=>e.publisherId!=='clean-p1').every(e=>e.status==='closed'));
+await check('borrar una confirmación conserva I11, fichas cerradas, sorteo, ranking y votos',async()=>{
+ await seed(true);const before=await state();const p=await preview('question',['clean-q1']);assert.equal(p.counts.responseScores,0);assert.equal(p.counts.paperPolls,0);assert.equal(p.counts.presentationDraw,0);assert.equal(p.counts.presentationRanking,0);
+ await apply('question',['clean-q1']);const s=await state();assert.equal(s.presentationQuestions.length,2);
+ for(const key of ['presentationEvaluations','presentationDraw','presentationRanking','turn','paperPolls'])assert.deepEqual(s[key],before[key],key);
+ const summary=await ok('presentation_summary',{area:'MAT',block:'P1'});assert.equal(summary.closed,3);assert.equal(summary.pending,0);
 });
 await check('borrar una editorial elimina preguntas/fichas propias y mantiene a los demás docentes',async()=>{
  await seed(true);await apply('publisher',['clean-p1']);const s=await state();assert.equal(s.publishers.length,2);assert.equal(s.teachers.length,2);assert.equal(s.presentationEvaluations.length,4);assert.equal(s.presentationQuestions.length,2);assert(!s.presentationDraw);assert(!s.presentationRanking);assert.equal(s.paperPolls.length,0);

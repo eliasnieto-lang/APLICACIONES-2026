@@ -285,5 +285,23 @@ test('old ten-criterion forms preserve their original percentage but stay pendin
   form.rubricVersion = 2; form.responseScore = 0; form.questionVersion = 1;
   assert.equal(presentationPublisherAssessment(state, form.publisherId, form.area, form.block).closed, 1);
   state.presentationQuestions![0].version = 2;
-  assert.equal(presentationPublisherAssessment(state, form.publisherId, form.area, form.block).closed, 0);
+  assert.equal(presentationPublisherAssessment(state, form.publisherId, form.area, form.block).closed, 1);
+});
+
+
+test('I11 and closure are independent of a live-room question, turn or confirmation', () => {
+  const state = liveState(1); state.presentationQuestions = [];
+  const form = close(state, 0, 100); form.questionVersion = null;
+  assert.equal(state.turn.publisherId, null);
+  assert.deepEqual(presentationEvaluationIssues(form), []);
+  const before = structuredClone(form);
+  assert.equal(presentationPublisherAssessment(state, form.publisherId, form.area, form.block).score, 100);
+  state.presentationQuestions = [{ id: 'confirmation', version: 10, publisherId: form.publisherId,
+    confirmed: true, status: 'answered', askedAt: '2026-11-04T18:00:00Z', answeredAt: '2026-11-04T18:00:00Z', updatedAt: '2026-11-04T18:00:00Z' }];
+  assert.equal(presentationPublisherAssessment(state, form.publisherId, form.area, form.block).closed, 1);
+  state.presentationQuestions[0].confirmed = false; state.presentationQuestions[0].status = 'draft';
+  assert.equal(presentationPublisherAssessment(state, form.publisherId, form.area, form.block).closed, 1);
+  state.presentationQuestions = [];
+  assert.equal(presentationPublisherAssessment(state, form.publisherId, form.area, form.block).score, 100);
+  assert.deepEqual(form, before);
 });

@@ -175,3 +175,18 @@ test('a PDF never attributes an old answer score to a newly changed question', a
   const text = await pdfText(await buildPresentationTeacherPdf(state, { publisherId: form.publisherId, area: 'MAT', block: 'P1', evaluationId: form.id }));
   assert.match(text, /Versión de pregunta valorada: 1/); assert.match(text, /historial/); assert.doesNotMatch(text, /PREGUNTA NUEVA NO VALORADA|RESPUESTA NUEVA NO VALORADA/); assert.match(text, /33 \/ 44/);
 });
+
+test('I11 PDF and consolidated score remain valid without a live-room confirmation or transcript', async () => {
+  const state = fixture(); const form = state.presentationEvaluations[0];
+  state.presentationQuestions = []; form.questionVersion = null; form.responseScore = 0;
+  const before = JSON.stringify(form);
+  const text = await pdfText(await buildPresentationTeacherPdf(state, { publisherId: form.publisherId, area: 'MAT', block: 'P1', evaluationId: form.id }));
+  assert.match(text, /30 \/ 44/); assert.match(text, /68\.18/);
+  assert.match(text.replace(/\s+/g, ' '), /No condiciona el puntaje docente/);
+  assert.equal(presentationCategoryAssessment(state, 'MAT', 'P1').ranked.find(item => item.publisherId === form.publisherId)?.closed, 5);
+  state.presentationQuestions = [{ id: 'minimal-confirmation', version: 9, publisherId: form.publisherId, confirmed: true, status: 'answered', askedAt: '2026-11-05T22:01:00.000Z', answeredAt: '2026-11-05T22:01:00.000Z', updatedAt: '2026-11-05T22:01:00.000Z' }];
+  const confirmed = await pdfText(await buildPresentationTeacherPdf(state, { publisherId: form.publisherId, area: 'MAT', block: 'P1', evaluationId: form.id }));
+  assert.match(confirmed.replace(/\s+/g, ' '), /realización confirmada en Sala en vivo, sin transcripción/);
+  assert.match(confirmed, /30 \/ 44/); assert.doesNotMatch(confirmed, /undefined/);
+  assert.equal(JSON.stringify(form), before);
+});

@@ -30,16 +30,15 @@ begin
  maximum:=case when e->'scaleMax'='4'::jsonb then 4 else 2 end;
  base:=public.textos_presentation_scores(e->'scores',maximum,complete);
  if e ? 'rubricVersion' and e->'rubricVersion' is distinct from '2'::jsonb then perform public.textos_fail('Versión de rúbrica inválida.'); end if;
+ if e ? 'questionVersion' and e->'questionVersion'<>'null'::jsonb and (not public.textos_int(e->'questionVersion') or (e->>'questionVersion')::numeric<1) then perform public.textos_fail('La versión histórica de pregunta debe ser un entero positivo o quedar vacía.'); end if;
  if e->'rubricVersion'='2'::jsonb then
   if maximum<>4 then perform public.textos_fail('La rúbrica de once criterios requiere escala 0–4.'); end if;
   response:=e->'responseScore';
   if response is null or response<>'null'::jsonb and (not public.textos_int(response) or response::numeric>4) then perform public.textos_fail('La respuesta requiere un entero de 0 a 4 o pendiente.'); end if;
   if response='null'::jsonb then
-   if e->'questionVersion' is distinct from 'null'::jsonb then perform public.textos_fail('Una respuesta pendiente no tiene versión valorada.'); end if;
    if complete then perform public.textos_fail('Falta valorar la respuesta a la pregunta obligatoria.'); end if;
    return null;
   end if;
-  if not public.textos_int(e->'questionVersion') or (e->>'questionVersion')::int<1 then perform public.textos_fail('Seleccione la versión de la pregunta respondida.'); end if;
   if base is null then return null; end if;
   return (base*40/100+response::numeric)*100/44;
  end if;
@@ -48,11 +47,9 @@ end $$;
 
 create or replace function public.textos_presentation_current(s jsonb, e jsonb) returns boolean
 language plpgsql stable set search_path=pg_catalog,public as $$
-declare question jsonb;
 begin
  if e is null or e->>'status'<>'closed' or e->'scaleMax' is distinct from '4'::jsonb or e->'rubricVersion' is distinct from '2'::jsonb then return false; end if;
- question:=public.textos_question_find(s,e->>'publisherId');
- return coalesce(question->'version'=e->'questionVersion' and public.textos_presentation_score_of(e,true) is not null,false);
+ return public.textos_presentation_score_of(e,true) is not null;
 end $$;
 
 create or replace function public.textos_presentation_teacher_matches(t jsonb, area text, block text) returns boolean
@@ -269,16 +266,12 @@ begin
  if p_action='presentation_save' then
   perform public.textos_presentation_scores(p_payload->'scores',4);
   perform public.textos_presentation_score_of(p_payload||jsonb_build_object('scaleMax',4),false);
-  if p_payload->'responseScore'<>'null'::jsonb then
-   question:=public.textos_question_find(s,publisher_id);
-   if question is null or question->'version' is distinct from p_payload->'questionVersion' then perform public.textos_fail('La pregunta o respuesta cambió. Actualice antes de puntuarla.','PT409'); end if;
-  end if;
   notes:=coalesce(p_payload->'notes','["","","","","","","","","",""]'::jsonb);
   if jsonb_typeof(notes) is distinct from 'array' then perform public.textos_fail('Observaciones inválidas.'); end if;
   if jsonb_array_length(notes)<>10 or exists(select 1 from jsonb_array_elements(notes) q where jsonb_typeof(q)<>'string') then perform public.textos_fail('Las diez observaciones son opcionales y deben ser texto.'); end if;
   if (p_payload ? 'generalObservation' and jsonb_typeof(p_payload->'generalObservation') is distinct from 'string') or (p_payload ? 'physicalText' and jsonb_typeof(p_payload->'physicalText') is distinct from 'string')
    or (p_payload ? 'materialViewed' and jsonb_typeof(p_payload->'materialViewed') is distinct from 'boolean') then perform public.textos_fail('Datos de observación inválidos.'); end if;
-  entity:=coalesce(ev,'{}')||jsonb_build_object('id',coalesce(ev->>'id',gen_random_uuid()::text),'version',coalesce((ev->>'version')::int,0)+1,'publisherId',publisher_id,'teacherId',actor_id,'area',area,'block',block,'scaleMax',4,'rubricVersion',2,'responseScore',p_payload->'responseScore','questionVersion',p_payload->'questionVersion','scores',p_payload->'scores','notes',notes,'generalObservation',coalesce(p_payload->>'generalObservation',''),'physicalText',coalesce(p_payload->>'physicalText',''),'status','draft','closedAt',null,'updatedAt',nowat,'rulesVersion',s#>'{settings,rules,version}');
+  entity:=coalesce(ev,'{}')||jsonb_build_object('id',coalesce(ev->>'id',gen_random_uuid()::text),'version',coalesce((ev->>'version')::int,0)+1,'publisherId',publisher_id,'teacherId',actor_id,'area',area,'block',block,'scaleMax',4,'rubricVersion',2,'responseScore',p_payload->'responseScore','questionVersion',coalesce(p_payload->'questionVersion',ev->'questionVersion','null'::jsonb),'scores',p_payload->'scores','notes',notes,'generalObservation',coalesce(p_payload->>'generalObservation',''),'physicalText',coalesce(p_payload->>'physicalText',''),'status','draft','closedAt',null,'updatedAt',nowat,'rulesVersion',s#>'{settings,rules,version}');
   if p_payload ? 'materialViewed' then entity:=entity||jsonb_build_object('materialViewed',p_payload->'materialViewed'); end if;
   if nullif(s#>>'{settings,rules,lockedAt}','') is null then
    s:=jsonb_set(s,'{settings,rules,lockedAt}',to_jsonb(nowat));
@@ -286,8 +279,6 @@ begin
   end if;
  elsif p_action='presentation_close' then
   perform public.textos_presentation_score_of(ev,true);
-  question:=public.textos_question_find(s,publisher_id);
-  if question is null or question->'version' is distinct from ev->'questionVersion' then perform public.textos_fail('Debe puntuar la respuesta vigente a la pregunta obligatoria.','PT423'); end if;
   entity:=ev||jsonb_build_object('status','closed','closedAt',nowat,'updatedAt',nowat,'version',(ev->>'version')::int+1);
  elsif p_action='presentation_restart_scale' then
   reason:='Actualización explícita de escala 0–2 a 0–4';
