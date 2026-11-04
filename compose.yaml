@@ -1,0 +1,49 @@
+name: seleccion-textos-2027
+services:
+  db:
+    image: postgres:16-bookworm@sha256:e8a07d2c7579b038938cdba6c539e580e5001caf9ea203d397b5cc83e76bd938
+    environment:
+      POSTGRES_DB: textos
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Run scripts/local-start.sh first}
+      PGRST_PASSWORD: ${PGRST_PASSWORD:?Run scripts/local-start.sh first}
+    volumes:
+      - textos_data:/var/lib/postgresql/data
+      - ./supabase:/app-schema:ro
+      - ./scripts/db-init.sh:/docker-entrypoint-initdb.d/10-textos.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U postgres -d textos"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+  api:
+    image: postgrest/postgrest:v12.2.3@sha256:729bf65c733b73f5b52777f0e4b853f22ed73aa67a22d38269d289779b0a8401
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${PGRST_PASSWORD}@db:5432/textos
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_SERVER_PORT: 3000
+      PGRST_LOG_LEVEL: crit
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+  web:
+    image: seleccion-textos-2027-web:local
+    build: .
+    environment:
+      PORT: 8788
+      POSTGREST_URL: http://api:3000
+    ports:
+      - "${TEXTOS_PORT:-8080}:8788"
+    depends_on:
+      - api
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8788/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+volumes:
+  textos_data:

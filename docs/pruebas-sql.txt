@@ -1,0 +1,31 @@
+Selección de textos escolares 2027 — pruebas SQL/HTTP
+Fecha: 4 de noviembre de 2026 (UTC)
+Comando: sh scripts/test-db.sh
+Entorno: PostgreSQL 16 y PostgREST 12.2.3 en contenedores locales aislados.
+Resultado: 20 grupos aprobados. No se imprimen códigos ni identificadores privados.
+
+✓ 01 RPC requires individual access and tables/helpers reject anonymous reads
+✓ 02 two teachers see only their assignments, books and private notes
+✓ 03 CAS rejects a stale tab and invalid indicator values
+✓ 04 null differs from a real zero; closure requires all evidence and objection detail
+✓ 05 a closed evaluation requires a documented reopening and preserves history
+✓ 06 SQL averages distinct teachers, all P2 grades, exact 70 and individual grade cutoff
+✓ 07 SQL resolves cutoff tie by I2, otherwise requests same-teacher additional reviews
+✓ 08 an unresolved additional review stays pending instead of picking by name
+✓ 09 fewer than three options requires a resolved formal article 11.3 incident and grade agreement
+✓ 10 legacy eight-indicator backup remains pending until its own teachers complete all ten
+✓ 11 pending offers block only their category and public projection hides provisional notes/rankings
+✓ 12 published shortlist preserves three options, rules and book snapshot and requires Director approval
+✓ 13 paper cannot generate digital ballots; paper counts reconcile all deposited ballots
+✓ 14 concurrent duplicate code submissions commit exactly one anonymous ballot
+✓ 15 database restart preserves consumed codes and aggregated ballots
+✓ 16 a family tie only in Mathematics opens a Mathematics-only runoff
+✓ 17 restoring before a known vote suspends the round and never reactivates a consumed token
+✓ 18 restoring an open snapshot of a known closed round requires reconciliation
+✓ 19 fresh real installation suspends imported open/draft lineages, issues fresh reconciled codes and preserves closed results
+✓ 20 same-snapshot backup restores closures, shortlist snapshots and totals, leaving real dataset empty
+
+20 pruebas SQL/HTTP aprobadas en PostgreSQL/PostgREST aislados. La base real de esta prueba permanece vacía.
+
+Los contenedores, la red y el volumen de prueba se eliminaron automáticamente al terminar.
+Esta ejecución no utilizó la base real del colegio ni el proyecto Supabase.

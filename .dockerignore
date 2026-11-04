@@ -1,0 +1,8 @@
+node_modules
+dist
+.git
+local/.env
+local/data
+local/owner-code.txt
+test-results
+*.log

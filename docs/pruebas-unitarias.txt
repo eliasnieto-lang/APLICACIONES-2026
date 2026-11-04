@@ -1,0 +1,61 @@
+
+> seleccion-textos-escolares-2027@1.0.0 test
+> node --import tsx --test --test-isolation=none tests/*.test.ts
+
+✔ coordinator authentication is omitted from public projection and anonymous voting (32.011615ms)
+✔ CAS conflict is visible and network failure never claims confirmation (1.109205ms)
+✔ índice con orden anual duplicado mantiene pendiente la muestra aunque existan tres recuentos (1.026213ms)
+✔ I10 no acredita una acción pedagógica por el solo ingreso descrito en una frase (0.946519ms)
+✔ funcionalidad opcional no acredita el perfil base y la media nunca suma práctica opcional (0.498809ms)
+✔ promoción de inicial admite el texto habitual usado en padrón y plantilla (0.553569ms)
+✔ 14/20 son 70; nueve respuestas, cero comprobado y ficha histórica conservan estados distintos (3.361405ms)
+✔ dos fichas de 75 y 85 producen 80 y exactamente 70 pasa el corte por grado (2.965694ms)
+✔ P2 usa todos sus grados con igual peso; un 65 no se rescata con el promedio del bloque (4.289094ms)
+✔ los cálculos de bloque conservan el valor completo para ordenar (1.878924ms)
+✔ docentes repetidos, versión distinta y evidencia ausente no producen una nota de grado (1.883339ms)
+✔ sin oferta, ficha pendiente, retiro e incumplimiento son distintos y no se convierten en cero (1.944372ms)
+✔ 16 temas por bimestres y los mismos 16 por capítulos siguen siendo 16; el detalle sustituye la carga rápida (2.693373ms)
+✔ temas retomados no duplican la carga; una lección distinta sí cuenta (4.003316ms)
+✔ bimestre pendiente es null; cero comprobado exige observación y no se confunde con pendiente (0.406955ms)
+✔ muestra 8,12,10 tiene media10, rango8–12 y n3, sin extrapolar al libro (2.701828ms)
+✔ cero verificado integra la media, desconocido mantiene la muestra pendiente (1.167888ms)
+✔ N=1 y N=2 se muestrean una sola vez; índice desconocido mantiene pendiente la muestra (1.271555ms)
+✔ promedio de todos los temas solo aparece con inventario completo y conserva origen declarado/verificado (1.150561ms)
+✔ I10 admite equivalente autorizado y probado; ausencia, promesa y un solo perfil tienen límites distintos (0.815146ms)
+✔ I10 no recibe funciones opcionales o solo portada y la ficha debe respetar la ausencia confirmada (1.02012ms)
+✔ precio conjunto sin desglose se acepta; falta de precio unitario permanece null (0.153589ms)
+✔ una categoría con pendientes no publica; otra categoría independiente puede quedar lista (4.67884ms)
+✔ una oferta con un grado no apto y otro todavía pendiente mantiene bloqueada su categoría (4.50605ms)
+✔ menos de tres aptas no produce finalistas ficticios (2.392559ms)
+✔ dos ediciones activas de la misma serie no pueden llenar dos plazas de la terna (2.489394ms)
+✔ I2 resuelve empate en el corte; empate entre dos incluidos no bloquea (2.205235ms)
+✔ empate de corte irresuelto no se rompe por orden alfabético o de carga (2.799314ms)
+✔ revisión adicional comparable con mismos docentes resuelve solo el empate y conserva notas iniciales (2.780942ms)
+✔ revisión adicional de otros docentes, incompleta, distinta o aún empatada no resuelve el corte (7.432759ms)
+✔ valores iniciales no inventan verificaciones; datos ficticios y jornada real están separados (0.676915ms)
+✔ padrón proyecta origen2026 al grado representado2027 y no deja salir del ámbito (0.257716ms)
+✔ encrypted draft recovers only with its individual code and dataset (11.252981ms)
+✔ ciphertext modification is rejected and preserved for recovery (1.265714ms)
+✔ multiple edits retain the newest encrypted draft (6.575469ms)
+✔ precio total declarado sin desglose: conserva el total y no inventa precios unitarios (1.331678ms)
+✔ precio desconocido sigue nulo, cero real se conserva y cantidades negativas se rechazan (0.86335ms)
+✔ catálogo con tema duplicado y cantidad negativa identifica ambas filas y no muta el estado (1.025781ms)
+✔ rechaza duplicados preexistentes y cruces de área/bloque/grado (0.687566ms)
+✔ un tema retomado debe referir al mismo texto y las referencias no pueden formar ciclos (0.589275ms)
+✔ muestra verificada exige recuento base y evidencia; admite cero y separa componentes opcionales (0.681601ms)
+✔ padrón deriva promociones de inicial y sexto y rechaza destino incoherente y doble sección (0.860505ms)
+✔ acepta encabezados españoles, bimestre pendiente y rechaza expedientes cerrados (0.919353ms)
+✔ tipo inválido y columnas duplicadas devuelven errores revisables (0.317145ms)
+✔ ficha docente PDF A4 conserva diez indicadores, evidencia, 70/100 y firmas sin la valoración del colega (120.991615ms)
+✔ cédula A4 incluye dos áreas y opciones públicas sin padrón, fichas ni identificador individual (28.659618ms)
+✔ acta A4 muestra ganadores distintos, conciliación, blancos, nulos, incidencia y firmas; rechaza ronda abierta (31.060645ms)
+✔ tarjetas y constancia usan expediente histórico y distinguen precio opcional desconocido (79.66552ms)
+✔ XLSX privado mantiene notas y padrón separados de conteos agregados, sin códigos de acceso (74.416079ms)
+ℹ tests 49
+ℹ suites 0
+ℹ pass 49
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1063.714726

@@ -1,0 +1,16 @@
+{
+  "application": "Selección de textos escolares 2027",
+  "backend": "PostgreSQL 16 + PostgREST + Node Express",
+  "at": "2026-11-04T07:21:20.275Z",
+  "passed": 7,
+  "checks": [
+    "correct application identity, working coordinator login and empty real dataset",
+    "catalog CSV preview is validated on real backend and requires explicit confirmation",
+    "closed dossier correction records a reason and preserves its preceding version",
+    "two separate teacher sessions see own evaluations and independent saved drafts",
+    "offline local draft recovers after reentry and only server confirms closure",
+    "public projection contains no teacher identity or draft before authorized shortlist",
+    "PDF assessment downloads from the running application"
+  ],
+  "pageErrors": []
+}
