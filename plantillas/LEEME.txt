@@ -1,0 +1,20 @@
+PLANTILLAS DE CARGA — SELECCIÓN DE TEXTOS ESCOLARES 2027
+
+Los archivos contienen ejemplos ficticios: reemplácelos antes de confirmar una carga real.
+Use CSV UTF-8, separado por comas (también se admite punto y coma), o XLSX con estos mismos encabezados en la primera hoja. La aplicación muestra una vista previa y exige confirmación. No admite fórmulas XLSX; pegue valores.
+
+Orden recomendado: títulos/precios; capítulos/temas; práctica; padrón.
+code identifica de manera estable un título y edición. Una edición nueva necesita otro código. Las claves existentes y duplicadas se rechazan, nunca se sobrescriben en silencio. Para corregir datos existentes, use el formulario del expediente.
+bookCode relaciona temas y práctica con el code del título. code del tema debe ser único dentro del libro. topicCode referencia ese tema; una práctica sin índice detallado necesita position y topicName.
+
+area: MAT o COM. block: P1, P2 o S1.
+gradeId: PRI1, PRI2, PRI3, PRI4, PRI5, PRI6, SEC1, SEC2 o SEC3.
+P1: PRI1–PRI2; P2: PRI3–PRI6; S1: SEC1–SEC3.
+sourceGrade usa INI5 para inicial 5 años y PRI1–PRI6/SEC1–SEC2 para el grado de origen 2026. gradeId indica el destino 2027.
+bimester: 1–4; vacío significa pendiente. order y position empiezan en 1.
+distinctLesson, verified, replacement y accredited: true o false.
+Números: no negativos, decimal con punto. Un vacío numérico es desconocido; cero es un cero comprobado. declaredBasePrice admite un precio conjunto aunque no haya desglose por componente: no implica componentes gratuitos.
+revisitOf referencia el code de un tema anterior; no se vuelve a contar salvo distinctLesson=true.
+baseCount, workbookCount y optionalCount permanecen separados. No cuente ejemplos resueltos, consignas duplicadas ni pasos que conducen a un único producto como consignas independientes.
+
+Después de importar, complete fuentes y verificaciones en cada expediente. La importación no certifica la conformidad ministerial ni cierra expedientes o evaluaciones.
