@@ -1,0 +1,1 @@
+function t(e,r){return(e.presentationQuestions??[]).find(n=>n.publisherId===r)}function a(e){return!!(e&&e.status==="answered"&&e.representativeName.trim()&&["MAT","COM"].includes(e.area)&&e.question.trim()&&e.answer.trim()&&e.askedAt&&e.answeredAt)}export{a as i,t as p};

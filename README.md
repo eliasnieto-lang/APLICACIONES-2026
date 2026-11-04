@@ -1,24 +1,25 @@
-# Selección de textos escolares 2027 — jornada y votos A5
+# Selección de textos escolares 2027 — ficha adaptada y eliminación
 
-Sorteo aleatorio en servidor de las editoriales registradas, con un orden guardado
-que comparten Subdirección, docentes y proyección. Turnos protegidos frente a controles
-atrasados; pitido al iniciar, aviso a cinco segundos y alarma al terminar.
+Subdirección: Eliminar información permite borrar registros concretos o vaciar el
+espacio abierto (Jornada real o Demostración), con previsualización y confirmación.
+El acceso administrativo y la configuración se conservan.
 
-Panel del Subdirector: Ranking / Top al terminar las exposiciones; Docentes y avance
-con porcentajes de criterios guardados y fichas cerradas por separado.
+Ficha docente: diez criterios observables enriquecidos con referencias a la guía
+MINEDU adjunta, y valoración de la pregunta obligatoria (I11). Escala institucional 0–4,
+máximo 44 convertido a nota orientativa/100. Sin puntaje mínimo para clasificar.
+La guía integra 27 indicadores con otra escala y ponderaciones; la observación de la
+exposición no se presenta como verificación integral por texto. 70 puntos, solo referencia.
+El PDF fuente y verificaciones pendientes están disponibles en la app.
 
-Votación de padres: una ficha A5 de tamaño real con Matemática y Comunicación de la
-misma categoría, casillas para marcar, código anónimo único y cuatro marcas de registro.
-Las fotos se leen localmente: las claras se pueden contar de inmediato y las dudosas
-pasan a revisión. Una ficha repetida solo cuenta una vez. No se guardan fotografías
-ni identidades de votantes. El PDF se genera desde la aplicación para cada lote.
+Sorteo compartido, cronómetro, seguimiento, ranking y lectura de votos A5 se conservan.
+La valoración docente orienta tres propuestas; la elección final corresponde a las familias.
 
 Fuente, manual y evidencia:
-https://github.com/eliasnieto-lang/APLICACIONES-2026/tree/e5a9fe8c3506c6d1642c882aadaceea0abb82d5e
+https://github.com/eliasnieto-lang/APLICACIONES-2026/tree/41fa92233a7b9ec97ee905cd02e07a2f5e536bf1
 
-Antes de activar esta rama, ejecutar la actualización completa como propietario de Supabase:
-https://raw.githubusercontent.com/eliasnieto-lang/APLICACIONES-2026/e5a9fe8c3506c6d1642c882aadaceea0abb82d5e/supabase/migrations/004-sorteo-seguimiento-voto-a5.sql
-La actualización conserva datos, fichas, accesos e historial y puede repetirse.
+Ejecutar como propietario de Supabase ANTES de activar esta rama:
+https://raw.githubusercontent.com/eliasnieto-lang/APLICACIONES-2026/41fa92233a7b9ec97ee905cd02e07a2f5e536bf1/supabase/migrations/005-borrado-preguntas-y-clasificacion.sql
+Instalar o repetir la actualización no borra datos. El borrado se elige desde la app.
 Después del despliegue, recargar los navegadores.
 
 Cloudflare Pages: rama compilada, comando vacío, raíz vacía, salida `.`. Sin Wrangler.
