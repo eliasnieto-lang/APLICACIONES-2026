@@ -1,14 +1,24 @@
-# Selección de textos escolares 2027 — acceso directo
+# Selección de textos escolares 2027 — escala 0–4
+
+Una descripción por criterio; cinco valoraciones: 0 Sin valoración, 1 En inicio,
+2 En proceso, 3 Logrado y 4 Destacado. El cero elegido aporta cero puntos.
+Diez criterios, máximo 40; nota /100 = suma × 2.5.
+
+Subdirección: desplegables de área, categoría, editorial, docente y estado;
+resultados y fichas separados, detalles e historial solo al solicitarlos.
+Los filtros de consulta no cambian el promedio oficial ni la propuesta de terna.
+Las fichas anteriores mantienen su escala y porcentaje; la nueva valoración es explícita.
 
 Portada: INGRESAR COMO DOCENTE EVALUADOR / INGRESAR COMO SUBDIRECTOR.
-Docentes: registro obligatorio de apellidos, nombres, área y una o varias categorías. Sin contraseña docente ni cupo de evaluadores.
-Subdirector: contraseña verificada en servidor.
-Evaluación: una ficha por docente, editorial, área y categoría; exposición en vivo y ejemplar físico, sin exigir información documental precargada.
+Registro docente sin contraseña ni límite de participantes; contraseña de Subdirección
+verificada únicamente por el servidor.
 
-Fuente y manual: https://github.com/eliasnieto-lang/APLICACIONES-2026/tree/508f278515648468c1e1540f4a973b86ed8fc695
+Fuente, manual y pruebas:
+https://github.com/eliasnieto-lang/APLICACIONES-2026/tree/a8cd335a603527cd3f89e654208034e8507c0040
 
-Antes de activar esta rama debe ejecutarse la actualización de Supabase como propietario:
-https://raw.githubusercontent.com/eliasnieto-lang/APLICACIONES-2026/9f962be50d32be929524295378041edb2478711b/supabase/migrations/002-acceso-directo.sql
+Antes de activar esta rama, ejecute la actualización completa como propietario de Supabase:
+https://raw.githubusercontent.com/eliasnieto-lang/APLICACIONES-2026/a8cd335a603527cd3f89e654208034e8507c0040/supabase/migrations/003-escala-y-filtros.sql
 La migración conserva los registros existentes y puede repetirse.
+Después del despliegue, recargue los navegadores para usar la escala vigente.
 
 Cloudflare Pages para esta rama compilada: comando vacío, raíz vacía, salida `.`. Sin Wrangler.
