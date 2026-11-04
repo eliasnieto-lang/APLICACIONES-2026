@@ -12,13 +12,15 @@ El procedimiento histórico por libro, grado, expediente y elección familiar se
 4. **Consolidar y publicar.** Subdirección revisa inscritos, fichas cerradas, pendientes y promedios por editorial. Cada promedio incluye a todos los docentes del área y bloque que cerraron su ficha; es provisional mientras falten cierres. La publicación formal exige exactamente tres editoriales aptas, ninguna ficha pendiente, retiro documentado de las editoriales, aprobación de Dirección, apreciación y folio. El empate en el corte se compara por I2; si persiste, la publicación queda bloqueada. Menos de tres aptas requiere un procedimiento formal adicional y no se completa con opciones no aptas.
 5. **Documentar y respaldar.** En Actas y respaldos descargue la ficha de exposición PDF, la terna publicada PDF, el XLSX privado y el respaldo JSON. Las fichas individuales y sus observaciones solo corresponden al autor y a coordinación; la sala pública recibe únicamente resultados agregados publicados. Reabrir una ficha exige motivo, conserva su historial y deja sin vigencia la publicación afectada.
 
+El panel incorpora **Sorteo en vivo**, **Ranking / Top**, **Docentes y avance** y **Votación de padres · A5**. El sorteo del servidor fija el orden compartido con todos los evaluadores. El cronómetro avisa al inicio, a cinco segundos y al finalizar. Las fichas A5 incluyen ambas áreas, código anónimo y marcas de registro; sus fotos se analizan en el navegador y los votos claros se cuentan una sola vez. Las lecturas dudosas requieren revisión.
+
 El [manual](MANUAL.md) detalla acceso, exposición, recuperación y archivos históricos. El [informe de validación](VALIDACION.md) distingue pruebas locales y publicación.
 
 ## Opción A: nube gratuita
 
 Se usa un sitio estático en Cloudflare Pages y PostgreSQL/Supabase Free. No se necesita contratar un dominio. Los equipos requieren Internet. Los límites y suspensión por inactividad del plan gratuito se consultan en el panel del proveedor; haga una prueba antes de la jornada.
 
-Si ya instaló el acceso directo (actualización 002), ejecute primero el archivo completo [003-escala-y-filtros.sql](supabase/migrations/003-escala-y-filtros.sql) en **SQL Editor → New query → Run**, y luego publique la nueva interfaz. La actualización conserva las fichas previas y no cambia sus porcentajes; los navegadores con la interfaz anterior deben recargarse después del despliegue.
+Si ya instaló una versión anterior, ejecute primero el archivo completo [004-sorteo-seguimiento-voto-a5.sql](supabase/migrations/004-sorteo-seguimiento-voto-a5.sql) en **SQL Editor → New query → Run**, y luego publique la nueva interfaz. La actualización conserva las fichas previas y no cambia sus porcentajes; los navegadores con la interfaz anterior deben recargarse después del despliegue.
 
 1. En el proyecto de Supabase existente, abra **SQL Editor**, pegue el archivo completo [supabase/schema.sql](supabase/schema.sql) y pulse **Run**. Se ejecuta como propietario, crea exclusivamente objetos `textos_*` y puede repetirse sin borrar datos. No ejecute `bootstrap-local.sql` en Supabase.
 2. La portada usa el acceso directo de Subdirección. La contraseña se verifica exclusivamente en el servidor contra una huella con sal; el SQL no almacena su texto original. Coordine su entrega y cualquier cambio por un canal privado. El registro docente solicita nombres, apellidos, área y bloques; no requiere cuentas de correo. La autorización previa mediante Supabase Authentication sigue disponible para mantenimiento y compatibilidad, no es el recorrido principal de la portada.
@@ -66,11 +68,13 @@ npm test
 npm run build
 bash scripts/test-presentation-db.sh
 bash scripts/test-scale-migration-db.sh
+bash scripts/test-jornada-db.sh
+bash scripts/test-paper-db.sh
 ```
 
 Para desarrollar la interfaz: `npm run dev`. Para la base local use Compose; `npm start` sirve `dist` y reenvía las solicitudes a `POSTGREST_URL` (por defecto `http://127.0.0.1:3000`). Vite reenvía `/api` al servidor Node del puerto 8788.
 
-Las pruebas PDF usan `pdftotext` de Poppler para abrir y comprobar el contenido; instale `poppler-utils` en Linux si no está disponible. No se requiere para usar la aplicación. La prueba completa de navegador se ejecuta en una instalación local descartable con `node --import tsx tests/browser-presentation-local.mjs` (Chromium en `/usr/bin/chromium` o `CHROMIUM_PATH`). Usa solo la demostración; no la ejecute contra la base de una jornada en curso.
+Las pruebas PDF usan `pdftotext` y `pdftoppm` de Poppler para abrir y comprobar el contenido; instale `poppler-utils` en Linux si no está disponible. No se requiere para usar la aplicación. La prueba completa de navegador se ejecuta en una instalación local descartable con `node --import tsx tests/browser-presentation-local.mjs` (Chromium en `/usr/bin/chromium` o `CHROMIUM_PATH`). Usa solo la demostración; no la ejecute contra la base de una jornada en curso.
 
 Las pruebas SQL utilizan servicios Docker aislados y datos ficticios, sin conectarse a producción. Consulte `scripts/test-db.sh` y el informe de validación entregado. La migración, el control de versiones y el recuento transaccional son el mismo código tanto en nube como en red local.
 

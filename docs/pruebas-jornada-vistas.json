@@ -1,0 +1,10 @@
+{
+  "fixture": "isolated in-memory browser UI requests",
+  "passed": 3,
+  "checks": [
+    "teacher sees frozen publisher positions and can open the current editorial without losing the selected form",
+    "all nine teachers and every zero-valued answer appear in progress; filters keep closure separate from response percentage",
+    "ranking is generated only after all draw turns finish, identifies provisional results and keeps zero as a score"
+  ],
+  "pageErrors": []
+}

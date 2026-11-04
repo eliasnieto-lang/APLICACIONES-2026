@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 
 const db = process.env.TEXTOS_TEST_DB_CONTAINER;
 const url = process.env.TEXTOS_TEST_REST_URL;
@@ -10,7 +11,7 @@ for (const key of ['DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS', 'DOCKER_TLS_VE
 const docker = (...args) => execFileSync('docker', ['--host=unix:///var/run/docker.sock', ...args], { env: dockerEnv, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
 const sql = statement => docker('exec', '-i', db, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres', '-Atc', statement);
 const migration = readFileSync(new URL('../supabase/migrations/003-escala-y-filtros.sql', import.meta.url));
-assert.equal(migration.toString(), readFileSync(new URL('../supabase/schema.sql', import.meta.url)).toString());
+assert.equal(createHash('sha256').update(migration).digest('hex'), '63b3ceba39485e17587fd47f5ce8fc519d159d9226797e613335b7c12891af5e');
 const applyMigration = () => execFileSync('docker', ['--host=unix:///var/run/docker.sock', 'exec', '-i', db, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres'], { env: dockerEnv, input: migration, stdio: ['pipe', 'pipe', 'pipe'] });
 let checks = 0;
 const check = async (name, operation) => { await operation(); console.log(`✓ ${++checks} ${name}`); };
@@ -126,4 +127,21 @@ await check('restaurar una copia 002 preserva vectores previos y retira su publi
   assert.equal(restored.presentationShortlists[0].snapshot.scaleMax, 2);
   assert.deepEqual(restored.evaluations, before.evaluations);
 });
-console.log(`${checks} pruebas de migración 002→003 SQL/HTTP aprobadas.`);
+const update004 = readFileSync(new URL('../supabase/migrations/004-sorteo-seguimiento-voto-a5.sql', import.meta.url));
+assert.equal(update004.toString(), readFileSync(new URL('../supabase/schema.sql', import.meta.url)).toString());
+const apply004 = () => execFileSync('docker', ['--host=unix:///var/run/docker.sock', 'exec', '-i', db, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres'], { env: dockerEnv, input: update004, stdio: ['pipe', 'pipe', 'pipe'] });
+await check('004 incorpora sorteo y papel sin alterar ningún registro, credencial ni historial de 003', async () => {
+  const unchanged = sql("select jsonb_build_object('datasets',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_datasets t),'history',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_history t),'access',(select jsonb_agg(to_jsonb(t) order by code_hash) from public.textos_access t))");
+  apply004();
+  assert.equal(sql("select jsonb_build_object('datasets',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_datasets t),'history',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_history t),'access',(select jsonb_agg(to_jsonb(t) order by code_hash) from public.textos_access t))"), unchanged);
+  assert.equal(sql("select count(*) from public.textos_paper_tokens"), '0');
+});
+await check('repetir 004 conserva el orden ya sorteado y no añade versiones ni historial', async () => {
+  const draw = await ok('presentation_draw', { expectedVersion: 0, confirmArrivals: true });
+  assert.equal(draw.publishers.length, 3);
+  const unchanged = sql("select jsonb_build_object('datasets',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_datasets t),'history',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_history t))");
+  apply004();
+  assert.equal(sql("select jsonb_build_object('datasets',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_datasets t),'history',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_history t))"), unchanged);
+  assert.deepEqual((await state()).presentationDraw.publishers, draw.publishers);
+});
+console.log(`${checks} pruebas de migración 002→003→004 SQL/HTTP aprobadas.`);

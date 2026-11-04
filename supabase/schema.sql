@@ -449,6 +449,8 @@ begin
  end loop;
 
  perform public.textos_presentation_validate(s);
+ perform public.textos_jornada_validate(s);
+ perform public.textos_paper_validate(s);
 end $$;
 
 create or replace function public.textos_public_state(s jsonb) returns jsonb language plpgsql stable set search_path=pg_catalog,public as $$
@@ -456,6 +458,7 @@ create or replace function public.textos_public_state(s jsonb) returns jsonb lan
 declare outstate jsonb:=public.textos_empty_state(); sl jsonb; ids jsonb; r jsonb; k text;
 begin
  outstate:=jsonb_set(outstate,'{version}',s->'version');
+ if s->'presentationDraw' is not null then outstate:=jsonb_set(outstate,'{presentationDraw}',public.textos_jornada_draw_public(s->'presentationDraw')); end if;
  outstate:=jsonb_set(outstate,'{settings}',s->'settings'); outstate:=jsonb_set(outstate,'{turn}',s->'turn');
  outstate:=jsonb_set(outstate,'{publishers}',coalesce((select jsonb_agg(jsonb_build_object('id',x->>'id','version',x->'version','name',x->>'name','samplesReceived',x->'samplesReceived','sampleNote','')) from jsonb_array_elements(s->'publishers') x),'[]'));
  select coalesce(jsonb_agg(x-'snapshot'||jsonb_build_object('snapshot',jsonb_build_object('assessment',jsonb_build_object('categoryId',x->>'categoryId','state','published','finalists',x->'offerIds','ranked',coalesce((select jsonb_agg(jsonb_build_object('offerId',a->>'offerId','score',a->'score','i2',a->'i2','grades',coalesce((select jsonb_agg(g-'reasons') from jsonb_array_elements(a->'grades') g where exists(select 1 from jsonb_array_elements(x#>'{snapshot,books}') bk where bk->>'id'=g->>'bookId' and x->'gradeIds' ? (bk->>'gradeId'))),'[]'))) from jsonb_array_elements(x#>'{snapshot,assessment,ranked}') a where x->'offerIds' ? (a->>'offerId')),'[]')),'rules',x#>'{snapshot,rules}'))),'[]') into sl from jsonb_array_elements(s->'shortlists') x where x->>'status'='published';
@@ -496,7 +499,7 @@ begin
   if kind='titles' then
    if exists(select 1 from jsonb_array_elements(s->'books') z where z->>'code'=r->>'code') then perform public.textos_fail('Fila '||n||': código de texto duplicado.'); end if;
    select z into p from jsonb_array_elements(s->'publishers') z where lower(z->>'name')=lower(r->>'publisher');
-   if p is null then p:=jsonb_build_object('id',gen_random_uuid()::text,'version',1,'name',r->>'publisher','samplesReceived',false,'sampleNote',''); s:=public.textos_put(s,'publishers',p); end if;
+   if p is null then if s->'presentationDraw' is not null and ((s#>>'{turn,startedAt}') is not null or jsonb_array_length(s#>'{presentationDraw,completedPublisherIds}')>0) then perform public.textos_fail('La jornada sorteada ya comenzó. No puede importar editoriales nuevas.','PT423'); end if; p:=jsonb_build_object('id',gen_random_uuid()::text,'version',1,'name',r->>'publisher','samplesReceived',false,'sampleNote',''); s:=public.textos_put(s,'publishers',p); end if;
    select z into se from jsonb_array_elements(s->'series') z where z->>'publisherId'=p->>'id' and lower(z->>'name')=lower(r->>'series');
    if se is null then se:=jsonb_build_object('id',gen_random_uuid()::text,'version',1,'publisherId',p->>'id','name',r->>'series'); s:=public.textos_put(s,'series',se); end if;
    select z into o from jsonb_array_elements(s->'offers') z where z->>'seriesId'=se->>'id' and z->>'area'=r->>'area' and z->>'block'=r->>'block' and z->>'edition'=r->>'edition';
@@ -614,7 +617,10 @@ language plpgsql stable set search_path=pg_catalog,public as $$
 declare k text;
 begin
  s:=s||jsonb_build_object('presentationEvaluations',coalesce(s->'presentationEvaluations','[]'),'presentationShortlists',coalesce(s->'presentationShortlists','[]'));
+ if s->'presentationRanking' is not null then s:=jsonb_set(s,'{presentationRanking,stale}',to_jsonb(not public.textos_jornada_ranking_current(s))); end if;
  if actor_role='teacher' then
+  s:=s-'presentationRanking'-'paperPolls';
+  if s->'presentationDraw' is not null then s:=jsonb_set(s,'{presentationDraw}',public.textos_jornada_draw_public(s->'presentationDraw')); end if;
   s:=jsonb_set(s,'{evaluations}',coalesce((select jsonb_agg(q) from jsonb_array_elements(s->'evaluations') q where q->>'teacherId'=actor_id),'[]'));
   s:=jsonb_set(s,'{assignments}',coalesce((select jsonb_agg(q) from jsonb_array_elements(s->'assignments') q where q->>'teacherId'=actor_id),'[]'));
   s:=jsonb_set(s,'{books}',coalesce((select jsonb_agg(q) from jsonb_array_elements(s->'books') q where exists(select 1 from jsonb_array_elements(s->'assignments') asn where asn->>'bookId'=q->>'id')),'[]'));
@@ -622,6 +628,7 @@ begin
   foreach k in array array['shortlists','sections','deliveries','rounds','incidents','audit','reviews'] loop s:=jsonb_set(s,array[k],'[]'); end loop;
   s:=public.textos_presentation_teacher_state(s,actor_id);
  elsif actor_role='secretary' then
+  s:=s-'presentationRanking'-'paperPolls';
   foreach k in array array['evaluations','assignments','reviews','presentationEvaluations'] loop s:=jsonb_set(s,array[k],'[]'); end loop;
  end if;
  return jsonb_build_object('state',s,'actor',jsonb_build_object('id',actor_id,'name',actor_name,'role',actor_role),'serverNow',nowat,'dataset',dataset);
@@ -918,6 +925,389 @@ end $$;
 
 -- END LIVE PRESENTATION HELPERS
 
+-- BEGIN JORNADA HELPERS
+-- Only textos_api holds the dataset lock, authenticates the actor and persists
+-- these pure state transitions. Helpers are not public RPC entry points.
+
+-- Enumerate the schedule projection: restored custom fields never become public.
+create or replace function public.textos_jornada_draw_public(d jsonb) returns jsonb
+language sql immutable set search_path=pg_catalog,public as $$
+ select case when d is null or d='null'::jsonb then null else jsonb_build_object(
+  'id',d->>'id','version',d->'version',
+  'publishers',coalesce((select jsonb_agg(jsonb_build_object('id',p->>'id','name',p->>'name') order by ord)
+   from jsonb_array_elements(d->'publishers') with ordinality q(p,ord)),'[]'::jsonb),
+  'completedPublisherIds',d->'completedPublisherIds','createdAt',d->>'createdAt','createdBy','Subdirección'
+ ) end
+$$;
+
+create or replace function public.textos_jornada_fingerprint(s jsonb) returns text
+language sql immutable set search_path=pg_catalog,public as $$
+ select encode(sha256(convert_to(jsonb_build_object(
+  'publishers',coalesce(s->'publishers','[]'),
+  'teachers',coalesce(s->'teachers','[]'),
+  'evaluations',coalesce(s->'presentationEvaluations','[]'),
+  'rules',s#>'{settings,rules}',
+  'draw',s->'presentationDraw'
+ )::text,'UTF8')),'hex')
+$$;
+
+create or replace function public.textos_jornada_ranking_current(s jsonb) returns boolean
+language sql immutable set search_path=pg_catalog,public as $$
+ select coalesce(s#>>'{presentationRanking,sourceFingerprint}'=public.textos_jornada_fingerprint(s),false)
+$$;
+
+create or replace function public.textos_jornada_validate(s jsonb) returns void
+language plpgsql stable set search_path=pg_catalog,public as $$
+#variable_conflict use_column
+declare d jsonb; r jsonb; p jsonb; c jsonb; item jsonb; i integer; n integer;
+begin
+ d:=s->'presentationDraw'; r:=s->'presentationRanking';
+ if d is not null and d<>'null'::jsonb then
+  if jsonb_typeof(d) is distinct from 'object' or nullif(trim(d->>'id'),'') is null
+   or not public.textos_int(d->'version') or (d->>'version')::int<1
+   or jsonb_typeof(d->'publishers') is distinct from 'array'
+   or jsonb_typeof(d->'completedPublisherIds') is distinct from 'array'
+   or jsonb_typeof(d->'createdAt') is distinct from 'string'
+   or jsonb_typeof(d->'createdBy') is distinct from 'string' then
+   perform public.textos_fail('Sorteo de participación inválido.');
+  end if;
+  n:=jsonb_array_length(d->'publishers');
+  if n<1 or n<>(select count(distinct q->>'id') from jsonb_array_elements(d->'publishers') q) then
+   perform public.textos_fail('El sorteo requiere editoriales distintas.');
+  end if;
+  for p in select value from jsonb_array_elements(d->'publishers') loop
+   if jsonb_typeof(p) is distinct from 'object' or nullif(trim(p->>'id'),'') is null
+    or nullif(trim(p->>'name'),'') is null or public.textos_find(s,'publishers',p->>'id') is null then
+    perform public.textos_fail('El sorteo contiene una editorial desconocida.');
+   end if;
+  end loop;
+  if jsonb_array_length(d->'completedPublisherIds')>n then perform public.textos_fail('Avance de exposiciones inválido.'); end if;
+  for i in 0..jsonb_array_length(d->'completedPublisherIds')-1 loop
+   if d#>array['completedPublisherIds',i::text] is distinct from d#>array['publishers',i::text,'id'] then
+    perform public.textos_fail('Las exposiciones deben seguir el orden sorteado.');
+   end if;
+  end loop;
+  begin perform (d->>'createdAt')::timestamptz;
+  exception when invalid_datetime_format or datetime_field_overflow then perform public.textos_fail('Fecha de sorteo inválida.'); end;
+ end if;
+ if r is not null and r<>'null'::jsonb then
+  if d is null or d='null'::jsonb or jsonb_typeof(r) is distinct from 'object'
+   or nullif(trim(r->>'id'),'') is null or not public.textos_int(r->'version') or (r->>'version')::int<1
+   or r->>'drawId' is distinct from d->>'id'
+   or jsonb_typeof(r->'categories') is distinct from 'array'
+   or jsonb_array_length(r->'categories')<>6 or jsonb_typeof(r->'provisional') is distinct from 'boolean'
+   or jsonb_typeof(r->'createdAt') is distinct from 'string' or coalesce(r->>'sourceFingerprint','') !~ '^[0-9a-f]{64}$' then
+   perform public.textos_fail('Ranking de exposiciones inválido.');
+  end if;
+  if (select count(distinct q->>'categoryId') from jsonb_array_elements(r->'categories') q)<>6 then perform public.textos_fail('Categorías de ranking duplicadas.'); end if;
+  for c in select value from jsonb_array_elements(r->'categories') loop
+   if c->>'categoryId' !~ '^(MAT|COM)-(P1|P2|S1)$' or c->>'categoryId' is distinct from (c->>'area')||'-'||(c->>'block')
+    or not public.textos_int(c->'registered') or not public.textos_int(c->'closed') or not public.textos_int(c->'pending')
+    or jsonb_typeof(c->'ranked') is distinct from 'array' then perform public.textos_fail('Categoría de ranking inválida.'); end if;
+   for item in select value from jsonb_array_elements(c->'ranked') loop
+    if public.textos_find(s,'publishers',item->>'publisherId') is null or not public.textos_int(item->'registered')
+     or not public.textos_int(item->'closed') or not public.textos_int(item->'pending')
+     or not (item ? 'score')
+     or (item->'score'<>'null'::jsonb and (jsonb_typeof(item->'score') is distinct from 'number' or (item->>'score')::numeric not between 0 and 100)) then
+     perform public.textos_fail('Puntaje del ranking inválido.');
+    end if;
+   end loop;
+   -- Formal publication can change category.state without changing any score.
+   if public.textos_jornada_ranking_current(s) and (c-'state') is distinct from (public.textos_presentation_category(s,c->>'area',c->>'block')-'state') then
+    perform public.textos_fail('El ranking no coincide con las fichas cerradas de su versión.');
+   end if;
+  end loop;
+  if (r->>'provisional')::boolean is distinct from exists(select 1 from jsonb_array_elements(r->'categories') q where (q->>'pending')::int>0) then
+   perform public.textos_fail('La condición provisional del ranking no coincide con sus pendientes.');
+  end if;
+  begin perform (r->>'createdAt')::timestamptz;
+  exception when invalid_datetime_format or datetime_field_overflow then perform public.textos_fail('Fecha de ranking inválida.'); end;
+ end if;
+end $$;
+
+create or replace function public.textos_jornada_action(s jsonb,p_action text,p_payload jsonb,actor_role text,actor_id text,actor_name text,p_dataset text,nowat timestamptz) returns jsonb
+language plpgsql volatile set search_path=pg_catalog,public as $$
+#variable_conflict use_column
+declare old jsonb; entity jsonb; history jsonb:='[]'; publishers jsonb; categories jsonb:='[]'; assessment jsonb;
+ area text; block text; reason text:=coalesce(p_payload->>'reason',''); provisional boolean:=false;
+begin
+ if actor_role is distinct from 'coordinator' then perform public.textos_fail('Operación reservada a Subdirección.','PT403'); end if;
+ if p_action='presentation_draw' then
+  old:=s->'presentationDraw';
+  if old='null'::jsonb then old:=null; end if;
+  if not public.textos_int(p_payload->'expectedVersion') or (p_payload->>'expectedVersion')::int<>coalesce((old->>'version')::int,0) then
+   perform public.textos_fail('El sorteo cambió. Actualice la información antes de continuar.','PT409');
+  end if;
+  if p_payload->'confirmArrivals' is distinct from 'true'::jsonb then perform public.textos_fail('Confirme el cierre del registro de editoriales antes de sortear.'); end if;
+  if jsonb_array_length(s->'publishers')<1 then perform public.textos_fail('Registre las editoriales que llegaron antes de sortear.','PT423'); end if;
+  if s#>>'{turn,status}'='running' then perform public.textos_fail('Pause o finalice el reloj antes de sortear.','PT423'); end if;
+  if old is not null then
+   if jsonb_array_length(old->'completedPublisherIds')>0 or s#>>'{turn,startedAt}' is not null then
+    perform public.textos_fail('El orden ya se utilizó. No puede repetirse el sorteo después de iniciar las exposiciones.','PT423');
+   end if;
+   if length(trim(reason))<8 then perform public.textos_fail('Documente el motivo para repetir el sorteo (mínimo ocho caracteres).'); end if;
+   history:=history||jsonb_build_array(jsonb_build_object('entity','presentationDraw','referenceId',old->>'id','previous',old,'reason',reason));
+  else reason:='Sorteo del orden de participación'; end if;
+  -- Random ordering is produced by the server; clients cannot supply a seed or order.
+  select jsonb_agg(jsonb_build_object('id',p->>'id','name',p->>'name') order by gen_random_uuid()) into publishers from jsonb_array_elements(s->'publishers') p;
+  entity:=jsonb_build_object('id',gen_random_uuid()::text,'version',coalesce((old->>'version')::int,0)+1,
+   'publishers',publishers,'completedPublisherIds','[]'::jsonb,'createdAt',nowat,'createdBy',actor_name);
+  if s#>>'{turn,startedAt}' is not null or s#>>'{turn,publisherId}' is not null then
+   history:=history||jsonb_build_array(jsonb_build_object('entity','turn','referenceId',coalesce(s#>>'{turn,publisherId}','legacy'),'previous',s->'turn','reason','Preparación del primer orden sorteado; reloj anterior conservado'));
+  end if;
+  s:=jsonb_set(s,'{presentationDraw}',entity);
+  s:=s-'presentationRanking';
+  s:=jsonb_set(s,'{turn}',jsonb_build_object('publisherId',publishers#>>'{0,id}','status','ready','startedAt',null,'pausedAt',null,'pausedMilliseconds',0));
+ elsif p_action='presentation_ranking_generate' then
+  old:=s->'presentationRanking';
+  if old='null'::jsonb then old:=null; end if;
+  if not public.textos_int(p_payload->'expectedVersion') or (p_payload->>'expectedVersion')::int<>coalesce((old->>'version')::int,0) then
+   perform public.textos_fail('El ranking cambió. Actualice la información antes de continuar.','PT409');
+  end if;
+  if s->'presentationDraw' is null or s->'presentationDraw'='null'::jsonb
+   or jsonb_array_length(s#>'{presentationDraw,publishers}')<1
+   or jsonb_array_length(s#>'{presentationDraw,completedPublisherIds}')<>jsonb_array_length(s#>'{presentationDraw,publishers}')
+   or s#>>'{turn,status}'<>'finished' then
+   perform public.textos_fail('Finalice todas las exposiciones del orden sorteado antes de generar el ranking.','PT423');
+  end if;
+  if exists(select 1 from jsonb_array_elements(s->'publishers') p where not exists(select 1 from jsonb_array_elements(s#>'{presentationDraw,publishers}') q where q->>'id'=p->>'id')) then
+   perform public.textos_fail('Hay editoriales nuevas que no participaron en el sorteo. Revise el registro de la jornada.','PT423');
+  end if;
+  foreach area in array array['MAT','COM'] loop
+   foreach block in array array['P1','P2','S1'] loop
+    assessment:=public.textos_presentation_category(s,area,block);
+    categories:=categories||jsonb_build_array(assessment);
+    if (assessment->>'pending')::int>0 then provisional:=true; end if;
+   end loop;
+  end loop;
+  entity:=jsonb_build_object('id',gen_random_uuid()::text,'version',coalesce((old->>'version')::int,0)+1,
+   'createdAt',nowat,'drawId',s#>>'{presentationDraw,id}','categories',categories,'provisional',provisional,
+   'sourceFingerprint',public.textos_jornada_fingerprint(s),'stale',false);
+  reason:='Ranking de exposiciones calculado con fichas cerradas de la escala vigente';
+  if old is not null then history:=history||jsonb_build_array(jsonb_build_object('entity','presentationRanking','referenceId',old->>'id','previous',old,'reason',reason)); end if;
+  s:=jsonb_set(s,'{presentationRanking}',entity);
+ else perform public.textos_fail('Operación de jornada desconocida.','PT404'); end if;
+ perform public.textos_jornada_validate(s);
+ return jsonb_build_object('state',s,'result',entity,'referenceId',entity->>'id','reason',reason,'history',history);
+end $$;
+
+-- Call before changing the clock. This updates completion atomically with finish.
+-- With no draw, legacy manual turns keep their original behavior.
+create or replace function public.textos_jornada_turn(s jsonb,command text,publisherid text,expected_turn jsonb default null) returns jsonb
+language plpgsql immutable set search_path=pg_catalog,public as $$
+#variable_conflict use_column
+declare d jsonb:=s->'presentationDraw'; nextid text; currentid text:=s#>>'{turn,publisherId}'; n integer;
+begin
+ if d is null or d='null'::jsonb then return s; end if;
+ perform public.textos_jornada_validate(s);
+ if expected_turn is distinct from s->'turn' then
+  perform public.textos_fail('El turno cambió en otra pantalla. Actualice antes de controlar el reloj.','PT409');
+ end if;
+ n:=jsonb_array_length(d->'completedPublisherIds'); nextid:=d#>>array['publishers',n::text,'id'];
+ if command in ('start','next') then
+  if s#>>'{turn,status}' not in ('ready','finished') then perform public.textos_fail('Finalice el turno actual antes de iniciar el siguiente.','PT423'); end if;
+  if nextid is null then perform public.textos_fail('Todas las exposiciones sorteadas ya finalizaron.','PT423'); end if;
+  if publisherid is distinct from nextid then perform public.textos_fail('Inicie la siguiente editorial del orden sorteado.','PT409'); end if;
+  if exists(select 1 from jsonb_array_elements(s->'publishers') p where not exists(select 1 from jsonb_array_elements(d->'publishers') q where q->>'id'=p->>'id')) then
+   perform public.textos_fail('El registro de editoriales cambió después del sorteo. Actualice el sorteo antes de iniciar.','PT423');
+  end if;
+ elsif command='finish' then
+  if s#>>'{turn,status}' not in ('running','paused') or currentid is distinct from nextid then
+   perform public.textos_fail('Solo puede finalizar la exposición activa del orden sorteado.','PT409');
+  end if;
+  d:=jsonb_set(d,'{completedPublisherIds}',d->'completedPublisherIds'||jsonb_build_array(currentid));
+  d:=jsonb_set(d,'{version}',to_jsonb((d->>'version')::int+1));
+  s:=jsonb_set(s,'{presentationDraw}',d);
+ end if;
+ return s;
+end $$;
+
+-- END JORNADA HELPERS
+
+-- BEGIN PAPER HELPERS
+-- Anonymous A5 paper ballots for the current presentation ranking.
+-- This fragment is embedded in schema.sql before the owner-only RPC dispatcher.
+create table if not exists public.textos_paper_tokens (
+ code_hash text primary key check(code_hash ~ '^[a-f0-9]{64}$'),
+ dataset text not null references public.textos_datasets(id), poll_id text not null,
+ consumed boolean not null default false
+);
+create index if not exists textos_paper_tokens_poll_idx on public.textos_paper_tokens(dataset,poll_id);
+alter table public.textos_paper_tokens enable row level security;
+revoke all on public.textos_paper_tokens from public;
+do $$declare role_name text; begin
+ foreach role_name in array array['anon','authenticated'] loop
+  if exists(select 1 from pg_roles where rolname=role_name) then execute format('revoke all on public.textos_paper_tokens from %I',role_name); end if;
+ end loop;
+end $$;
+
+create or replace function public.textos_paper_result(poll jsonb, area text) returns jsonb
+language plpgsql immutable set search_path=pg_catalog,public as $$
+#variable_conflict use_column
+declare n integer; maximum integer; tied jsonb;
+begin
+ select coalesce(sum(value::text::int),0),coalesce(max(value::text::int),0) into n,maximum from jsonb_each(coalesce(poll#>array['counts',area,'options'],'{}'));
+ select coalesce(jsonb_agg(key order by key),'[]') into tied from jsonb_each(coalesce(poll#>array['counts',area,'options'],'{}')) where value::text::int=maximum and maximum>0;
+ return jsonb_build_object('state',case when n=0 then 'no_valid_votes' when jsonb_array_length(tied)>1 then 'tie' else 'winner' end,
+  'winnerId',case when jsonb_array_length(tied)=1 then tied->>0 else null end,
+  'tiedIds',case when jsonb_array_length(tied)>1 then tied else '[]'::jsonb end);
+end $$;
+
+create or replace function public.textos_paper_validate(s jsonb) returns void
+language plpgsql immutable set search_path=pg_catalog,public as $$
+#variable_conflict use_column
+declare poll jsonb; option jsonb; area text; key text; tally jsonb; tally_total bigint;
+begin
+ if s ? 'paperPolls' and jsonb_typeof(s->'paperPolls') is distinct from 'array' then perform public.textos_fail('Colección de votaciones en papel inválida.'); end if;
+ if exists(select 1 from jsonb_array_elements(coalesce(s->'paperPolls','[]')) q group by q->>'id' having count(*)>1) then perform public.textos_fail('Votación en papel duplicada.'); end if;
+ for poll in select value from jsonb_array_elements(coalesce(s->'paperPolls','[]')) loop
+  if nullif(poll->>'id','') is null or not public.textos_int(poll->'version') or (poll->>'version')::bigint<1 or coalesce(poll->>'block','') not in ('P1','P2','S1') or coalesce(poll->>'status','') not in ('open','closed') then perform public.textos_fail('Votación en papel inválida.'); end if;
+  if nullif(poll->>'rankingId','') is null or not public.textos_int(poll->'rankingVersion') or (poll->>'rankingVersion')::bigint<1 or nullif(poll->>'createdAt','') is null then perform public.textos_fail('La votación requiere referencia al ranking original.'); end if;
+  if not public.textos_int(poll->'generated') or not public.textos_int(poll->'received') or (poll->>'generated')::bigint<(poll->>'received')::bigint then perform public.textos_fail('Las fichas recibidas exceden las generadas.'); end if;
+  if jsonb_typeof(poll->'areas') is distinct from 'array' or jsonb_typeof(poll->'options') is distinct from 'object' or jsonb_typeof(poll->'counts') is distinct from 'object' or jsonb_typeof(poll->'results') is distinct from 'object' then perform public.textos_fail('Áreas, opciones o conteos de papel inválidos.'); end if;
+  if jsonb_array_length(poll->'areas') not between 1 and 2 or exists(select 1 from jsonb_array_elements_text(poll->'areas') a where a not in ('MAT','COM')) or (select count(distinct a) from jsonb_array_elements_text(poll->'areas') a)<>jsonb_array_length(poll->'areas') then perform public.textos_fail('Áreas de votación en papel inválidas.'); end if;
+  if exists(select 1 from jsonb_object_keys(poll->'options') k where not(poll->'areas' ? k)) or exists(select 1 from jsonb_object_keys(poll->'counts') k where not(poll->'areas' ? k)) or exists(select 1 from jsonb_object_keys(poll->'results') k where not(poll->'areas' ? k)) then perform public.textos_fail('La ficha incluye un área que no le corresponde.'); end if;
+  for area in select jsonb_array_elements_text(poll->'areas') loop
+   if jsonb_typeof(poll#>array['options',area]) is distinct from 'array' then perform public.textos_fail('Opciones de papel inválidas.'); end if;
+   if jsonb_array_length(poll#>array['options',area]) not between 2 and 3 or (select count(distinct q->>'id') from jsonb_array_elements(poll#>array['options',area]) q)<>jsonb_array_length(poll#>array['options',area]) then perform public.textos_fail('Se requieren dos o tres opciones diferentes en cada área.'); end if;
+   for option in select value from jsonb_array_elements(poll#>array['options',area]) loop
+    if jsonb_typeof(option) is distinct from 'object' or nullif(trim(option->>'id'),'') is null or nullif(trim(option->>'name'),'') is null or option->>'id' in ('__invalid__','__blank__') then perform public.textos_fail('Alternativa de papel inválida.'); end if;
+   end loop;
+   tally:=poll#>array['counts',area];
+   if jsonb_typeof(tally) is distinct from 'object' or jsonb_typeof(tally->'options') is distinct from 'object' or not public.textos_int(tally->'blank') or not public.textos_int(tally->'invalid') then perform public.textos_fail('Escrutinio en papel inválido.'); end if;
+   if (select count(*) from jsonb_object_keys(tally->'options'))<>jsonb_array_length(poll#>array['options',area]) or exists(select 1 from jsonb_each(tally->'options') e where not public.textos_int(e.value) or not exists(select 1 from jsonb_array_elements(poll#>array['options',area]) o where o->>'id'=e.key)) then perform public.textos_fail('Conteo de una alternativa ajena o ausente.'); end if;
+   select coalesce(sum(value::text::bigint),0)+(tally->>'blank')::bigint+(tally->>'invalid')::bigint into tally_total from jsonb_each(tally->'options');
+   if tally_total<>(poll->>'received')::bigint then perform public.textos_fail('El conteo no concilia con las fichas recibidas.'); end if;
+   if poll->>'status'='closed' and poll#>array['results',area] is distinct from public.textos_paper_result(poll,area) then perform public.textos_fail('El resultado de papel no corresponde a sus conteos.'); end if;
+   if poll->>'status'='open' and poll#>array['results',area] is not null then perform public.textos_fail('Una votación abierta no declara ganadores.'); end if;
+  end loop;
+  if poll->>'status'='closed' and nullif(poll->>'closedAt','') is null then perform public.textos_fail('Falta la fecha de cierre de votación.'); end if;
+ end loop;
+end $$;
+
+create or replace function public.textos_paper_action(s jsonb, p_action text, p_payload jsonb, actor_role text, actor_id text, actor_name text, p_dataset text, nowat timestamptz) returns jsonb
+language plpgsql volatile set search_path=pg_catalog,public as $$
+#variable_conflict use_column
+declare poll jsonb; ranking jsonb; category jsonb; ranking_options jsonb; options jsonb:='{}'; counts jsonb:='{}'; results jsonb:='{}'; tally jsonb;
+ area text; chosen text; key text; expected integer; amount integer; code text; codes jsonb:='[]'; token public.textos_paper_tokens%rowtype;
+ history jsonb:='[]'; result jsonb; reference_id text; reason text;
+begin
+ if actor_role is distinct from 'coordinator' then perform public.textos_fail('Solo Subdirección administra la votación familiar en papel.','PT403'); end if;
+ if p_action='paper_poll_create' then
+  ranking:=s->'presentationRanking';
+  if ranking is null or ranking='null' or ranking->>'id' is distinct from p_payload->>'rankingId' or not public.textos_int(p_payload->'expectedRankingVersion') or ranking->'version' is distinct from p_payload->'expectedRankingVersion' then perform public.textos_fail('El ranking cambió. Actualice antes de preparar las fichas.','PT409'); end if;
+  if ranking->'provisional' is distinct from 'false'::jsonb or not public.textos_jornada_ranking_current(s) then perform public.textos_fail('Complete todas las evaluaciones y genere un ranking final actualizado antes de votar.','PT423'); end if;
+  if coalesce(p_payload->>'block','') not in ('P1','P2','S1') or jsonb_typeof(p_payload->'areas') is distinct from 'array' then perform public.textos_fail('Seleccione categoría y áreas para la ficha.'); end if;
+  if jsonb_array_length(p_payload->'areas') not between 1 and 2 or exists(select 1 from jsonb_array_elements_text(p_payload->'areas') q where q not in ('MAT','COM')) or (select count(distinct q) from jsonb_array_elements_text(p_payload->'areas') q)<>jsonb_array_length(p_payload->'areas') then perform public.textos_fail('Seleccione una o dos áreas sin repetir.'); end if;
+  if exists(select 1 from jsonb_array_elements(coalesce(s->'paperPolls','[]')) q where q->>'status'='open' and q->>'block'=p_payload->>'block' and exists(select 1 from jsonb_array_elements_text(p_payload->'areas') a where q->'areas' ? a)) then perform public.textos_fail('Ya existe una votación abierta para esa categoría y área.','PT409'); end if;
+  for area in select jsonb_array_elements_text(p_payload->'areas') loop
+   category:=public.textos_presentation_category(s,area,p_payload->>'block');
+   if category is null or coalesce((category->>'registered')::int,0)<1 or coalesce((category->>'pending')::int,1)>0 or jsonb_typeof(category->'ranked') is distinct from 'array' or jsonb_array_length(category->'ranked')<2 then perform public.textos_fail('Se requieren al menos dos editoriales y todas las fichas cerradas en '||area||'.','PT423'); end if;
+   if exists(select 1 from jsonb_array_elements(category->'ranked') q where q->'score' is null or q->'score'='null') then perform public.textos_fail('El ranking del área contiene resultados pendientes.','PT423'); end if;
+   if jsonb_array_length(category->'ranked')>3 and category#>'{ranked,2,score}'=category#>'{ranked,3,score}' and category#>'{ranked,2,i2}'=category#>'{ranked,3,i2}' then perform public.textos_fail('Hay un empate en el corte del Top 3. Resuélvalo antes de preparar las fichas.','PT423'); end if;
+   select coalesce(jsonb_agg(jsonb_build_object('id',q->>'publisherId','name',p->>'name') order by ord),'[]') into ranking_options from jsonb_array_elements(category->'ranked') with ordinality r(q,ord) join jsonb_array_elements(s->'publishers') p on p->>'id'=q->>'publisherId' where ord<=3;
+   if jsonb_array_length(ranking_options)<2 then perform public.textos_fail('Las editoriales del ranking ya no están disponibles. Actualice el ranking.','PT409'); end if;
+   options:=options||jsonb_build_object(area,ranking_options);
+   counts:=counts||jsonb_build_object(area,jsonb_build_object('options',(select jsonb_object_agg(o->>'id',0) from jsonb_array_elements(ranking_options) o),'blank',0,'invalid',0));
+  end loop;
+  poll:=jsonb_build_object('id',gen_random_uuid()::text,'version',1,'block',p_payload->>'block','areas',p_payload->'areas','options',options,'status','open','rankingId',ranking->>'id','rankingVersion',ranking->'version','createdAt',nowat,'closedAt',null,'generated',0,'received',0,'counts',counts,'results','{}'::jsonb);
+  result:=poll; reason:='Votación familiar en papel preparada desde el ranking final';
+ elsif p_action in ('paper_ballots_generate','paper_scan_cast','paper_poll_close') then
+  poll:=public.textos_find(s,'paperPolls',p_payload->>'pollId');
+  if poll is null then perform public.textos_fail('No se encontró la votación en papel.'); end if;
+  if poll->>'status' is distinct from 'open' then perform public.textos_fail('La votación en papel ya está cerrada.','PT423'); end if;
+  if p_action<>'paper_scan_cast' and (not public.textos_int(p_payload->'expectedVersion') or poll->'version' is distinct from p_payload->'expectedVersion') then perform public.textos_fail('La votación cambió. Actualice antes de continuar.','PT409'); end if;
+  if p_action='paper_ballots_generate' then
+   if not public.textos_int(p_payload->'count') or (p_payload->>'count')::bigint not between 1 and 200 then perform public.textos_fail('Genere entre 1 y 200 fichas por lote.'); end if;
+   amount:=(p_payload->>'count')::int;
+   for expected in 1..amount loop
+    code:=public.textos_code(); insert into public.textos_paper_tokens(code_hash,dataset,poll_id) values(public.textos_hash(code),p_dataset,poll->>'id'); codes:=codes||jsonb_build_array(code);
+   end loop;
+   poll:=poll||jsonb_build_object('generated',(poll->>'generated')::int+amount);
+   reason:='Fichas A5 anónimas generadas';
+  elsif p_action='paper_scan_cast' then
+   if coalesce(p_payload->>'code','') !~ '^[a-f0-9]{64}$' then perform public.textos_fail('El código de la ficha no es válido. Vuelva a escanear el QR.'); end if;
+   select q.* into token from public.textos_paper_tokens q where q.code_hash=public.textos_hash(p_payload->>'code') and q.dataset=p_dataset and q.poll_id=poll->>'id' for update;
+   if not found then perform public.textos_fail('Esta ficha no fue generada para la votación seleccionada.','PT403'); end if;
+   if token.consumed then perform public.textos_fail('Esta ficha ya fue contabilizada; no se suma de nuevo.','PT409'); end if;
+   if jsonb_typeof(p_payload->'choices') is distinct from 'object' or (select count(*) from jsonb_object_keys(p_payload->'choices'))<>jsonb_array_length(poll->'areas') or exists(select 1 from jsonb_object_keys(p_payload->'choices') q where not(poll->'areas' ? q)) then perform public.textos_fail('Revise la lectura de todas las áreas de la ficha.'); end if;
+   counts:=poll->'counts';
+   for area in select jsonb_array_elements_text(poll->'areas') loop
+    if not(p_payload->'choices' ? area) or jsonb_typeof(p_payload#>array['choices',area]) not in ('string','null') then perform public.textos_fail('Lectura de voto inválida.'); end if;
+    chosen:=p_payload#>>array['choices',area]; tally:=counts->area;
+    if chosen is null then key:='blank';
+    elsif chosen='__invalid__' then key:='invalid';
+    elsif exists(select 1 from jsonb_array_elements(poll#>array['options',area]) o where o->>'id'=chosen) then key:=null;
+    else perform public.textos_fail('La marca corresponde a una editorial ajena a esta ficha.'); end if;
+    if key is null then tally:=jsonb_set(tally,array['options',chosen],to_jsonb((tally#>>array['options',chosen])::int+1));
+    else tally:=jsonb_set(tally,array[key],to_jsonb((tally->>key)::int+1)); end if;
+    counts:=jsonb_set(counts,array[area],tally);
+   end loop;
+   update public.textos_paper_tokens set consumed=true where code_hash=token.code_hash;
+   poll:=poll||jsonb_build_object('received',(poll->>'received')::int+1,'counts',counts);
+   reason:='Ficha anónima contabilizada en agregados';
+  else
+   for area in select jsonb_array_elements_text(poll->'areas') loop results:=results||jsonb_build_object(area,public.textos_paper_result(poll,area)); end loop;
+   poll:=poll||jsonb_build_object('status','closed','closedAt',nowat,'results',results);
+   reason:='Recepción cerrada y resultados familiares calculados';
+  end if;
+  poll:=poll||jsonb_build_object('version',(poll->>'version')::int+1);
+  if p_action='paper_ballots_generate' then result:=jsonb_build_object('poll',poll,'codes',codes);
+  elsif p_action='paper_scan_cast' then result:=jsonb_build_object('poll',poll,'accepted',true);
+  else result:=poll; end if;
+ else perform public.textos_fail('Acción de papel no reconocida.');
+ end if;
+ reference_id:=poll->>'id';
+ s:=public.textos_put(s,'paperPolls',poll);
+ perform public.textos_paper_validate(s);
+ -- No per-ballot history, token, code, photo or selection is returned in history/audit.
+ return jsonb_build_object('state',s,'result',result,'referenceId',reference_id,'reason',reason,'history',history);
+end $$;
+
+-- Owner RPC calls this both for preview and before restore commit. No anonymous ballot can
+-- become unconsumed, disappear, or move to another dataset/poll through a backup.
+create or replace function public.textos_paper_restore_prepare(currentstate jsonb, savedstate jsonb, p_dataset text, paper_tokens jsonb, p_apply boolean default false) returns jsonb
+language plpgsql volatile set search_path=pg_catalog,public as $$
+#variable_conflict use_column
+declare previous jsonb; saved jsonb; item jsonb; existing public.textos_paper_tokens%rowtype;
+ area text; key text; n bigint; received bigint; count_tokens bigint; consumed_tokens bigint;
+begin
+ perform public.textos_paper_validate(savedstate);
+ if jsonb_typeof(paper_tokens) is distinct from 'array' then perform public.textos_fail('El respaldo requiere sus códigos anónimos de papel.'); end if;
+ if exists(select 1 from jsonb_array_elements(paper_tokens) q group by q->>'code_hash' having count(*)>1) then perform public.textos_fail('El respaldo repite códigos de papel.'); end if;
+ for item in select value from jsonb_array_elements(paper_tokens) loop
+  if jsonb_typeof(item) is distinct from 'object' or coalesce(item->>'dataset','')<>p_dataset or coalesce(item->>'code_hash','') !~ '^[a-f0-9]{64}$' or item->'consumed' is null or item->'consumed' not in ('true'::jsonb,'false'::jsonb) or public.textos_find(savedstate,'paperPolls',item->>'poll_id') is null then perform public.textos_fail('Código de respaldo ajeno, incompleto o inválido.'); end if;
+  select q.* into existing from public.textos_paper_tokens q where q.code_hash=item->>'code_hash';
+  if found and (existing.dataset<>p_dataset or existing.poll_id<>item->>'poll_id' or existing.consumed and item->'consumed' is distinct from 'true'::jsonb) then perform public.textos_fail('El respaldo intenta trasladar o reutilizar una ficha contabilizada.','PT409'); end if;
+ end loop;
+ for previous in select value from jsonb_array_elements(coalesce(currentstate->'paperPolls','[]')) loop
+  if (previous->>'generated')::bigint=0 and (previous->>'received')::bigint=0 then continue; end if;
+  saved:=public.textos_find(savedstate,'paperPolls',previous->>'id');
+  if saved is null or (saved->>'generated')::bigint<(previous->>'generated')::bigint or (saved->>'received')::bigint<(previous->>'received')::bigint or previous->'options' is distinct from saved->'options' or previous->'areas' is distinct from saved->'areas' or previous->'block' is distinct from saved->'block' or previous->>'status'='closed' and saved->>'status'<>'closed' then perform public.textos_fail('Este respaldo retrocedería una votación en papel. Conserve la base actual y use un respaldo más reciente.','PT409'); end if;
+  for area in select jsonb_array_elements_text(previous->'areas') loop
+   for key in select jsonb_object_keys(previous#>array['counts',area,'options']) loop
+    if (saved#>>array['counts',area,'options',key])::bigint<(previous#>>array['counts',area,'options',key])::bigint then perform public.textos_fail('El respaldo reduciría votos ya contabilizados.','PT409'); end if;
+   end loop;
+   if (saved#>>array['counts',area,'blank'])::bigint<(previous#>>array['counts',area,'blank'])::bigint or (saved#>>array['counts',area,'invalid'])::bigint<(previous#>>array['counts',area,'invalid'])::bigint then perform public.textos_fail('El respaldo reduciría blancos o nulos ya contabilizados.','PT409'); end if;
+  end loop;
+ end loop;
+ if exists(select 1 from public.textos_paper_tokens q where q.dataset=p_dataset and not exists(select 1 from jsonb_array_elements(paper_tokens) b where b->>'code_hash'=q.code_hash and b->>'poll_id'=q.poll_id and (not q.consumed or b->'consumed'='true'::jsonb))) then perform public.textos_fail('El respaldo perdería códigos de papel emitidos o contabilizados.','PT409'); end if;
+ for saved in select value from jsonb_array_elements(coalesce(savedstate->'paperPolls','[]')) loop
+  select count(*),count(*) filter(where q->'consumed'='true'::jsonb) into count_tokens,consumed_tokens from jsonb_array_elements(paper_tokens) q where q->>'poll_id'=saved->>'id';
+  if count_tokens<>(saved->>'generated')::bigint or consumed_tokens<>(saved->>'received')::bigint then perform public.textos_fail('Los códigos del respaldo no concilian con las fichas generadas y recibidas.'); end if;
+  if saved->>'status'='open' and (saved->>'received')::bigint>0 and public.textos_find(currentstate,'paperPolls',saved->>'id') is null then perform public.textos_fail('Cierre esta votación en su base de origen antes de trasladarla a una instalación nueva.','PT409'); end if;
+ end loop;
+ if p_apply then
+  for item in select value from jsonb_array_elements(paper_tokens) loop
+   insert into public.textos_paper_tokens(code_hash,dataset,poll_id,consumed) values(item->>'code_hash',p_dataset,item->>'poll_id',(item->>'consumed')::boolean)
+   on conflict(code_hash) do update set consumed=textos_paper_tokens.consumed or excluded.consumed;
+  end loop;
+ end if;
+ return jsonb_build_object('state',savedstate,'blockedPollIds','[]'::jsonb);
+end $$;
+
+-- END PAPER HELPERS
+
 create or replace function public.textos_api(p_action text, p_payload jsonb default '{}'::jsonb, p_code text default null, p_dataset text default 'real') returns jsonb
 language plpgsql security definer set search_path=pg_catalog,public as $$
 #variable_conflict use_column
@@ -1051,7 +1441,19 @@ begin
  if actor_role='teacher' and p_action not in ('evaluation_save','evaluation_close','presentation_save','presentation_close','presentation_restart_scale') then perform public.textos_fail('Operación reservada a coordinación o mesa.','PT403'); end if;
  if actor_role='secretary' and p_action not in ('publisher_save','series_save','offer_save','book_save','teacher_save','section_save','attendance_save','delivery_mark','paper_tally_save','incident_save','import_preview','import_apply','presentation_summary') then perform public.textos_fail('Operación reservada a coordinación.','PT403'); end if;
  reason:=coalesce(p_payload->>'reason',p_payload->>'reopenReason','');
- if p_action in ('presentation_save','presentation_close','presentation_restart_scale','presentation_reopen','presentation_summary','presentation_shortlist_publish') then
+ if p_action in ('paper_poll_create','paper_ballots_generate','paper_scan_cast','paper_poll_close') then
+  saved:=public.textos_paper_action(s,p_action,p_payload,actor_role,actor_id,actor_name,p_dataset,nowat);
+  s:=saved->'state'; result:=saved->'result'; entityid:=saved->>'referenceId'; reason:=coalesce(saved->>'reason',reason);
+  for x in select value from jsonb_array_elements(coalesce(saved->'history','[]')) loop
+   insert into public.textos_history(dataset,entity,reference_id,actor,reason,previous,at) values(p_dataset,x->>'entity',x->>'referenceId',actor_name,coalesce(x->>'reason',''),x->'previous',nowat);
+  end loop;
+ elsif p_action in ('presentation_draw','presentation_ranking_generate') then
+  saved:=public.textos_jornada_action(s,p_action,p_payload,actor_role,actor_id,actor_name,p_dataset,nowat);
+  s:=saved->'state'; result:=saved->'result'; entityid:=saved->>'referenceId'; reason:=coalesce(saved->>'reason',reason);
+  for x in select value from jsonb_array_elements(coalesce(saved->'history','[]')) loop
+   insert into public.textos_history(dataset,entity,reference_id,actor,reason,previous,at) values(p_dataset,x->>'entity',x->>'referenceId',actor_name,coalesce(x->>'reason',''),x->'previous',nowat);
+  end loop;
+ elsif p_action in ('presentation_save','presentation_close','presentation_restart_scale','presentation_reopen','presentation_summary','presentation_shortlist_publish') then
   saved:=public.textos_presentation_api(s,p_action,p_payload,actor_role,actor_id,actor_name,nowat);
   s:=saved->'state'; result:=saved->'result'; entityid:=result->>'id';
   if p_action='presentation_summary' then return result; end if;
@@ -1063,6 +1465,7 @@ begin
   entity:=p_payload->keyname;
   if jsonb_typeof(entity) is distinct from 'object' then perform public.textos_fail('Entidad requerida.'); end if;
   entityid:=nullif(entity->>'id',''); old:=public.textos_find(s,col,entityid);
+  if keyname='publisher' and s->'presentationDraw' is not null and ((s#>>'{turn,startedAt}') is not null or jsonb_array_length(s#>'{presentationDraw,completedPublisherIds}')>0) and (old is null or entity->>'name' is distinct from old->>'name') then perform public.textos_fail('El sorteo ya comenzó. Conserve las editoriales y sus nombres durante esta jornada.','PT423'); end if;
   if entityid is not null and old is null then perform public.textos_fail('Registro no encontrado.','PT404'); end if;
   if old is not null and coalesce((entity->>'version')::int,-1)<>(old->>'version')::int then perform public.textos_fail('El registro cambió en otra sesión; recargue antes de guardar.','PT409'); end if;
   if entityid is null then entityid:=gen_random_uuid()::text; v:=1; else v:=(old->>'version')::int+1; end if;
@@ -1166,6 +1569,7 @@ begin
    s:=public.textos_put(s,'assignments',assignment||jsonb_build_object('id',gen_random_uuid()::text,'version',1,'kind','additional','reviewId',entity->>'id'));
   end loop; result:=entity;
  elsif p_action='turn_control' then
+  s:=public.textos_jornada_turn(s,p_payload->>'command',p_payload->>'publisherId',p_payload->'expectedTurn');
   entity:=s->'turn'; command:=p_payload->>'command';
   if command in ('start','next') then
    id:=p_payload->>'publisherId'; if public.textos_find(s,'publishers',id) is null then perform public.textos_fail('Seleccione una editorial.'); end if;
@@ -1302,11 +1706,12 @@ begin
   if p_payload->'confirmed' is distinct from 'true'::jsonb then perform public.textos_fail('Confirme la previsualización antes de importar.'); end if;
   s:=public.textos_import(s,p_payload->>'kind',p_payload->'rows'); result:=jsonb_build_object('imported',jsonb_array_length(p_payload->'rows'));
  elsif p_action='backup_get' then
-  return jsonb_build_object('format','textos-backup-v1','dataset',p_dataset,'createdAt',nowat,'state',s,'history',coalesce((select jsonb_agg(to_jsonb(q)) from public.textos_history q where q.dataset=p_dataset),'[]'),'ballots',coalesce((select jsonb_agg(to_jsonb(q)) from public.textos_ballots q where q.dataset=p_dataset),'[]'),'aggregates',coalesce((select jsonb_agg(to_jsonb(q)) from public.textos_aggregates q where q.dataset=p_dataset),'[]'));
+  return jsonb_build_object('format','textos-backup-v1','dataset',p_dataset,'createdAt',nowat,'state',s,'history',coalesce((select jsonb_agg(to_jsonb(q)) from public.textos_history q where q.dataset=p_dataset),'[]'),'ballots',coalesce((select jsonb_agg(to_jsonb(q)) from public.textos_ballots q where q.dataset=p_dataset),'[]'),'aggregates',coalesce((select jsonb_agg(to_jsonb(q)) from public.textos_aggregates q where q.dataset=p_dataset),'[]'),'paperTokens',coalesce((select jsonb_agg(to_jsonb(q)) from public.textos_paper_tokens q where q.dataset=p_dataset),'[]'));
  elsif p_action in ('restore_preview','restore_apply') then
   backup:=p_payload->'backup'; saved:=public.textos_upgrade_legacy(backup->'state');
   if backup->>'format' is distinct from 'textos-backup-v1' or backup->>'dataset' is distinct from p_dataset then perform public.textos_fail('Respaldo incompatible o de otra jornada.'); end if;
   perform public.textos_validate_state(saved);
+  perform public.textos_paper_restore_prepare(s,saved,p_dataset,coalesce(backup->'paperTokens','[]'),false);
   if jsonb_typeof(backup->'ballots') is distinct from 'array' or jsonb_typeof(backup->'aggregates') is distinct from 'array' then perform public.textos_fail('Respaldo sin consumo y conteos.'); end if;
   list:='[]';
   for r in select value from jsonb_array_elements(s->'rounds') loop
@@ -1322,6 +1727,7 @@ begin
   end if;
   if p_action='restore_preview' then return jsonb_build_object('valid',true,'dataset',p_dataset,'version',saved->'version','suspendedRoundIds',list,'books',jsonb_array_length(saved->'books'),'evaluations',jsonb_array_length(saved->'evaluations'),'rounds',jsonb_array_length(saved->'rounds')); end if;
   if p_payload->>'confirmation' is distinct from 'RESTAURAR' or nullif(trim(reason),'') is null then perform public.textos_fail('Restauración requiere confirmación RESTAURAR y motivo.'); end if;
+  perform public.textos_paper_restore_prepare(s,saved,p_dataset,coalesce(backup->'paperTokens','[]'),true);
   for x in select value from jsonb_array_elements(coalesce(backup#>'{state,evaluations}','[]')) where jsonb_array_length(value->'scores')=8 loop insert into public.textos_history(dataset,entity,reference_id,actor,reason,previous) values(p_dataset,'evaluations',x->>'id',actor_name,'Migración de ocho indicadores: I9 e I10 quedan pendientes',x); end loop;
   -- Keep incoming old live rubric originals before metadata-only scale migration.
   for x in select value from jsonb_array_elements(coalesce(backup#>'{state,presentationEvaluations}','[]')) loop
@@ -1363,7 +1769,7 @@ begin
    if public.textos_find(saved,'presentationShortlists',x->>'id') is distinct from x then insert into public.textos_history(dataset,entity,reference_id,actor,reason,previous) values(p_dataset,'presentationShortlists',x->>'id',actor_name,'Migración de publicación histórica con su escala original',x); end if;
   end loop;
   s:=saved;
-  delete from public.textos_ballots where dataset='demo'; delete from public.textos_aggregates where dataset='demo'; result:=jsonb_build_object('reset',true);
+  delete from public.textos_paper_tokens where dataset='demo'; delete from public.textos_ballots where dataset='demo'; delete from public.textos_aggregates where dataset='demo'; result:=jsonb_build_object('reset',true);
  else perform public.textos_fail('Operación desconocida.','PT404');
  end if;
  perform public.textos_validate_state(s);

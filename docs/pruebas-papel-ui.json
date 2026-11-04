@@ -1,0 +1,15 @@
+{
+  "at": "2026-11-04T15:40:55.608Z",
+  "backend": "isolated UI API and scanner fixture; real PDF/scanner tested separately",
+  "passed": 7,
+  "checks": [
+    "provisional rankings cannot create paper voting; both areas share one A5",
+    "create from final category ranking requires physical-review confirmation and sends both areas",
+    "generate unique-code batch and offer A5 print preview plus PDF download",
+    "clear photos process immediately and duplicate QR never adds another vote",
+    "uncertain marks wait for manual review of each area and explicit confirmation",
+    "wrong files are rejected locally and disabling automatic counting leaves clear scans pending",
+    "mobile view fits and closing produces visible independent area results including a tie"
+  ],
+  "pageErrors": []
+}

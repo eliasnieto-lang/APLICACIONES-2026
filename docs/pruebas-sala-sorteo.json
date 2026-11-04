@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-04T15:36:21.705Z",
+  "fixture": "isolated intercepted server and instrumented audio driver",
+  "checks": [
+    "draw requires arrivals confirmation and uses only the persisted server result",
+    "repeating a draw requires a reason; failed CAS keeps the previous visible order",
+    "starting activates sound, beeps once, then warns at five seconds and alarms at zero",
+    "finish/next respect the draw; an older tab cannot finish the following publisher",
+    "public projection shares the order, starts muted, and fits a phone"
+  ],
+  "pageErrors": []
+}

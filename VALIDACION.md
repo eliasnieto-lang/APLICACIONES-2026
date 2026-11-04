@@ -1,37 +1,36 @@
 # Validación de Selección de textos escolares 2027
 
-Fecha: 4 de noviembre de 2026. Aplicación nueva, separada de Círculos de Estudios.
+Fecha: 4 de noviembre de 2026. Código y tablas separados de Círculos de Estudios.
 
-## Resultados de la escala 0–4 y los filtros de Subdirección
+## Sorteo, cronómetro, seguimiento y votos A5
 
 | Comprobación | Resultado | Evidencia |
 | --- | --- | --- |
 | TypeScript y compilación Vite | Aprobados | `npm run build` |
-| Pruebas Node de dominio, acceso, sesiones, cifrado, importación y PDF/XLSX | 75 aprobadas; 0 fallidas; 0 omitidas | [Salida](docs/pruebas-unitarias.txt), `npm test` |
-| PostgreSQL/PostgREST histórico, acceso y exposición | 61 grupos aprobados: 20 históricos + 13 de acceso + 21 de exposición + 7 de actualización 002→003 | [Informe](docs/pruebas-acceso-y-exposicion.txt), scripts `test-db.sh`, `test-access-db.sh`, `test-presentation-db.sh`, `test-scale-migration-db.sh` |
-| Chromium contra Node/Express, PostgreSQL y PostgREST reales | 9 recorridos aprobados; 0 errores de ejecución | [Resultado](docs/pruebas-navegador.json), `tests/browser-presentation-local.mjs` |
-| Escala docente, borradores y conflictos en Chromium con servidor simulado | 6 comprobaciones aprobadas | [Resultado](docs/pruebas-escala-docente.json), `tests/browser-presentation-scale.mjs` |
-| Filtros y ventanas de Subdirección en Chromium con servidor simulado | 8 comprobaciones aprobadas | [Resultado](docs/pruebas-filtros-subdireccion.json), `tests/browser-consolidation-filters.mjs` |
-| Instalación local Docker e idempotencia de la migración | Aprobadas | `scripts/local-start.sh` y reaplicación del esquema sobre registros existentes |
+| Node: dominio, acceso, sesiones, cifrado, importación, audio, PDF/XLSX y lectura de marcas | 97 aprobadas; 0 fallidas; 0 omitidas | [Salida](docs/pruebas-unitarias.txt), `npm test` |
+| PostgreSQL/PostgREST aislados | 90 grupos aprobados: 20 históricos + 13 acceso + 21 exposición + 9 actualizaciones + 12 jornada + 15 papel | [Resumen](docs/pruebas-acceso-y-exposicion.txt), scripts de pruebas |
+| Chromium sobre Node/Express + PostgreSQL + PostgREST reales | 17 recorridos aprobados: 9 de acceso/evaluaciones + 8 de jornada/A5; sin errores de ejecución ni CSP | [Evaluaciones](docs/pruebas-navegador.json), [Jornada y A5](docs/pruebas-jornada-real.json) |
+| Chromium aislado, sala y audio instrumentado | 5 recorridos aprobados | [Resultado](docs/pruebas-sala-sorteo.json) |
+| Chromium aislado, orden docente, ranking y seguimiento | 3 recorridos aprobados | [Resultado](docs/pruebas-jornada-vistas.json) |
+| Chromium aislado, impresión, cola de fotos y revisión | 7 recorridos aprobados | [Resultado](docs/pruebas-papel-ui.json) |
+| Instalación Docker y persistencia | Aprobadas | `scripts/local-start.sh` y pruebas de migración |
 
-Los nueve recorridos reales comprueban los dos botones de entrada, contraseña de Subdirector validada por servidor, registro de una editorial sin libros ni expedientes, cinco docentes sin contraseña con categorías múltiples, cierre de diez criterios en escala 0–4, promedio 80 a partir de cinco notas 70/75/80/85/90, independencia de la segunda categoría, filtros que no cambian el promedio oficial, conservación de una ficha anterior 14/20 = 70/100 con reinicio explícito y privacidad de la proyección en celular.
+El sorteo es aleatorio en el servidor y congela un único orden para Subdirección, docentes y proyección. Solo puede repetirse antes de comenzar y con motivo documentado. Los turnos exigen una copia actual del reloj: un comando atrasado no finaliza la editorial siguiente. Tampoco se pueden incorporar editoriales nuevas mediante importación después de empezar. Las proyecciones enumeran los campos públicos del sorteo y excluyen el ranking privado y las fichas ajenas.
 
-Cada criterio tiene una sola descripción y una valoración: 0 Sin valoración, 1 En inicio, 2 En proceso, 3 Logrado o 4 Destacado. El cero elegido cuenta como respuesta y suma cero puntos; una selección pendiente sigue siendo `null`. Diez ceros cierran en 0/100 y diez cuatros en 100/100. Las fichas anteriores 0–2 mantienen su rúbrica original A/B, escala y porcentaje y no se mezclan con los promedios actuales. El reinicio autorizado archiva la ficha previa y abre las diez respuestas sin marcar. La prueba de actualización carga el SQL 002 original, crea fichas antiguas y luego aplica y repite 003 para verificar conservación e idempotencia.
+Los cinco casos unitarios de audio y la instrumentación Chromium verifican una señal al inicio, aviso a cinco segundos y alarma al finalizar, sin duplicados al pausar o actualizar. El sonido depende de la activación del usuario y de que Sala o Proyección permanezca abierta en el equipo con parlantes.
 
-La actualización usa una ficha por docente, editorial, área y categoría. No exige registros OBNATE, precios, muestras de práctica ni expedientes precargados para evaluar la exposición y el texto físico. Las fichas por texto/grado anteriores se conservan en sus colecciones históricas y no se reutilizan como valoraciones de exposición.
+El ranking considera todas las fichas vigentes cerradas, conserva el cero y muestra provisional si hay pendientes. Su huella detecta modificaciones posteriores del catálogo, participantes, criterios o sorteo. El seguimiento separa criterios respondidos de fichas cerradas y admite cualquier número de docentes.
 
-Las pruebas SQL comprueban además que un sexto docente puede incorporarse sin cupo, que las publicaciones previas conservan su historial y se revisan para incorporar nuevas fichas, que el reingreso del mismo perfil no invalida publicaciones, y que la migración puede repetirse sin borrar datos, contraseñas verificadas, accesos ni historial. La contraseña de Subdirección no está en texto plano en el cliente, la configuración pública ni los archivos fuente.
+## Impresión y reconocimiento de votos
 
-Los PDF nuevos de exposición y las exportaciones XLSX se abrieron y verificaron. Las pruebas históricas de voto anónimo, doble envío, reinicio, conciliación, segunda vuelta y restauración siguen aprobadas. La jornada real permanece sin datos ficticios; todos los recorridos nuevos se ejecutaron en demostración o en bases descartables.
+Las once pruebas de PDF A5 y lectura de marcas incluyen tamaño real 148 × 210 mm, ambas áreas, QR distinto por hoja, cuatro marcas con margen de impresión, PDF real rasterizado, X/relleno/lápiz, perspectiva, rotación de 90 grados, blanco, marca múltiple, marca tenue, recorte y QR ajeno. La lectura es OMR del formato generado por la app; no es OCR de papeletas arbitrarias.
 
-## Alcance y límites
+Las fotos se procesan localmente. No se suben imágenes, nombres ni identidad de votantes. Las lecturas claras se pueden sumar inmediatamente; las dudosas requieren comparación y confirmación humana. La base solo guarda huellas de códigos y conteos agregados separados por área. Las pruebas de HTTP simultáneo confirman una sola suma por ficha; el cierre distingue ganador, empate y ausencia de votos válidos. Un respaldo anterior no puede reducir conteos ni desconsumir fichas.
 
-- La publicación en la cuenta Cloudflare y la instalación en Supabase requieren los servicios de esa cuenta. La actualización se activa con el archivo completo `supabase/migrations/003-escala-y-filtros.sql`, idéntico al esquema actual y repetible sin borrar registros. El archivo 002 ya instalado permanece intacto. Primero debe ejecutarse 003 en Supabase y después publicarse la interfaz compilada, porque los clientes de la escala anterior recibirán una solicitud de actualización al intentar guardar. Este informe confirma funcionamiento local; no constituye una comprobación del sitio público ni de una migración 003 aún no ejecutada en Supabase.
-- La URL, clave publishable y usuario autorizado de la instalación cloud corresponden al proyecto proporcionado por el usuario. No hay claves administrativas ni contraseñas personales en el código. Coordinación debe instalar `supabase/schema.sql` como propietario.
-- La red local funciona sin Internet después de instalar las imágenes. El borrador persistente cifrado requiere HTTPS o localhost; en HTTP desde otro dispositivo se conserva en memoria y se informa esa condición.
-- Las importaciones se previsualizan y no sobrescriben datos existentes. El servidor admite hasta 2000 filas por lote; divida las cargas mayores. Los archivos CSV/XLSX tienen un límite de 8 MB. El respaldo JSON se valida antes de aplicarse y las peticiones tienen un límite de 16 MB.
-- El plan cloud es gratuito dentro de los límites y las condiciones de Cloudflare Pages/Supabase Free. El servidor local no depende de esas cuentas durante la jornada.
-- `npm audit` detectó ocho avisos moderados transitivos relacionados con minimatch/glob en la cadena de ExcelJS/archiver; ninguno alto o crítico. Los patrones de archivos no proceden de usuarios y la interfaz usa la compilación de navegador de ExcelJS. La auditoría no se presenta como libre de avisos; las actualizaciones deben conservar las pruebas de importación y exportación.
-- La comprobación de requisitos ministeriales y la revisión del ejemplar son humanas. El sistema registra fuentes y decisiones; no certifica consultas en OBNATE, no presenta expedientes ante entidades y no reemplaza firmas formales.
+## Conservación y alcance
 
-La base de jornada real inicia sin editoriales, textos, docentes, fichas ni votos ficticios. Los datos de ensayo viven en `demo`; las pruebas SQL crean su propia base descartable y la eliminan al terminar.
+La actualización `supabase/migrations/004-sorteo-seguimiento-voto-a5.sql` es idéntica al esquema actual y debe ejecutarse como propietario antes de activar la interfaz. Los archivos 002 y 003 se mantienen intactos. Las nueve pruebas instalan 002, preservan las fichas originales al pasar a 003, actualizan a 004 y comprueban que repetirla conserva datos, accesos, versiones, historial y el sorteo. Las fichas históricas 0–2 mantienen su rúbrica y porcentaje; las actuales usan una descripción por criterio, 0–4, máximo 40 y suma × 2.5 para /100.
+
+Las pruebas usan demostración o bases descartables y no se conectan a producción. La jornada real no recibió datos ficticios. Este informe no afirma que la actualización 004 ya se haya ejecutado en Supabase ni que el sitio público haya sido comprobado con esta versión; requiere su activación y el resultado del despliegue.
+
+Cloudflare Pages y Supabase Free siguen siendo la alternativa gratuita dentro de las condiciones del proveedor. La lectura de fotos no usa servicios externos ni API de pago. Los respaldos administrativos contienen datos privados y deben conservarse con acceso restringido. Las decisiones y firmas formales siguen correspondiendo al centro.

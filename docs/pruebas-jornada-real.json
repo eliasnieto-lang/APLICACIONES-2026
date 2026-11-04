@@ -1,0 +1,17 @@
+{
+  "at": "2026-11-04T15:48:49.857Z",
+  "backend": "Node/Express + PostgreSQL + PostgREST reales; QR y OMR reales en Chromium",
+  "passed": 8,
+  "checks": [
+    "server draw saves one random participation order and shares that exact order with teacher and public views",
+    "live-room controls start, finish and advance atomically through every drawn editorial",
+    "Subdirector home opens server-generated ranking with final values and every teacher reaches 100% confirmed progress",
+    "paper UI creates an anonymous two-area election and serves the actual one-page A5 PDF through its CSP-permitted blob frame",
+    "a real rasterized A5 photograph passes local QR and mark recognition and immediately updates server vote aggregates",
+    "photographing the same sheet again yields a server conflict and never adds a second vote",
+    "multiple dark choices stay in manual review and cannot silently alter the anonymous count",
+    "closing the paper election computes distinct winners without exposing codes, photos or private ranking to public and teacher snapshots"
+  ],
+  "pageErrors": [],
+  "cspErrors": []
+}

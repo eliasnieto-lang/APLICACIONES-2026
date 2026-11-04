@@ -1,9 +1,10 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { Area, Block, PresentationEvaluation, PresentationScore, Publisher, Snapshot, ViewProps } from '../../shared/types';
 import { AREAS, BLOCKS } from '../../shared/domain';
-import { PRESENTATION_INDICATORS, PRESENTATION_SCALE, presentationPublisherAvailable, presentationScore, presentationTeacherInScope } from '../../shared/presentation';
+import { PRESENTATION_INDICATORS, PRESENTATION_SCALE, presentationScore, presentationTeacherInScope } from '../../shared/presentation';
 import { loadDraft, removeDraft, saveDraft } from '../drafts';
 import { LEGACY_PRESENTATION_INDICATORS } from '../../shared/presentation-legacy';
+import { presentationOrderedPublishers } from '../../shared/jornada';
 
 interface Fields { scores: PresentationScore[]; notes: string[]; generalObservation: string; physicalText: string }
 interface LocalDraft extends Fields { scaleMax: 4; baseVersion: number; savedAt: string; closePending?: boolean }
@@ -28,10 +29,12 @@ export default function PresentationEvaluations(props: ViewProps) {
   const scopes = AREAS.flatMap(area => BLOCKS.filter(block => teacher && presentationTeacherInScope(teacher, area.id, block.id)).map(block => ({ area: area.id, block: block.id, label: `${area.label} · ${block.label}` })));
   const [selectedScope, setSelectedScope] = useState('');
   const scope = scopes.find(item => `${item.area}-${item.block}` === selectedScope) ?? scopes[0];
-  const publishers = scope ? snapshot.state.publishers.filter(item => presentationPublisherAvailable(snapshot.state, item.id, scope.area, scope.block)) : [];
+  const publishers = scope ? presentationOrderedPublishers(snapshot.state, scope.area, scope.block) : [];
   const [selectedPublisher, setSelectedPublisher] = useState(() => publishers.find(item => item.id === snapshot.state.turn.publisherId)?.id ?? publishers[0]?.id ?? '');
   const publisher = publishers.find(item => item.id === selectedPublisher) ?? publishers.find(item => item.id === snapshot.state.turn.publisherId) ?? publishers[0];
   const own = (snapshot.state.presentationEvaluations ?? []).filter(item => item.teacherId === snapshot.actor.id);
+  const activePublisher = publishers.find(item => item.current);
+  const hasDraw = !!snapshot.state.presentationDraw;
   if (snapshot.actor.role !== 'teacher') return <div className="notice">La ficha de exposición requiere su acceso individual de docente.</div>;
   if (!scope) return <div className="notice">Complete su registro al ingresar con sus nombres, apellidos, área y uno o más bloques para evaluar las exposiciones. Las fichas históricas por texto conservan sus respuestas.</div>;
   const closed = own.filter(item => item.area === scope.area && item.block === scope.block && item.status === 'closed' && item.scaleMax === 4 && publishers.some(publisher => publisher.id === item.publisherId)).length;
@@ -42,13 +45,18 @@ export default function PresentationEvaluations(props: ViewProps) {
       return <button type="button" key={id} className={scope === item ? 'active' : ''} aria-pressed={scope === item} onClick={() => { setSelectedScope(id); setSelectedPublisher(snapshot.state.turn.publisherId ?? ''); }}>{item.label}</button>;
     })}</div>
     <p className="muted">{closed} de {publishers.length} fichas cerradas en este bloque. Sus valoraciones son individuales y privadas.</p>
+    {hasDraw && <section className="notice stack" aria-label="Orden de participación docente">
+      <strong>Orden de participación del sorteo</strong>
+      <p>Las editoriales aparecen en el orden compartido de la jornada. Sus borradores se conservan al cambiar de ficha.</p>
+      {activePublisher ? <div className="row between"><span><strong>En exposición: {activePublisher.participationOrder ? `${activePublisher.participationOrder}. ` : ''}{activePublisher.name}</strong></span><button type="button" disabled={publisher?.id === activePublisher.id} onClick={() => setSelectedPublisher(activePublisher.id)}>Ir a la editorial en exposición</button></div> : <p className="muted">Espere el inicio del próximo turno. Puede revisar sus fichas en este orden.</p>}
+    </section>}
     {publishers.length === 0 ? <div className="notice">Aún no hay editoriales disponibles para esta área y bloque.</div> : <>
       <div className="grid" aria-label="Editoriales">{publishers.map(item => {
         const evaluation = own.find(value => value.publisherId === item.id && value.area === scope.area && value.block === scope.block);
-        const current = snapshot.state.turn.publisherId === item.id;
+        const current = item.current;
         const currentClosed = evaluation?.status === 'closed' && evaluation.scaleMax === 4;
         return <button type="button" key={item.id} className={`card stack ${publisher?.id === item.id ? 'selected' : 'secondary'}`} aria-pressed={publisher?.id === item.id} onClick={() => setSelectedPublisher(item.id)} style={{ alignItems: 'flex-start', textAlign: 'left', gap: 8 }}>
-          <strong>{item.name}</strong><span className={`status ${currentClosed ? 'closed' : 'pending'}`}>{evaluation && evaluation.scaleMax !== 4 ? 'Escala anterior · pendiente de actualizar' : currentClosed ? 'Ficha cerrada' : evaluation ? 'Borrador' : 'Sin iniciar'}</span>{current && <span className="status">Turno actual de exposición</span>}
+          <strong>{item.participationOrder ? `${item.participationOrder}. ` : ''}{item.name}</strong>{hasDraw && !item.drawn && <span className="status pending">Registrada después del sorteo</span>}{item.completed && <span className="status">Presentación finalizada</span>}<span className={`status ${currentClosed ? 'closed' : 'pending'}`}>{evaluation && evaluation.scaleMax !== 4 ? 'Escala anterior · pendiente de actualizar' : currentClosed ? 'Ficha cerrada' : evaluation ? 'Borrador' : 'Sin iniciar'}</span>{current && <span className="status">Turno actual de exposición</span>}
         </button>;
       })}</div>
       {publisher && <PresentationEditor key={`${snapshot.actor.id}/${publisher.id}/${scope.area}/${scope.block}`} {...props} publisher={publisher} area={scope.area} block={scope.block} onNext={() => {

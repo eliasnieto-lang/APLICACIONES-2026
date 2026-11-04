@@ -37,3 +37,20 @@ Acciones privadas y payload:
 No devolver éxito de guardado sin transacción confirmada. expectedVersion aplica al borrador de la ficha y las entidades editadas. Nuevos textos/ediciones no reutilizan evaluaciones. Reglas bloqueadas con la primera ficha recibida; reapertura con motivo/versionado. Los snapshots de ternas y resultados usados son históricos.
 
 Una ronda restaurada desde antes del último voto queda suspendida y conserva el consumo de códigos. Conciliación documentada antes de otra ronda; una copia no puede volver a habilitar votos consumidos.
+
+
+## Sorteo, seguimiento y ranking (actualización 004)
+
+`presentation_draw` es exclusivo de Subdirección: recibe `expectedVersion` del sorteo (0 al crearlo), `confirmArrivals: true` y motivo de al menos ocho caracteres si se repite. El servidor sortea todas las editoriales con UUID aleatorios, congela sus nombres y orden, y permite repetir únicamente antes de empezar. `turn_control` con sorteo recibe `expectedTurn` completo además del comando; un control desactualizado devuelve PT409. Finalizar marca una sola editorial y el siguiente inicio respeta el orden. Las proyecciones pública y docente solo reciben los campos enumerados del sorteo.
+
+`presentation_ranking_generate` recibe la versión esperada del ranking (0 al crearlo), requiere el sorteo terminado y toma los promedios actuales de todas las categorías. Distingue resultados provisionales y conserva su snapshot; `stale` se calcula mediante una huella de catálogo, docentes, fichas, reglas y sorteo. Los filtros y Top no cambian las notas ni publican una terna formal. El progreso docente cuenta criterios guardados (incluido 0) y cierres por separado.
+
+## Votación de padres A5
+
+`paper_poll_create` recibe `block`, `areas`, `rankingId` y `expectedRankingVersion`. La interfaz usa MAT y COM en una misma categoría. Se exige ranking final vigente y dos o tres opciones reales por área; la consulta del servidor recalcula las categorías y no confía en datos de un respaldo modificado.
+
+`paper_ballots_generate` recibe `pollId`, `expectedVersion` y cantidad 1–200; retorna `{poll,codes}` una sola vez. El PDF y el QR se construyen localmente. Los códigos anónimos se guardan solo como huellas en una tabla privada, sin nombre ni selección.
+
+`paper_scan_cast` recibe `pollId`, código y `choices` para todas las áreas: id de editorial, `null` para blanco o `__invalid__` para nulo. Consume el código e incrementa los agregados en una transacción; una repetición devuelve PT409. Las fotos y píxeles no salen del navegador. La detección de marcas requiere el formato generado y las lecturas dudosas pasan a revisión. No se escribe el código ni las selecciones en auditoría.
+
+`paper_poll_close` requiere versión, cierra recepción y devuelve resultados separados por área, sin declarar ganador en empate o ausencia de votos válidos. El respaldo incluye `paperTokens` como huellas; su restauración no puede reducir conteos, perder códigos emitidos ni volver a habilitar un código consumido. La votación actual por exposición se conserva separada de las rondas históricas por libro y grado.

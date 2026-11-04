@@ -1,28 +1,112 @@
-Selección de textos escolares 2027 — escala 0–4 y filtros ágiles
-Fecha: 4 de noviembre de 2026
+Selección de textos escolares 2027 — 90 grupos SQL/HTTP aprobados en bases locales descartables
+4 de noviembre de 2026
 
-Resumen de las ejecuciones verificadas sobre PostgreSQL 16 + PostgREST 12 aislados:
-- bash scripts/test-db.sh: 20/20 grupos históricos aprobados.
-- bash scripts/test-access-db.sh: 13/13 grupos de acceso aprobados; requiere la variable privada TEXTOS_TEST_DIRECTOR_PASSWORD.
-- bash scripts/test-presentation-db.sh: 21/21 grupos de exposición aprobados.
-- bash scripts/test-scale-migration-db.sh: 7/7 grupos de actualización 002→003 aprobados.
-Total: 61/61 grupos SQL/HTTP aprobados. No se conectaron a Supabase.
-Las salidas se revisaron durante su ejecución; este archivo es un resumen, no una transcripción.
+Históricos20
+✓ 01 RPC requires individual access and tables/helpers reject anonymous reads
+✓ 02 two teachers see only their assignments, books and private notes
+✓ 03 CAS rejects a stale tab and invalid indicator values
+✓ 04 null differs from a real zero; closure requires all evidence and objection detail
+✓ 05 a closed evaluation requires a documented reopening and preserves history
+✓ 06 SQL averages distinct teachers, all P2 grades, exact 70 and individual grade cutoff
+✓ 07 SQL resolves cutoff tie by I2, otherwise requests same-teacher additional reviews
+✓ 08 an unresolved additional review stays pending instead of picking by name
+✓ 09 fewer than three options requires a resolved formal article 11.3 incident and grade agreement
+✓ 10 legacy eight-indicator backup remains pending until its own teachers complete all ten
+✓ 11 pending offers block only their category and public projection hides provisional notes/rankings
+✓ 12 published shortlist preserves three options, rules and book snapshot and requires Director approval
+✓ 13 paper cannot generate digital ballots; paper counts reconcile all deposited ballots
+✓ 14 concurrent duplicate code submissions commit exactly one anonymous ballot
+✓ 15 database restart preserves consumed codes and aggregated ballots
+✓ 16 a family tie only in Mathematics opens a Mathematics-only runoff
+✓ 17 restoring before a known vote suspends the round and never reactivates a consumed token
+✓ 18 restoring an open snapshot of a known closed round requires reconciliation
+✓ 19 fresh real installation suspends imported open/draft lineages, issues fresh reconciled codes and preserves closed results
+✓ 20 same-snapshot backup restores closures, shortlist snapshots and totals, leaving real dataset empty
 
-Acceso: contraseña validada en servidor, límites de intentos persistentes, registro libre,
-cinco o más docentes, categorías múltiples, protección de duplicados, recuperación,
-autorización por rol y conservación de credenciales.
+20 pruebas SQL/HTTP aprobadas en PostgreSQL/PostgREST aislados. La base real de esta prueba permanece vacía.
 
-Exposición: enteros 0–4, cero explícito válido, null pendiente, cierre de diez criterios,
-40 puntos equivalentes a 100/100, aislamiento entre áreas/categorías, CAS, privacidad,
-promedios de todas las fichas vigentes cerradas y publicación formal de tres opciones.
+Acceso13
+✓ 1 Subdirección valida contraseña en servidor y entrega bearer opaco
+✓ 2 fallos HTTP401 persisten y cinco fallos bloquean temporalmente
+✓ 3 registro sin correo/contraseña normaliza nombres y categorías
+✓ 4 más de dos docentes se registran sin cupo
+✓ 5 nombre canónico duplicado no revela registros ni fichas
+✓ 6 perfil valida campos obligatorios área y categorías en servidor
+✓ 7 sesión propia actualiza perfil e impide asumir nombre de colega
+✓ 8 código inválido o de otro dataset nunca crea otro docente
+✓ 9 sesión vencida/revocada se rechaza
+✓ 10 registro legado requiere enlace privado y conserva identidad/historial
+✓ 11 JWT de coordinación no amplía snapshot del registro docente
+✓ 12 tablas de credenciales y helpers no se exponen por HTTP
+✓ 13 reaplicar migración conserva fichas históricas y de exposición, accesos, historial, hash y límite
+13 pruebas de acceso SQL/HTTP aprobadas.
 
-Históricos: la prueba instala 002 original, carga quince fichas anteriores, una terna,
-notas por libro y actores; aplica 003 y comprueba valores, porcentajes, historial y
-credenciales. Repite 003 sin generar versiones ni historial adicionales. Verifica
-rechazo de un cliente antiguo, reinicio explícito por su autor con CAS y conservación
-de la ficha previa, además de restauración de respaldos de ambas escalas.
-002 conserva SHA256 8c23c2cfb2c5d7eb87339d6c860bcf9efe78e4fa82c2c987d0912a322edca570.
-003 y schema.sql son idénticos.
+Exposición21
+✓ 1 cinco docentes en un bloque sin asignaciones ni libros precargados
+✓ 2 la ficha empieza pendiente y el primer guardado fija reglas sin datos de expediente
+✓ 3 autoría y perfil se verifican en servidor; no se acepta una ficha de colega
+✓ 4 la versión antigua de la aplicación debe actualizar la escala antes de guardar o cerrar
+✓ 5 CAS impide sobrescribir y puntajes fraccionarios o fuera de rango se rechazan
+✓ 6 todas las fichas cierran con diez enteros; no exige OBNATE, precio, carga ni notas
+✓ 7 el promedio incluye a los cinco docentes y los conteos no tienen cupo de dos
+✓ 8 cada docente solo ve sus tres fichas y la proyección pública todavía no muestra notas
+✓ 9 publicar requiere retiro de editoriales documentado, sin añadir requisitos de expediente
+✓ 10 una o dos editoriales aptas no se convierten en una terna formal
+✓ 11 la publicación formal exige tres elegibles y publica agregados sin fichas individuales
+✓ 12 campos personalizados en un respaldo no atraviesan la proyección pública
+✓ 13 reabrir requiere coordinación y motivo, conserva cierre y retira la publicación afectada
+✓ 14 respaldo y restauración conservan fichas nuevas e historial sin recrear asignaciones
+✓ 15 el servidor rechaza respaldos con fichas duplicadas o categorías docentes vacías
+✓ 16 restaurar una terna publicada exige aprobación y metadatos formales válidos
+✓ 17 una inscripción posterior exige nuevas fichas y conserva la terna anterior en historial
+✓ 18 las fichas históricas 0–2 se conservan con su porcentaje y no se mezclan con la escala 0–4
+✓ 19 solo el autor reinicia explícitamente la rúbrica histórica con CAS y sin convertir sus puntajes
+✓ 20 el cero explícito suma cero y cuenta en el promedio; null sigue pendiente
+✓ 21 la reapertura conserva la escala histórica implícita y requiere reinicio propio para valorar de nuevo
+21 pruebas de presentación SQL/HTTP aprobadas.
 
-Los datos de ensayo, redes, servicios y volúmenes aislados se eliminaron al terminar.
+Actualizaciones9
+✓ 1 002 crea cinco docentes y quince fichas cerradas con la escala anterior 0–2
+✓ 2 la instalación previa conserva también una ficha histórica por libro y sus referencias
+✓ 3 003 marca la escala histórica sin convertir puntajes ni modificar libros, docentes o credenciales
+✓ 4 la publicación previa pasa al historial con su porcentaje original y no aparece como vigente
+✓ 5 reaplicar 003 no agrega historial, no modifica versiones y mantiene códigos privados
+✓ 6 un navegador anterior no guarda y solo el autor reinicia explícitamente la ficha histórica
+✓ 7 restaurar una copia 002 preserva vectores previos y retira su publicación histórica sin reinterpretarla
+✓ 8 004 incorpora sorteo y papel sin alterar ningún registro, credencial ni historial de 003
+✓ 9 repetir 004 conserva el orden ya sorteado y no añade versiones ni historial
+9 pruebas de migración 002→003→004 SQL/HTTP aprobadas.
+
+Jornada12
+✓ 1 no se sortea sin editoriales ni se calcula ranking antes de las exposiciones
+✓ 2 solo Subdirección sortea; se exige confirmar las editoriales y se ignora cualquier orden suministrado
+✓ 3 todos los docentes y la sala pública reciben el mismo orden, sin ranking privado
+✓ 4 repetir antes de iniciar exige CAS y motivo; la versión anterior queda en historial
+✓ 5 el servidor fuerza el orden sorteado y no permite saltar ni finalizar dos veces
+✓ 6 un finish retrasado o sin identidad de turno no cierra la siguiente editorial
+✓ 7 no se agregan nuevas editoriales después de iniciar el orden de participación
+✓ 8 siguiente inicia cada editorial restante exactamente una vez y el avance es compartido
+✓ 9 el ranking tras exposiciones es provisional si faltan fichas y no convierte pendientes en cero
+✓ 10 nuevas fichas invalidan la vigencia del ranking anterior y la regeneración promedia a todos
+✓ 11 la validación de respaldo rechaza completar exposiciones fuera del orden y rankings corruptos
+✓ 12 los campos extra de un sorteo restaurado no se filtran a docentes ni sala pública
+12 grupos SQL/HTTP de sorteo, secuencia y ranking aprobados.
+
+Papel15
+✓ 1 solo Subdirección puede preparar o contabilizar la votación en papel
+✓ 2 ranking final actual y referencias de versión son obligatorios
+✓ 3 la ficha congela Top 3 por área y categoría sin usar libros históricos
+✓ 4 generación de fichas anónimas tiene CAS, límites y códigos únicos
+✓ 5 una lectura debe corresponder a su ficha y a todas sus áreas exactas
+✓ 6 una foto clara suma ambas áreas una sola vez y rechaza su repetición
+✓ 7 dos envíos simultáneos de la misma ficha incrementan solo una vez
+✓ 8 blancos y nulos se concilian sin asignarlos a una editorial
+✓ 9 el respaldo contiene solo huellas anónimas y restaura el estado actual sin duplicar
+✓ 10 restaurar una copia antigua no retrocede conteos ni desconsume fichas
+✓ 11 cerrar calcula ganadores de cada área y bloquea fotos posteriores
+✓ 12 proyecciones y auditoría no exponen códigos, fotos ni elecciones individuales
+✓ 13 empate y cero votos válidos nunca inventan un ganador
+✓ 14 no se crea una votación si el ranking se volvió provisional u obsoleto
+✓ 15 dos editoriales reales bastan sin inventar una tercera alternativa
+PASS 15/15 grupos SQL/HTTP de votación A5 en papel
+

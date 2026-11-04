@@ -18,6 +18,32 @@ El servidor crea un acceso personal y el navegador lo conserva para retomar las 
 
 En un equipo compartido use **Salir** al terminar. Cada docente revisa únicamente sus propias valoraciones. Coordinación puede consultar las fichas para consolidar, pero no emitir puntajes en nombre del docente.
 
+## Sorteo del orden y sonido de la sala
+
+Registre todas las editoriales que asistieron. En **Sala en vivo**, marque la confirmación de recepción y pulse **Sortear orden de participación**. El servidor sortea y guarda un único orden, visible también en la sala pública, la portada docente y sus fichas. La animación no determina el resultado. Antes de comenzar se puede repetir con un motivo; después de iniciada la primera exposición el orden queda fijo. No agregue ni cambie nombres de editoriales durante ese recorrido.
+
+Inicie la primera editorial y use **Finalizar** y el botón del siguiente turno según el orden sorteado. El docente verá el número de participación y podrá ir a la editorial en exposición con un botón, sin perder automáticamente un borrador de otra editorial. Los dispositivos reciben los cambios con la actualización periódica y también pueden usar Actualizar.
+
+En el equipo con parlantes mantenga abierta Sala en vivo o la proyección, pulse **Activar sonido** y compruebe el volumen. Hay un pitido al comenzar, un aviso cuando faltan cinco segundos y una alarma al llegar a cero. En la sala administrativa, Iniciar también activa el sonido; la proyección empieza silenciada. Las pausas no consumen tiempo y los avisos no se repiten con cada actualización. Al salir de la pantalla se desactiva ese audio.
+
+## Ranking y seguimiento docente
+
+El panel del Subdirector incluye **Ranking / Top** y **Docentes y avance**. Genere el ranking después de finalizar todas las exposiciones sorteadas. Puede filtrar área y categoría y elegir Top 3, Top 5 o todos; un empate en el límite conserva a todos los empatados. Si faltan fichas cerradas, el resultado se identifica como provisional. Si cambian las evaluaciones, docentes, reglas o catálogo, vuelva a generar el ranking para actualizarlo. Esta vista de consulta no publica automáticamente una terna formal.
+
+El seguimiento lista todos los docentes. El porcentaje muestra los criterios guardados en la escala vigente respecto de los diez criterios de cada ficha prevista en su área y categorías; un cero seleccionado sí cuenta como criterio respondido. Las fichas cerradas se muestran por separado. Un 100 % de criterios no confirma el cierre si todavía hay borradores. Los filtros permiten encontrar quienes no iniciaron, están evaluando o terminaron.
+
+## Votación de padres en fichas A5
+
+En **Votación de padres · A5**, elija la categoría. Cada ficha incluye **Matemática y Comunicación** de esa misma categoría, con las primeras opciones del ranking final vigente. Debe haber al menos dos editoriales por área; nunca se inventa una tercera. El ranking debe estar actualizado y todas las fichas docentes cerradas antes de preparar la votación. Un empate que exceda el límite del Top 3 debe resolverse antes de imprimir.
+
+Genere la cantidad de fichas necesarias y pulse **Imprimir fichas A5** o descargue el PDF. Cada página mide 148 × 210 mm. Imprima al 100 % del tamaño, sin recortar las cuatro marcas de las esquinas ni el QR. Cada papel tiene un código anónimo distinto; no fotocopie una misma ficha para varios votos, porque la aplicación la contará una sola vez. No escriba nombres ni identificaciones de los votantes en la ficha.
+
+Los padres deben marcar una sola casilla por área con una X clara o rellenándola. Pueden elegir voto en blanco. Varias opciones marcadas se consideran una lectura que debe revisarse como posible voto nulo.
+
+Después, use **Cargar fotos** o tome las fotos con el teléfono. Fotografíe **una ficha completa por imagen**, de frente, con buena luz y todas sus esquinas visibles. Se admiten JPG, PNG y WebP de hasta 12 MB. El análisis de la foto ocurre en ese dispositivo: no se envía la imagen al servidor. Las lecturas claras pueden sumarse inmediatamente si está activado el registro automático; las marcas tenues, dobles o incompletas pasan a revisión. Compare la imagen y el original, corrija las opciones si corresponde y confirme para contarla. La lectura automática requiere siempre este formato A5; una hoja manuscrita libre no se reconoce como ficha válida.
+
+El QR evita que una foto repetida o dos envíos simultáneos sumen dos veces. Los conteos separan las opciones, blancos y nulos por área; no guardan una relación entre el código anónimo y su elección. Cierre la votación al terminar: se calculan los resultados sin inventar un ganador si hay empate o no hay votos válidos. Una votación cerrada no admite más fotos. Un respaldo antiguo no puede retroceder los votos ya contados ni reutilizar fichas emitidas.
+
 ## Exposición y ficha con el libro físico
 
 En Sala en vivo Subdirección selecciona editorial e inicia el turno. El reloj usa la hora del servidor: diez minutos de exposición y dos de registro/cambio, con pausa y reanudación. El aviso del último minuto no publica ternas ni borra fichas. La sala pública muestra editorial y reloj durante la exposición.

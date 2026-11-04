@@ -1,3 +1,5 @@
+import type { PresentationDraw, PresentationRanking } from './jornada';
+import type { PaperPoll } from './paper-vote';
 export type Area = 'MAT' | 'COM';
 export type Block = 'P1' | 'P2' | 'S1';
 export type GradeId = 'PRI1' | 'PRI2' | 'PRI3' | 'PRI4' | 'PRI5' | 'PRI6' | 'SEC1' | 'SEC2' | 'SEC3';
@@ -127,6 +129,7 @@ export interface Incident extends Versioned { scope: string; referenceId: string
 export interface AuditEntry { id: string; actor: string; action: string; referenceId: string; reason: string; at: string; summary: string }
 export interface State {
   schemaVersion: number; version: number; settings: Settings;
+  presentationDraw?: PresentationDraw; presentationRanking?: PresentationRanking; paperPolls?: PaperPoll[];
   publishers: Publisher[]; series: Series[]; offers: Offer[]; books: Book[];
   teachers: Teacher[]; assignments: Assignment[]; evaluations: Evaluation[];
   presentationEvaluations: PresentationEvaluation[]; presentationShortlists: PresentationShortlist[];
