@@ -1,0 +1,4 @@
+name = "aplicaciones-2026"
+pages_build_output_dir = "./entrega-web/sitio"
+compatibility_date = "2026-11-03"
+send_metrics = false
