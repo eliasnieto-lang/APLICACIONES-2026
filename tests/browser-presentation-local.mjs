@@ -53,25 +53,61 @@ try{
  });
  await checked('live forms close with ten observed scores and no preloaded physical-text metadata',async()=>{
   for(const [i,p] of pages.entries()){
-   const sum=14+i;let remaining=sum;
-   for(let k=0;k<10;k++){const value=Math.min(2,remaining);remaining-=value;await p.getByRole('button',{name:`I${k+1}: ${value} puntos`,exact:true}).click();}
+   const sum=28+i*2;let remaining=sum;
+   for(let k=0;k<10;k++){const value=Math.min(4,remaining);remaining-=value;await p.getByRole('button',{name:new RegExp(`^I${k+1}: ${value} puntos`)}).click();}
    if(i===0)await p.getByLabel('Observación general (opcional)',{exact:true}).fill('Observación privada de Ana durante la exposición');
    await p.getByRole('button',{name:'Cerrar mi ficha',exact:true}).click();await p.getByText('El servidor confirmó el cierre de esta ficha.',{exact:false}).first().waitFor();
-   const own=(await rpc('snapshot',{},teacherCodes[i])).state.presentationEvaluations;assert.equal(own.length,1);assert.equal(own[0].status,'closed');assert.equal(own[0].physicalText,'');assert.equal(own[0].area,'MAT');assert.equal(own[0].block,'P1');
+   const own=(await rpc('snapshot',{},teacherCodes[i])).state.presentationEvaluations;assert.equal(own.length,1);assert.equal(own[0].status,'closed');assert.equal(own[0].physicalText,'');assert.equal(own[0].area,'MAT');assert.equal(own[0].block,'P1');assert.equal(own[0].scaleMax,4);
   }
  });
  await checked('all five teacher scores contribute to the category mean and remain private',async()=>{
   const s=(await rpc('snapshot',{},directorCode)).state;const forms=s.presentationEvaluations.filter(x=>x.publisherId===publisherId&&x.block==='P1');assert.equal(forms.length,5);
-  const average=forms.reduce((sum,e)=>sum+5*e.scores.reduce((a,b)=>a+b,0),0)/forms.length;assert.equal(average,80);
+  const average=forms.reduce((sum,e)=>sum+2.5*e.scores.reduce((a,b)=>a+b,0),0)/forms.length;assert.equal(average,80);
   const summary=await rpc('presentation_summary',{},directorCode);assert(JSON.stringify(summary).includes('80'));
   const other=await rpc('snapshot',{},teacherCodes[1]);assert(!JSON.stringify(other).includes('Observación privada de Ana'));
-  await director.getByRole('button',{name:'Consolidación y ternas',exact:true}).click();await director.getByRole('heading',{name:/Consolidación/}).waitFor();
+  await director.getByRole('button',{name:'Consolidación y ternas',exact:true}).click();await director.getByRole('heading',{name:/Consolidación|Resultados/}).waitFor();
   await director.getByRole('button',{name:'Actualizar información',exact:true}).click();
   const row=director.locator('table').first().locator('tbody tr').filter({hasText:'Editorial del ensayo de exposición'});await row.locator('td').nth(4).filter({hasText:/80[.,]00/}).waitFor();assert((await row.innerText()).includes('80'));
   await director.screenshot({path:'test-results/consolidado-cinco-docentes.png',fullPage:true});
  });
+ await checked('Subdirector dropdowns filter records without changing the official mean',async()=>{
+  const state=(await rpc('snapshot',{},directorCode)).state;
+  await director.getByLabel('Editorial',{exact:true}).selectOption(publisherId);
+  const firstTeacher=state.teachers.find(t=>t.lastNames==='Alvarado');
+  await director.getByLabel(/^Docente/).selectOption(firstTeacher.id);
+  await director.getByLabel('Estado',{exact:true}).selectOption('closed');
+  await director.getByRole('tab',{name:'Fichas docentes',exact:true}).waitFor();
+  assert.equal(await director.locator('table.consolidation-records tbody tr').count(),1);
+  assert((await director.locator('table.consolidation-records').innerText()).includes('70'));
+  const official=await rpc('presentation_summary',{area:'MAT',block:'P1'},directorCode);assert.equal(official.ranked[0].score,80);
+  await director.getByRole('button',{name:/^Ver ficha de Alvarado/}).click();
+  const modal=director.getByRole('dialog',{name:'Ficha docente',exact:true});await modal.waitFor();assert((await modal.innerText()).includes('Sin valoración'));
+  await modal.getByRole('button',{name:'Cerrar ventana',exact:true}).click();
+  await director.getByRole('button',{name:'Limpiar filtros',exact:true}).click();
+  await director.getByRole('tab',{name:'Resultados',exact:true}).click();
+  await director.getByLabel('Área',{exact:true}).selectOption('COM');await director.getByLabel('Categoría',{exact:true}).selectOption('S1');
+  assert.equal(await director.getByLabel(/^Docente/).locator('option').count(),1);
+  await director.getByLabel('Área',{exact:true}).selectOption('MAT');await director.getByLabel('Categoría',{exact:true}).selectOption('P1');
+  assert((await director.locator('table.consolidation-results').innerText()).includes('80'));
+  await director.screenshot({path:'test-results/consolidado-desplegables-real.png',fullPage:true});
+ });
  await checked('a second selected category has an independent empty form',async()=>{
-  const p=pages[0];const tabs=p.locator('[aria-label="Área y bloque de evaluación"] button');await tabs.nth(1).click();await p.getByRole('button',{name:'I1: 0 puntos',exact:true}).waitFor();assert.equal(await p.getByRole('button',{name:'I1: 0 puntos',exact:true}).getAttribute('aria-pressed'),'false');
+  const p=pages[0];const tabs=p.locator('[aria-label="Área y bloque de evaluación"] button');await tabs.nth(1).click();await p.getByRole('button',{name:/^I1: 0 puntos/}).waitFor();assert.equal(await p.getByRole('button',{name:/^I1: 0 puntos/}).getAttribute('aria-pressed'),'false');
+ });
+ await checked('legacy 0–2 grades retain 14/20=70 and require an explicit fresh 0–4 review',async()=>{
+  const backup=await rpc('backup_get',{},directorCode);
+  const teacher=backup.state.teachers.find(t=>t.lastNames==='Alvarado');
+  const legacy={id:'legacy-scale-browser-form',version:1,publisherId,teacherId:teacher.id,area:'MAT',block:'P2',scaleMax:2,scores:[2,2,2,2,1,1,1,1,1,1],notes:Array(10).fill(''),generalObservation:'Observación anterior conservada',physicalText:'Ejemplar de prueba',status:'closed',closedAt:'2026-11-04T12:00:00Z',updatedAt:'2026-11-04T12:00:00Z',rulesVersion:backup.state.settings.rules.version};
+  backup.state.presentationEvaluations.push(legacy);
+  await rpc('restore_apply',{backup,confirmation:'RESTAURAR',reason:'Ensayo aislado de conservación de una ficha anterior'},directorCode);
+  const p=pages[0];await p.getByRole('button',{name:'Actualizar información',exact:true}).click();
+  await p.getByRole('button',{name:'Evaluar con nueva escala',exact:true}).waitFor();
+  const text=await p.locator('main').innerText();assert(text.includes('14'));assert(text.includes('70'));
+  const old=(await rpc('snapshot',{},teacherCodes[0])).state.presentationEvaluations.find(e=>e.id===legacy.id);assert.deepEqual(old.scores,legacy.scores);assert.equal(old.scaleMax,2);
+  await p.getByRole('button',{name:'Evaluar con nueva escala',exact:true}).click();
+  await p.getByRole('button',{name:/^I1: 4 puntos/}).waitFor();
+  const fresh=(await rpc('snapshot',{},teacherCodes[0])).state.presentationEvaluations.find(e=>e.id===legacy.id);assert.equal(fresh.scaleMax,4);assert(fresh.scores.every(v=>v===null));assert.equal(fresh.status,'draft');
+  const retained=await rpc('backup_get',{},directorCode);assert(retained.history.some(h=>h.reference_id===legacy.id&&h.previous.scaleMax===2&&h.previous.scores.reduce((a,b)=>a+b,0)===14));
  });
  await checked('public room excludes private observations and current unpublished teacher results',async()=>{
   const p=await newPage({width:390,height:844});await p.goto(`${base}/?vista=publica&datos=demo`);await p.getByRole('heading',{name:'Selección de textos escolares 2027',exact:true}).waitFor();const text=await p.locator('body').innerText();assert(!text.includes('Observación privada de Ana'));assert(!text.includes('Alvarado'));assert(!text.includes('80.00'));assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));

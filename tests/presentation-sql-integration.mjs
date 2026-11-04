@@ -11,9 +11,9 @@ let count=0;const check=async(name,fn)=>{await fn();console.log(`✓ ${++count} 
 async function rpc(action,payload={},code=null){const r=await fetch(`${url}/rpc/textos_api`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({p_action:action,p_payload:payload,p_code:code,p_dataset:'demo'})});return {status:r.status,body:await r.json()};}
 async function ok(action,payload={},code=director){const r=await rpc(action,payload,code);assert.equal(r.status,200,JSON.stringify(r));return r.body;}
 async function reject(action,payload,code,status){const r=await rpc(action,payload,code);assert.equal(r.status,status,JSON.stringify(r));}
-const scoreArray=total=>Array.from({length:10},()=>{const value=Math.min(2,total);total-=value;return value;});
-const fields=(publisherId,scores,expectedVersion=0)=>({publisherId,area:'MAT',block:'P1',scores,notes:Array(10).fill(''),physicalText:'',generalObservation:'',expectedVersion});
-let director,first,backup,published;const teachers=[],publishers=[];const totals=[[20,10,16,14,18],[20,14,16,16,18],[20,16,18,18,18]];
+const scoreArray=total=>Array.from({length:10},()=>{const value=Math.min(4,total);total-=value;return value;});
+const fields=(publisherId,scores,expectedVersion=0)=>({publisherId,area:'MAT',block:'P1',scores,scaleMax:4,notes:Array(10).fill(''),physicalText:'',generalObservation:'',expectedVersion});
+let director,first,backup,published;const teachers=[],publishers=[];const totals=[[40,20,32,28,36],[40,28,32,32,36],[40,32,36,36,36]];
 for(let i=0;i<60;i++){try{if((await fetch(url)).ok)break;}catch{}await new Promise(r=>setTimeout(r,100));}
 director=sql("select public.textos_bootstrap_local('demo')");
 await check('cinco docentes en un bloque sin asignaciones ni libros precargados',async()=>{
@@ -22,33 +22,39 @@ await check('cinco docentes en un bloque sin asignaciones ni libros precargados'
  const s=(await ok('snapshot')).state;assert.equal(s.teachers.length,5);assert.equal(s.books.length,0);assert.equal(s.assignments.length,0);assert.equal(s.offers.length,0);assert.equal(s.presentationEvaluations.length,0);
 });
 await check('la ficha empieza pendiente y el primer guardado fija reglas sin datos de expediente',async()=>{
- first=await ok('presentation_save',fields(publishers[0].id,Array(10).fill(null)),teachers[0].code);assert.equal(first.version,1);assert.equal(first.status,'draft');assert.deepEqual(first.scores,Array(10).fill(null));assert.equal(first.physicalText,'');
- await reject('presentation_close',{evaluationId:first.id,expectedVersion:first.version},teachers[0].code,400);
+ first=await ok('presentation_save',fields(publishers[0].id,Array(10).fill(null)),teachers[0].code);assert.equal(first.version,1);assert.equal(first.status,'draft');assert.deepEqual(first.scores,Array(10).fill(null));assert.equal(first.physicalText,'');assert.equal(first.scaleMax,4);
+ await reject('presentation_close',{scaleMax:4,evaluationId:first.id,expectedVersion:first.version},teachers[0].code,400);
  const s=(await ok('snapshot')).state;assert.ok(s.settings.rules.lockedAt);assert.equal(s.settings.version,2);
 });
 await check('autoría y perfil se verifican en servidor; no se acepta una ficha de colega',async()=>{
- await reject('presentation_save',{...fields(publishers[0].id,scoreArray(20)),area:'COM'},teachers[0].code,403);
- await reject('presentation_save',{...fields(publishers[0].id,scoreArray(20)),block:'S1'},teachers[0].code,403);
- await reject('presentation_close',{evaluationId:first.id,expectedVersion:1},teachers[1].code,403);
- await reject('presentation_save',fields('missing',scoreArray(20)),teachers[0].code,403);
+ await reject('presentation_save',{...fields(publishers[0].id,scoreArray(40)),area:'COM'},teachers[0].code,403);
+ await reject('presentation_save',{...fields(publishers[0].id,scoreArray(40)),block:'S1'},teachers[0].code,403);
+ await reject('presentation_close',{scaleMax:4,evaluationId:first.id,expectedVersion:1},teachers[1].code,403);
+ await reject('presentation_save',fields('missing',scoreArray(40)),teachers[0].code,403);
  await reject('presentation_summary',{},teachers[0].code,403);
- await reject('presentation_save',fields(publishers[0].id,scoreArray(20)),director,403);
+ await reject('presentation_save',fields(publishers[0].id,scoreArray(40)),director,403);
+});
+await check('la versión antigua de la aplicación debe actualizar la escala antes de guardar o cerrar',async()=>{
+ const payload=fields(publishers[0].id,scoreArray(40),first.version);delete payload.scaleMax;
+ await reject('presentation_save',payload,teachers[0].code,409);
+ await reject('presentation_save',{...payload,scaleMax:2},teachers[0].code,409);
+ await reject('presentation_close',{evaluationId:first.id,expectedVersion:first.version},teachers[0].code,409);
 });
 await check('CAS impide sobrescribir y puntajes fraccionarios o fuera de rango se rechazan',async()=>{
- for(const expectedVersion of [undefined,null,0])await reject('presentation_save',{...fields(publishers[0].id,scoreArray(20)),expectedVersion},teachers[0].code,409);
- for(const bad of [-1,3,1.5])await reject('presentation_save',{...fields(publishers[0].id,[bad,...Array(9).fill(2)],1)},teachers[0].code,400);
- await reject('presentation_save',{...fields(publishers[0].id,Array(9).fill(2),1)},teachers[0].code,400);
+ for(const expectedVersion of [undefined,null,0])await reject('presentation_save',{...fields(publishers[0].id,scoreArray(40)),expectedVersion},teachers[0].code,409);
+ for(const bad of [-1,5,1.5])await reject('presentation_save',{...fields(publishers[0].id,[bad,...Array(9).fill(4)],1)},teachers[0].code,400);
+ await reject('presentation_save',{...fields(publishers[0].id,Array(9).fill(4),1)},teachers[0].code,400);
 });
 await check('todas las fichas cierran con diez enteros; no exige OBNATE, precio, carga ni notas',async()=>{
  for(let p=0;p<3;p++)for(let i=0;i<5;i++){
   const payload=fields(publishers[p].id,scoreArray(totals[p][i]),p===0&&i===0?1:0);
   if(p===0&&i===0){payload.notes[0]='OBSERVACIÓN PERSONAL SECRETA';payload.generalObservation='COMENTARIO PERSONAL SECRETO';payload.teacherId=teachers[1].id;}
   const saved=await ok('presentation_save',payload,teachers[i].code);assert.equal(saved.teacherId,teachers[i].id);
-  const closed=await ok('presentation_close',{evaluationId:saved.id,expectedVersion:saved.version},teachers[i].code);assert.equal(closed.status,'closed');
+  const closed=await ok('presentation_close',{scaleMax:4,evaluationId:saved.id,expectedVersion:saved.version},teachers[i].code);assert.equal(closed.status,'closed');
   if(p===0&&i===0)first=closed;
   if(p===0&&i===2){const summary=await ok('presentation_summary',{area:'MAT',block:'P1'});assert.equal(summary.registered,5);assert.equal(summary.ranked[0].closed,3);assert.equal(summary.ranked[0].pending,2);assert.ok(Math.abs(summary.ranked[0].score-(100+50+80)/3)<1e-10);}
  }
- await reject('presentation_save',fields(publishers[0].id,scoreArray(18),first.version),teachers[0].code,423);
+ await reject('presentation_save',fields(publishers[0].id,scoreArray(36),first.version),teachers[0].code,423);
  const s=(await ok('snapshot')).state;assert.equal(s.presentationEvaluations.length,15);assert.equal(s.evaluations.length,0);assert.equal(s.books.length,0);
 });
 await check('el promedio incluye a los cinco docentes y los conteos no tienen cupo de dos',async()=>{
@@ -77,8 +83,8 @@ await check('una o dos editoriales aptas no se convierten en una terna formal',a
 });
 await check('la publicación formal exige tres elegibles y publica agregados sin fichas individuales',async()=>{
  await reject('presentation_shortlist_publish',{area:'COM',block:'P1',directorApproved:true,statement:'Prueba',folio:'F-0'},director,423);
- published=await ok('presentation_shortlist_publish',{area:'MAT',block:'P1',directorApproved:true,statement:'Apreciación pedagógica conjunta.',folio:'F-1'});assert.equal(published.publisherIds.length,3);
- const pub=(await ok('public_snapshot',{},null)).state;assert.equal(pub.presentationEvaluations.length,0);assert.equal(pub.presentationShortlists.length,1);assert.equal(pub.presentationShortlists[0].snapshot.assessment.ranked[0].closed,5);assert.ok(!JSON.stringify(pub).includes('SECRETO'));assert.ok(!JSON.stringify(pub.presentationShortlists).includes('teacherId'));
+ published=await ok('presentation_shortlist_publish',{area:'MAT',block:'P1',directorApproved:true,statement:'Apreciación pedagógica conjunta.',folio:'F-1'});assert.equal(published.publisherIds.length,3);assert.equal(published.snapshot.scaleMax,4);
+ const pub=(await ok('public_snapshot',{},null)).state;assert.equal(pub.presentationEvaluations.length,0);assert.equal(pub.presentationShortlists.length,1);assert.equal(pub.presentationShortlists[0].snapshot.scaleMax,4);assert.equal(pub.presentationShortlists[0].snapshot.assessment.ranked[0].closed,5);assert.ok(!JSON.stringify(pub).includes('SECRETO'));assert.ok(!JSON.stringify(pub.presentationShortlists).includes('teacherId'));
  assert.equal((await ok('snapshot',{},teachers[0].code)).state.presentationShortlists.length,0);
 });
 await check('campos personalizados en un respaldo no atraviesan la proyección pública',async()=>{
@@ -111,7 +117,7 @@ await check('restaurar una terna publicada exige aprobación y metadatos formale
 });
 await check('una inscripción posterior exige nuevas fichas y conserva la terna anterior en historial',async()=>{
  const open=(await ok('snapshot')).state.presentationEvaluations.find(e=>e.id===first.id);assert.equal(open.status,'draft');
- await ok('presentation_close',{evaluationId:open.id,expectedVersion:open.version},teachers[0].code);
+ await ok('presentation_close',{scaleMax:4,evaluationId:open.id,expectedVersion:open.version},teachers[0].code);
  const publicationPayload={area:'MAT',block:'P1',directorApproved:true,statement:'Publicación previa a una inscripción adicional.',folio:'F-INSCRIPCIÓN'};
  const before=await ok('presentation_shortlist_publish',publicationPayload);
  const originalForms=(await ok('snapshot')).state.presentationEvaluations;
@@ -123,11 +129,51 @@ await check('una inscripción posterior exige nuevas fichas y conserva la terna 
  assert.equal((await ok('public_snapshot',{},null)).state.presentationShortlists.length,0);
  assert.ok(Number(sql(`select count(*) from public.textos_history where entity='presentationShortlists' and reference_id='${before.id}' and reason='Inscripción/actualización docente' and previous->>'status'='published'`))>=1);
  await reject('presentation_shortlist_publish',publicationPayload,director,423);
- for(const publisher of publishers){const saved=await ok('presentation_save',fields(publisher.id,scoreArray(18)),sixth.code);await ok('presentation_close',{evaluationId:saved.id,expectedVersion:saved.version},sixth.code);}
+ for(const publisher of publishers){const saved=await ok('presentation_save',fields(publisher.id,scoreArray(36)),sixth.code);await ok('presentation_close',{scaleMax:4,evaluationId:saved.id,expectedVersion:saved.version},sixth.code);}
  summary=await ok('presentation_summary',{area:'MAT',block:'P1'});assert.equal(summary.registered,6);assert.equal(summary.closed,18);assert.equal(summary.pending,0);
  const republished=await ok('presentation_shortlist_publish',{...publicationPayload,folio:'F-SEIS'});
  await ok('teacher_register',{firstNames:'Flora',lastNames:'Presentación',area:'COM',categories:['S1']},sixth.code);
  s=(await ok('snapshot')).state;assert.equal(s.presentationShortlists.find(q=>q.id===republished.id).status,'superseded');assert.equal(s.presentationEvaluations.length,18);assert.ok(s.presentationEvaluations.filter(e=>e.teacherId===sixth.snapshot.actor.id).every(e=>e.status==='closed'));
  assert.ok(Number(sql(`select count(*) from public.textos_history where entity='presentationShortlists' and reference_id='${republished.id}' and reason='Inscripción/actualización docente' and previous->>'status'='published'`))>=1);
+});
+const sqlJson=value=>`'${JSON.stringify(value).replaceAll("'","''")}'::jsonb`;
+function replaceForm(form){sql(`update public.textos_datasets set state=public.textos_put(state,'presentationEvaluations',${sqlJson(form)}) where id='demo'`);}
+await check('las fichas históricas 0–2 se conservan con su porcentaje y no se mezclan con la escala 0–4',async()=>{
+ const state=(await ok('snapshot')).state;const current=state.presentationEvaluations.find(e=>e.teacherId===teachers[0].id&&e.publisherId===publishers[0].id);
+ const legacy={...current,scaleMax:2,scores:Array(10).fill(1),version:current.version+1};replaceForm(legacy);first=legacy;
+ assert.equal(Number(sql(`select public.textos_presentation_scores('${JSON.stringify(legacy.scores)}'::jsonb,2,true)`)),50);
+ assert.equal(sql(`select public.textos_scores('${JSON.stringify(legacy.scores)}'::jsonb,true)`),'50');
+ const own=(await ok('snapshot',{},teachers[0].code)).state.presentationEvaluations.find(e=>e.id===legacy.id);assert.deepEqual(own,legacy);
+ const category=await ok('presentation_summary',{area:'MAT',block:'P1'}),row=category.ranked.find(e=>e.publisherId===publishers[0].id);
+ assert.equal(category.pendingScaleUpdate,1);assert.equal(row.pendingScaleUpdate,1);assert.equal(row.closed,4);assert.equal(row.pending,1);assert.equal(row.score,72.5);
+ await reject('presentation_save',fields(publishers[0].id,scoreArray(40),legacy.version),teachers[0].code,409);
+ await reject('presentation_close',{scaleMax:4,evaluationId:legacy.id,expectedVersion:legacy.version},teachers[0].code,409);
+ const exported=await ok('backup_get');assert.deepEqual(exported.state.presentationEvaluations.find(e=>e.id===legacy.id),legacy);assert.equal((await ok('restore_preview',{backup:exported})).valid,true);
+});
+await check('solo el autor reinicia explícitamente la rúbrica histórica con CAS y sin convertir sus puntajes',async()=>{
+ await reject('presentation_restart_scale',{scaleMax:4,evaluationId:first.id,expectedVersion:first.version},teachers[1].code,403);
+ await reject('presentation_restart_scale',{scaleMax:4,evaluationId:first.id,expectedVersion:first.version},director,403);
+ await reject('presentation_restart_scale',{scaleMax:4,evaluationId:first.id,expectedVersion:first.version-1},teachers[0].code,409);
+ await reject('presentation_restart_scale',{evaluationId:first.id,expectedVersion:first.version},teachers[0].code,409);
+ const restarted=await ok('presentation_restart_scale',{scaleMax:4,evaluationId:first.id,expectedVersion:first.version},teachers[0].code);
+ assert.equal(restarted.id,first.id);assert.equal(restarted.version,first.version+1);assert.equal(restarted.scaleMax,4);assert.equal(restarted.status,'draft');assert.equal(restarted.closedAt,null);assert.deepEqual(restarted.scores,Array(10).fill(null));assert.deepEqual(restarted.notes,first.notes);assert.equal(restarted.generalObservation,first.generalObservation);
+ const historic=JSON.parse(sql(`select previous from public.textos_history where entity='presentationEvaluations' and reference_id='${first.id}' and reason='Actualización explícita de escala 0–2 a 0–4' order by id desc limit 1`));assert.deepEqual(historic,first);
+ const row=(await ok('presentation_summary',{area:'MAT',block:'P1'})).ranked.find(e=>e.publisherId===publishers[0].id);assert.equal(row.pendingScaleUpdate,0);assert.equal(row.closed,4);assert.equal(row.pending,1);assert.equal(row.drafts,1);
+ await reject('presentation_restart_scale',{scaleMax:4,evaluationId:restarted.id,expectedVersion:restarted.version},teachers[0].code,409);first=restarted;
+});
+await check('el cero explícito suma cero y cuenta en el promedio; null sigue pendiente',async()=>{
+ assert.equal(Number(sql("select public.textos_presentation_scores('[0,0,0,0,0,0,0,0,0,0]'::jsonb,4,true)")),0);
+ assert.equal(Number(sql("select public.textos_presentation_scores('[4,4,4,4,4,4,4,4,4,4]'::jsonb,4,true)")),100);
+ assert.equal(Number(sql("select public.textos_presentation_scores('[1,0,0,0,0,0,0,0,0,0]'::jsonb,4,true)")),2.5);
+ const saved=await ok('presentation_save',fields(publishers[0].id,Array(10).fill(0),first.version),teachers[0].code);const closed=await ok('presentation_close',{scaleMax:4,evaluationId:saved.id,expectedVersion:saved.version},teachers[0].code);assert.deepEqual(closed.scores,Array(10).fill(0));
+ const row=(await ok('presentation_summary',{area:'MAT',block:'P1'})).ranked.find(e=>e.publisherId===publishers[0].id);assert.equal(row.closed,5);assert.equal(row.pending,0);assert.equal(row.score,58);assert.equal(row.state,'ineligible');
+});
+await check('la reapertura conserva la escala histórica implícita y requiere reinicio propio para valorar de nuevo',async()=>{
+ const state=(await ok('snapshot')).state;const legacy={...state.presentationEvaluations.find(e=>e.teacherId===teachers[1].id&&e.publisherId===publishers[1].id),scores:[0,1,2,0,1,2,0,1,2,1]};delete legacy.scaleMax;replaceForm(legacy);
+ assert.equal(Number(sql(`select public.textos_presentation_scores('${JSON.stringify(legacy.scores)}'::jsonb,2,true)`)),50);
+ const reopened=await ok('presentation_reopen',{evaluationId:legacy.id,reason:'Conservar rúbrica histórica antes de una nueva revisión.'});assert.equal(reopened.scaleMax,undefined);assert.deepEqual(reopened.scores,legacy.scores);assert.equal(reopened.status,'draft');
+ const row=(await ok('presentation_summary',{area:'MAT',block:'P1'})).ranked.find(e=>e.publisherId===publishers[1].id);assert.equal(row.pendingScaleUpdate,1);assert.equal(row.drafts,1);assert.equal(row.closed,4);
+ await reject('presentation_save',fields(publishers[1].id,scoreArray(40),reopened.version),teachers[1].code,409);
+ const restarted=await ok('presentation_restart_scale',{scaleMax:4,evaluationId:reopened.id,expectedVersion:reopened.version},teachers[1].code);assert.equal(restarted.scaleMax,4);assert.deepEqual(restarted.scores,Array(10).fill(null));
 });
 console.log(`${count} pruebas de presentación SQL/HTTP aprobadas.`);

@@ -37,7 +37,7 @@ create table if not exists public.textos_history (
 );
 
 create or replace function public.textos_empty_state() returns jsonb language sql immutable set search_path=pg_catalog,public as $$
-select jsonb_build_object('schemaVersion',1,'version',1,'settings',jsonb_build_object('version',1,'evaluationMode','presentation','school','I.E.P. Albert Einstein','title','Selección de textos escolares 2027','eventAt','2026-11-05T17:00:00-05:00','timezone','America/Lima','venue','Sede 2, Jr. Augusto B. Leguía N.º 246, Nicrupampa','organizers','Subdirección Académica','editorsWithdrawn',false,'withdrawalReference','','directorName','','rules',jsonb_build_object('version',1,'threshold',70,'teacherCount',2,'indicatorCount',10,'presentationSeconds',600,'transitionSeconds',120,'representationMode','count','minimumRepresentation',null,'practiceGuidelines','{}'::jsonb,'lockedAt',null)),'presentationEvaluations','[]'::jsonb,'presentationShortlists','[]'::jsonb,'publishers','[]'::jsonb,'series','[]'::jsonb,'offers','[]'::jsonb,'books','[]'::jsonb,'teachers','[]'::jsonb,'assignments','[]'::jsonb,'evaluations','[]'::jsonb,'reviews','[]'::jsonb,'turn',jsonb_build_object('publisherId',null,'status','ready','startedAt',null,'pausedAt',null,'pausedMilliseconds',0),'shortlists','[]'::jsonb,'sections','[]'::jsonb,'deliveries','[]'::jsonb,'rounds','[]'::jsonb,'incidents','[]'::jsonb,'audit','[]'::jsonb)
+select jsonb_build_object('schemaVersion',1,'version',1,'settings',jsonb_build_object('version',1,'evaluationMode','presentation','presentationScaleMax',4,'school','I.E.P. Albert Einstein','title','Selección de textos escolares 2027','eventAt','2026-11-05T17:00:00-05:00','timezone','America/Lima','venue','Sede 2, Jr. Augusto B. Leguía N.º 246, Nicrupampa','organizers','Subdirección Académica','editorsWithdrawn',false,'withdrawalReference','','directorName','','rules',jsonb_build_object('version',1,'threshold',70,'teacherCount',2,'indicatorCount',10,'presentationSeconds',600,'transitionSeconds',120,'representationMode','count','minimumRepresentation',null,'practiceGuidelines','{}'::jsonb,'lockedAt',null)),'presentationEvaluations','[]'::jsonb,'presentationShortlists','[]'::jsonb,'publishers','[]'::jsonb,'series','[]'::jsonb,'offers','[]'::jsonb,'books','[]'::jsonb,'teachers','[]'::jsonb,'assignments','[]'::jsonb,'evaluations','[]'::jsonb,'reviews','[]'::jsonb,'turn',jsonb_build_object('publisherId',null,'status','ready','startedAt',null,'pausedAt',null,'pausedMilliseconds',0),'shortlists','[]'::jsonb,'sections','[]'::jsonb,'deliveries','[]'::jsonb,'rounds','[]'::jsonb,'incidents','[]'::jsonb,'audit','[]'::jsonb)
 $$;
 insert into public.textos_datasets(id,state) values ('real',public.textos_empty_state()),('demo',public.textos_empty_state()) on conflict do nothing;
 insert into public.textos_coordinators(user_id,name) values ('b5f3904c-4557-4779-9879-33068ae28fa8','Coordinación') on conflict do nothing;
@@ -524,6 +524,41 @@ begin
  perform public.textos_validate_state(s); return s;
 end $$;
 
+-- Metadata-only upgrade: missing live rubric metadata always means the historical 0–2 scale.
+-- Stored marks and published percentage figures are never multiplied or reinterpreted.
+create or replace function public.textos_presentation_upgrade_scale(s jsonb) returns jsonb
+language plpgsql immutable strict set search_path=pg_catalog,public as $$
+#variable_conflict use_column
+declare e jsonb; migrated jsonb; item record;
+begin
+ if jsonb_typeof(s) is distinct from 'object' then return s; end if;
+ if jsonb_typeof(s->'settings')='object' and s#>'{settings,presentationScaleMax}' is distinct from '4'::jsonb then
+  s:=jsonb_set(s,'{settings,presentationScaleMax}','4');
+  s:=jsonb_set(s,'{settings,version}',to_jsonb(coalesce((s#>>'{settings,version}')::integer,0)+1));
+ end if;
+ if not (s ? 'presentationEvaluations') then s:=jsonb_set(s,'{presentationEvaluations}','[]'); end if;
+ if not (s ? 'presentationShortlists') then s:=jsonb_set(s,'{presentationShortlists}','[]'); end if;
+ if jsonb_typeof(s->'presentationEvaluations')='array' then
+  for item in select value,ordinality from jsonb_array_elements(s->'presentationEvaluations') with ordinality loop
+   e:=item.value;
+   if jsonb_typeof(e)='object' and not (e ? 'scaleMax') then
+    s:=jsonb_set(s,array['presentationEvaluations',(item.ordinality-1)::text],e||jsonb_build_object('scaleMax',2));
+   end if;
+  end loop;
+ end if;
+ if jsonb_typeof(s->'presentationShortlists')='array' then
+  for item in select value,ordinality from jsonb_array_elements(s->'presentationShortlists') with ordinality loop
+   e:=item.value; migrated:=e;
+   if jsonb_typeof(e->'snapshot')='object' and not ((e->'snapshot') ? 'scaleMax') then migrated:=jsonb_set(migrated,'{snapshot,scaleMax}','2'); end if;
+   if e->>'status'='published' and migrated#>'{snapshot,scaleMax}' is distinct from '4'::jsonb then
+    migrated:=migrated||jsonb_build_object('status','superseded','version',(e->>'version')::integer+1);
+   end if;
+   if migrated is distinct from e then s:=jsonb_set(s,array['presentationShortlists',(item.ordinality-1)::text],migrated); end if;
+  end loop;
+ end if;
+ return s;
+end $$;
+
 create or replace function public.textos_upgrade_legacy(s jsonb) returns jsonb language plpgsql set search_path=pg_catalog,public as $$
 #variable_conflict use_column
 declare e jsonb;
@@ -533,7 +568,7 @@ begin
    e:=e||jsonb_build_object('scores',e->'scores'||'[null,null]'::jsonb,'evidence',coalesce(e->'evidence','["","","","","","","",""]'::jsonb)||'["",""]'::jsonb,'notes',coalesce(e->'notes','["","","","","","","",""]'::jsonb)||'["",""]'::jsonb,'status','draft','closedAt',null,'legacyIndicatorCount',8);
    s:=public.textos_put(s,'evaluations',e);
   end if;
- end loop; return s;
+ end loop; return public.textos_presentation_upgrade_scale(s);
 end $$;
 
 -- Built-in SHA-256 only: works on local PostgreSQL and Supabase without extensions.
@@ -599,6 +634,28 @@ select id,'11e4e537491f46dfff427e120b1dbfd99ef37ac8310a07f3f3d9e4ca5b2cb14b',120
 -- BEGIN LIVE PRESENTATION HELPERS
 -- Live presentations: independent of historical book dossiers and two-review assignments.
 -- Insert before textos_api; only textos_api is granted to application roles.
+-- Each stored rubric owns its scale. Missing historical metadata means 0–2.
+create or replace function public.textos_presentation_scores(scores jsonb, scale_max integer default 4, complete boolean default false) returns numeric
+language plpgsql immutable set search_path=pg_catalog,public as $$
+declare x jsonb; total integer:=0; pending boolean:=false;
+begin
+ if scale_max is null or scale_max not in (2,4) then perform public.textos_fail('Escala de exposición inválida.'); end if;
+ if jsonb_typeof(scores) is distinct from 'array' then perform public.textos_fail('La ficha requiere diez indicadores.'); end if;
+ if jsonb_array_length(scores)<>10 then perform public.textos_fail('La ficha requiere diez indicadores.'); end if;
+ for x in select value from jsonb_array_elements(scores) loop
+  if x='null'::jsonb then pending:=true;
+  elsif not public.textos_int(x) then perform public.textos_fail('Use enteros de 0 a '||scale_max||' o pendiente.');
+  elsif (x::text)::numeric>scale_max then perform public.textos_fail('Use enteros de 0 a '||scale_max||' o pendiente.');
+  else total:=total+(x::text)::integer;
+  end if;
+ end loop;
+ if pending then
+  if complete then perform public.textos_fail('Hay indicadores pendientes.'); end if;
+  return null;
+ end if;
+ return total*100::numeric/(10*scale_max);
+end $$;
+
 create or replace function public.textos_presentation_teacher_matches(t jsonb, area text, block text) returns boolean
 language sql immutable set search_path=pg_catalog,public as $$
  select coalesce(t->>'area'=area and jsonb_typeof(t->'categories')='array' and t->'categories' ? block,false)
@@ -617,6 +674,7 @@ language plpgsql immutable set search_path=pg_catalog,public as $$
 #variable_conflict use_column
 declare e jsonb; q jsonb; t jsonb; c text;
 begin
+ if s#>'{settings,presentationScaleMax}' is not null and s#>'{settings,presentationScaleMax}' not in ('2'::jsonb,'4'::jsonb) then perform public.textos_fail('Escala de exposición inválida.'); end if;
  foreach c in array array['presentationEvaluations','presentationShortlists'] loop
   if s ? c and jsonb_typeof(s->c) is distinct from 'array' then perform public.textos_fail('Colección de exposición inválida.'); end if;
  end loop;
@@ -636,7 +694,8 @@ begin
    or jsonb_typeof(e->'physicalText') is distinct from 'string' or jsonb_typeof(e->'updatedAt') is distinct from 'string'
    or (e ? 'materialViewed' and jsonb_typeof(e->'materialViewed') is distinct from 'boolean') then perform public.textos_fail('Ficha de exposición inválida.'); end if;
   if jsonb_array_length(e->'notes')<>10 or exists(select 1 from jsonb_array_elements(e->'notes') q where jsonb_typeof(q)<>'string') then perform public.textos_fail('Las diez observaciones pueden quedar vacías, pero deben ser texto.'); end if;
-  perform public.textos_scores(e->'scores',e->>'status'='closed');
+  if e ? 'scaleMax' and e->'scaleMax' not in ('2'::jsonb,'4'::jsonb) then perform public.textos_fail('Escala de la ficha inválida.'); end if;
+  perform public.textos_presentation_scores(e->'scores',case when e->'scaleMax'='4'::jsonb then 4 else 2 end,e->>'status'='closed');
   if (e->>'status'='closed' and (jsonb_typeof(e->'closedAt') is distinct from 'string' or nullif(e->>'closedAt','') is null))
    or (e->>'status'='draft' and e->'closedAt' is distinct from 'null'::jsonb) then perform public.textos_fail('Fecha de cierre de exposición inválida.'); end if;
  end loop;
@@ -649,7 +708,9 @@ begin
    or jsonb_typeof(e->'publisherIds') is distinct from 'array' or jsonb_typeof(e->'snapshot') is distinct from 'object' then perform public.textos_fail('Preselección de exposición inválida.'); end if;
   if jsonb_array_length(e->'publisherIds') not between 1 and 3 or (e->>'status'='published' and jsonb_array_length(e->'publisherIds')<>3) or jsonb_array_length(e->'publisherIds')<>(select count(distinct q) from jsonb_array_elements(e->'publisherIds') q)
    or exists(select 1 from jsonb_array_elements_text(e->'publisherIds') q where public.textos_find(s,'publishers',q) is null) then perform public.textos_fail('Preselección: una a tres editoriales distintas.'); end if;
+  if e#>'{snapshot,scaleMax}' is not null and e#>'{snapshot,scaleMax}' not in ('2'::jsonb,'4'::jsonb) then perform public.textos_fail('Escala de la terna inválida.'); end if;
   if e->>'status'='published' then
+   if e#>'{snapshot,scaleMax}' is distinct from '4'::jsonb then perform public.textos_fail('La publicación vigente requiere la escala actual 0–4.'); end if;
    if e->'directorApproved' is distinct from 'true'::jsonb or jsonb_typeof(e->'statement') is distinct from 'string' or nullif(trim(e->>'statement'),'') is null
     or jsonb_typeof(e->'folio') is distinct from 'string' or nullif(trim(e->>'folio'),'') is null
     or not public.textos_int(e->'rulesVersion') or (e->>'rulesVersion')::int<1
@@ -667,7 +728,7 @@ end $$;
 create or replace function public.textos_presentation_publisher_summary(s jsonb, publisher_id text, area text, block text) returns jsonb
 language plpgsql stable set search_path=pg_catalog,public as $$
 #variable_conflict use_column
-declare registered integer; closed integer; drafts integer; score numeric; i2 numeric; threshold numeric; available boolean;
+declare registered integer; closed integer; drafts integer; pending_scale integer; score numeric; i2 numeric; threshold numeric; available boolean;
 begin
  available:=public.textos_presentation_publisher_available(s,publisher_id,area,block);
  with registered_teachers as (
@@ -678,12 +739,14 @@ begin
    where e->>'teacherId'=t->>'id' and e->>'publisherId'=publisher_id and e->>'area'=area and e->>'block'=block
    order by (e->>'version')::int desc limit 1
   ) x on true
- ) select count(*),count(*) filter(where e->>'status'='closed'),count(*) filter(where e->>'status'='draft'),
-  avg(public.textos_scores(e->'scores',true)) filter(where e->>'status'='closed'),avg((e#>>'{scores,1}')::numeric) filter(where e->>'status'='closed')
- into registered,closed,drafts,score,i2 from forms;
+ ) select count(*),count(*) filter(where e->>'status'='closed' and e->'scaleMax'='4'::jsonb),count(*) filter(where e->>'status'='draft'),
+  count(*) filter(where e is not null and coalesce(e->'scaleMax','2'::jsonb)='2'::jsonb),
+  avg(public.textos_presentation_scores(e->'scores',4,true)) filter(where e->>'status'='closed' and e->'scaleMax'='4'::jsonb),
+  avg((e#>>'{scores,1}')::numeric) filter(where e->>'status'='closed' and e->'scaleMax'='4'::jsonb)
+ into registered,closed,drafts,pending_scale,score,i2 from forms;
  threshold:=coalesce((s#>>'{settings,rules,threshold}')::numeric,70);
- if not available then registered:=0; closed:=0; drafts:=0; score:=null; i2:=null; end if;
- return jsonb_build_object('publisherId',publisher_id,'area',area,'block',block,'registered',registered,'closed',closed,'drafts',drafts,'pending',registered-closed,'score',score,'i2',i2,
+ if not available then registered:=0; closed:=0; drafts:=0; pending_scale:=0; score:=null; i2:=null; end if;
+ return jsonb_build_object('publisherId',publisher_id,'area',area,'block',block,'registered',registered,'closed',closed,'drafts',drafts,'pending',registered-closed,'pendingScaleUpdate',pending_scale,'score',score,'i2',i2,
   'state',case when registered=0 or closed<registered then 'pending' when score>=threshold then 'eligible' else 'ineligible' end);
 end $$;
 
@@ -691,13 +754,13 @@ create or replace function public.textos_presentation_category(s jsonb, area tex
 language plpgsql stable set search_path=pg_catalog,public as $$
 #variable_conflict use_column
 declare ranked jsonb; eligible jsonb; finalists jsonb:='[]'; tied jsonb:='[]'; reasons jsonb:='[]'; item jsonb; boundary jsonb;
- registered integer; closed integer; pending integer; n integer; state text; published boolean;
+ registered integer; closed integer; pending integer; pending_scale integer; n integer; state text; published boolean;
 begin
  if coalesce(area,'') not in ('MAT','COM') or coalesce(block,'') not in ('P1','P2','S1') then perform public.textos_fail('Área o categoría de exposición inválida.'); end if;
  select count(*) into registered from jsonb_array_elements(coalesce(s->'teachers','[]')) t where public.textos_presentation_teacher_matches(t,area,block);
  select coalesce(jsonb_agg(q order by (q->>'score')::numeric desc nulls last,(q->>'i2')::numeric desc nulls last,q->>'publisherId'),'[]') into ranked
  from (select public.textos_presentation_publisher_summary(s,p->>'id',area,block) q from jsonb_array_elements(coalesce(s->'publishers','[]')) p where public.textos_presentation_publisher_available(s,p->>'id',area,block)) summaries;
- select coalesce(sum((q->>'closed')::int),0),coalesce(sum((q->>'pending')::int),0) into closed,pending from jsonb_array_elements(ranked) q;
+ select coalesce(sum((q->>'closed')::int),0),coalesce(sum((q->>'pending')::int),0),coalesce(sum((q->>'pendingScaleUpdate')::int),0) into closed,pending,pending_scale from jsonb_array_elements(ranked) q;
  select coalesce(jsonb_agg(q order by ord),'[]') into eligible from jsonb_array_elements(ranked) with ordinality x(q,ord) where q->>'state'='eligible';
  n:=jsonb_array_length(eligible);
  for item in select value from jsonb_array_elements(eligible) limit 3 loop finalists:=finalists||jsonb_build_array(item->>'publisherId'); end loop;
@@ -707,14 +770,14 @@ begin
    select coalesce(jsonb_agg(q->>'publisherId'),'[]') into tied from jsonb_array_elements(eligible) q where q->'score'=boundary->'score' and q->'i2'=boundary->'i2';
   end if;
  end if;
- published:=exists(select 1 from jsonb_array_elements(coalesce(s->'presentationShortlists','[]')) q where q->>'area'=area and q->>'block'=block and q->>'status'='published');
+ published:=exists(select 1 from jsonb_array_elements(coalesce(s->'presentationShortlists','[]')) q where q->>'area'=area and q->>'block'=block and q->>'status'='published' and q#>'{snapshot,scaleMax}'='4'::jsonb);
  state:=case when registered=0 or pending>0 or jsonb_array_length(ranked)=0 then 'pending' when jsonb_array_length(tied)>0 then 'tie' when n<3 then 'less_than_three' else 'ready' end;
  if registered=0 then reasons:=reasons||jsonb_build_array('No hay docentes registrados en esta área y categoría.'); end if;
  if pending>0 then reasons:=reasons||jsonb_build_array('Quedan '||pending||' fichas por cerrar.'); end if;
  if n<3 then reasons:=reasons||jsonb_build_array('Hay '||n||' editoriales que alcanzan el puntaje mínimo; se recomienda un máximo de tres.'); end if;
  if jsonb_array_length(tied)>0 then reasons:=reasons||jsonb_build_array('Persiste un empate en el corte después de comparar I2.'); end if;
  if jsonb_array_length(tied)>0 then finalists:='[]'; end if;
- return jsonb_build_object('categoryId',area||'-'||block,'area',area,'block',block,'state',case when published and state in ('ready','less_than_three') and n>0 then 'published' else state end,'registered',registered,'closed',closed,'pending',pending,'ranked',ranked,'finalists',finalists,'tied',tied,'reasons',reasons);
+ return jsonb_build_object('categoryId',area||'-'||block,'area',area,'block',block,'state',case when published and state in ('ready','less_than_three') and n>0 then 'published' else state end,'registered',registered,'closed',closed,'pending',pending,'pendingScaleUpdate',pending_scale,'ranked',ranked,'finalists',finalists,'tied',tied,'reasons',reasons);
 end $$;
 
 create or replace function public.textos_presentation_teacher_state(s jsonb, actor_id text) returns jsonb
@@ -735,6 +798,7 @@ begin
   'closed',case when public.textos_int(q->'closed') then q->'closed' else '0'::jsonb end,
   'pending',case when public.textos_int(q->'pending') then q->'pending' else '0'::jsonb end,
   'drafts',case when public.textos_int(q->'drafts') then q->'drafts' else '0'::jsonb end,
+  'pendingScaleUpdate',case when public.textos_int(q->'pendingScaleUpdate') then q->'pendingScaleUpdate' else '0'::jsonb end,
   'score',case when jsonb_typeof(q->'score')='number' then q->'score' else 'null'::jsonb end,
   'i2',case when jsonb_typeof(q->'i2')='number' then q->'i2' else 'null'::jsonb end,'state',q->>'state')),'[]') into ranked
  from jsonb_array_elements(case when jsonb_typeof(a->'ranked')='array' then a->'ranked' else '[]'::jsonb end) q;
@@ -744,18 +808,19 @@ begin
   'registered',case when public.textos_int(a->'registered') then a->'registered' else '0'::jsonb end,
   'closed',case when public.textos_int(a->'closed') then a->'closed' else '0'::jsonb end,
   'pending',case when public.textos_int(a->'pending') then a->'pending' else '0'::jsonb end,
+  'pendingScaleUpdate',case when public.textos_int(a->'pendingScaleUpdate') then a->'pendingScaleUpdate' else '0'::jsonb end,
   'ranked',ranked,'finalists',case when jsonb_typeof(a->'finalists')='array' then (select coalesce(jsonb_agg(q),'[]') from jsonb_array_elements(a->'finalists') q where jsonb_typeof(q)='string') else '[]'::jsonb end,
   'tied',case when jsonb_typeof(a->'tied')='array' then (select coalesce(jsonb_agg(q),'[]') from jsonb_array_elements(a->'tied') q where jsonb_typeof(q)='string') else '[]'::jsonb end,
   'reasons',case when jsonb_typeof(a->'reasons')='array' then (select coalesce(jsonb_agg(q),'[]') from jsonb_array_elements(a->'reasons') q where jsonb_typeof(q)='string') else '[]'::jsonb end);
  return jsonb_build_object('id',e->>'id','version',e->'version','categoryId',e->>'categoryId','area',e->>'area','block',e->>'block',
   'publisherIds',e->'publisherIds','status','published','statement',e->>'statement','folio',e->>'folio',
   'directorApproved',e->'directorApproved','publishedAt',e->'publishedAt','rulesVersion',e->'rulesVersion',
-  'snapshot',jsonb_build_object('assessment',a,'publishers',publishers,'threshold',case when jsonb_typeof(e#>'{snapshot,threshold}')='number' then e#>'{snapshot,threshold}' else 'null'::jsonb end));
+  'snapshot',jsonb_build_object('assessment',a,'publishers',publishers,'scaleMax',case when e#>'{snapshot,scaleMax}'='4'::jsonb then 4 else 2 end,'threshold',case when jsonb_typeof(e#>'{snapshot,threshold}')='number' then e#>'{snapshot,threshold}' else 'null'::jsonb end));
 end $$;
 
 create or replace function public.textos_presentation_public_state(s jsonb) returns jsonb
 language sql stable set search_path=pg_catalog,public as $$
- select jsonb_set(jsonb_set(s,'{presentationEvaluations}','[]'),'{presentationShortlists}',coalesce((select jsonb_agg(public.textos_presentation_public_shortlist(e)) from jsonb_array_elements(coalesce(s->'presentationShortlists','[]')) e where e->>'status'='published'),'[]'))
+ select jsonb_set(jsonb_set(s,'{presentationEvaluations}','[]'),'{presentationShortlists}',coalesce((select jsonb_agg(public.textos_presentation_public_shortlist(e)) from jsonb_array_elements(coalesce(s->'presentationShortlists','[]')) e where e->>'status'='published' and e#>'{snapshot,scaleMax}'='4'::jsonb),'[]'))
 $$;
 
 create or replace function public.textos_presentation_api(s jsonb, p_action text, p_payload jsonb, actor_role text, actor_id text, actor_name text, nowat timestamptz) returns jsonb
@@ -764,9 +829,9 @@ language plpgsql set search_path=pg_catalog,public as $$
 declare ev jsonb; entity jsonb; t jsonb; q jsonb; assessment jsonb; notes jsonb; history jsonb:='[]'; result jsonb;
  area text; block text; publisher_id text; reason text; expected integer; v integer;
 begin
- if coalesce(p_action,'') not in ('presentation_save','presentation_close','presentation_reopen','presentation_summary','presentation_shortlist_publish') then perform public.textos_fail('Operación de exposición desconocida.','PT404'); end if;
+ if coalesce(p_action,'') not in ('presentation_save','presentation_close','presentation_restart_scale','presentation_reopen','presentation_summary','presentation_shortlist_publish') then perform public.textos_fail('Operación de exposición desconocida.','PT404'); end if;
  if jsonb_typeof(p_payload) is distinct from 'object' then perform public.textos_fail('Petición de exposición inválida.'); end if;
- if p_action in ('presentation_save','presentation_close') then
+ if p_action in ('presentation_save','presentation_close','presentation_restart_scale') then
   if actor_role is distinct from 'teacher' then perform public.textos_fail('Solo el docente puede emitir su propia ficha de exposición.','PT403'); end if;
   t:=public.textos_find(s,'teachers',actor_id);
   if t is null then perform public.textos_fail('Perfil docente no encontrado.','PT403'); end if;
@@ -775,40 +840,48 @@ begin
  else
   if actor_role is distinct from 'coordinator' then perform public.textos_fail('Operación reservada a coordinación.','PT403'); end if;
  end if;
+ if p_action in ('presentation_save','presentation_close','presentation_restart_scale') and p_payload->'scaleMax' is distinct from '4'::jsonb then
+  perform public.textos_fail('La escala cambió a 0–4. Actualice la aplicación antes de guardar.','PT409');
+ end if;
  if p_action='presentation_save' then
   area:=p_payload->>'area'; block:=p_payload->>'block'; publisher_id:=p_payload->>'publisherId';
   if not public.textos_presentation_teacher_matches(t,area,block) then perform public.textos_fail('La ficha no corresponde al área y las categorías de su perfil.','PT403'); end if;
   if not public.textos_presentation_publisher_available(s,publisher_id,area,block) then perform public.textos_fail('La editorial no participa en esta área y categoría.','PT403'); end if;
   select e into ev from jsonb_array_elements(coalesce(s->'presentationEvaluations','[]')) e where e->>'teacherId'=actor_id and e->>'publisherId'=publisher_id and e->>'area'=area and e->>'block'=block;
- elsif p_action in ('presentation_close','presentation_reopen') then
+ elsif p_action in ('presentation_close','presentation_restart_scale','presentation_reopen') then
   ev:=public.textos_find(s,'presentationEvaluations',p_payload->>'evaluationId');
   if ev is null then perform public.textos_fail('Ficha de exposición no encontrada.','PT404'); end if;
   area:=ev->>'area'; block:=ev->>'block'; publisher_id:=ev->>'publisherId';
-  if p_action='presentation_close' and (ev->>'teacherId'<>actor_id or not public.textos_presentation_teacher_matches(t,area,block)) then perform public.textos_fail('Solo puede cerrar su propia ficha dentro de su perfil.','PT403'); end if;
-  if p_action='presentation_close' and not public.textos_presentation_publisher_available(s,publisher_id,area,block) then perform public.textos_fail('La editorial ya no participa en esta área y categoría.','PT403'); end if;
+  if p_action in ('presentation_close','presentation_restart_scale') and (ev->>'teacherId'<>actor_id or not public.textos_presentation_teacher_matches(t,area,block)) then perform public.textos_fail('Solo puede cerrar su propia ficha dentro de su perfil.','PT403'); end if;
+  if p_action in ('presentation_close','presentation_restart_scale') and not public.textos_presentation_publisher_available(s,publisher_id,area,block) then perform public.textos_fail('La editorial ya no participa en esta área y categoría.','PT403'); end if;
  end if;
- if p_action in ('presentation_save','presentation_close') then
+ if p_action in ('presentation_save','presentation_close','presentation_restart_scale') then
   if not public.textos_int(p_payload->'expectedVersion') then perform public.textos_fail('La ficha requiere su versión para evitar sobrescrituras.','PT409'); end if;
   expected:=(p_payload->>'expectedVersion')::int;
   if expected<>coalesce((ev->>'version')::int,0) then perform public.textos_fail('La ficha cambió en otra pestaña; conserve su borrador y recargue.','PT409'); end if;
-  if ev->>'status'='closed' then perform public.textos_fail('La ficha está cerrada; coordinación puede reabrir con motivo.','PT423'); end if;
+  if p_action in ('presentation_save','presentation_close') and ev is not null and ev->'scaleMax' is distinct from '4'::jsonb then perform public.textos_fail('Esta ficha usa la escala histórica 0–2. Inicie explícitamente una nueva valoración 0–4.','PT409'); end if;
+  if p_action='presentation_restart_scale' and ev->'scaleMax'='4'::jsonb then perform public.textos_fail('La ficha ya usa la escala actual 0–4.','PT409'); end if;
+  if p_action<>'presentation_restart_scale' and ev->>'status'='closed' then perform public.textos_fail('La ficha está cerrada; coordinación puede reabrir con motivo.','PT423'); end if;
  end if;
  if p_action='presentation_save' then
-  perform public.textos_scores(p_payload->'scores');
+  perform public.textos_presentation_scores(p_payload->'scores',4);
   notes:=coalesce(p_payload->'notes','["","","","","","","","","",""]'::jsonb);
   if jsonb_typeof(notes) is distinct from 'array' then perform public.textos_fail('Observaciones inválidas.'); end if;
   if jsonb_array_length(notes)<>10 or exists(select 1 from jsonb_array_elements(notes) q where jsonb_typeof(q)<>'string') then perform public.textos_fail('Las diez observaciones son opcionales y deben ser texto.'); end if;
   if (p_payload ? 'generalObservation' and jsonb_typeof(p_payload->'generalObservation') is distinct from 'string') or (p_payload ? 'physicalText' and jsonb_typeof(p_payload->'physicalText') is distinct from 'string')
    or (p_payload ? 'materialViewed' and jsonb_typeof(p_payload->'materialViewed') is distinct from 'boolean') then perform public.textos_fail('Datos de observación inválidos.'); end if;
-  entity:=coalesce(ev,'{}')||jsonb_build_object('id',coalesce(ev->>'id',gen_random_uuid()::text),'version',coalesce((ev->>'version')::int,0)+1,'publisherId',publisher_id,'teacherId',actor_id,'area',area,'block',block,'scores',p_payload->'scores','notes',notes,'generalObservation',coalesce(p_payload->>'generalObservation',''),'physicalText',coalesce(p_payload->>'physicalText',''),'status','draft','closedAt',null,'updatedAt',nowat,'rulesVersion',s#>'{settings,rules,version}');
+  entity:=coalesce(ev,'{}')||jsonb_build_object('id',coalesce(ev->>'id',gen_random_uuid()::text),'version',coalesce((ev->>'version')::int,0)+1,'publisherId',publisher_id,'teacherId',actor_id,'area',area,'block',block,'scaleMax',4,'scores',p_payload->'scores','notes',notes,'generalObservation',coalesce(p_payload->>'generalObservation',''),'physicalText',coalesce(p_payload->>'physicalText',''),'status','draft','closedAt',null,'updatedAt',nowat,'rulesVersion',s#>'{settings,rules,version}');
   if p_payload ? 'materialViewed' then entity:=entity||jsonb_build_object('materialViewed',p_payload->'materialViewed'); end if;
   if nullif(s#>>'{settings,rules,lockedAt}','') is null then
    s:=jsonb_set(s,'{settings,rules,lockedAt}',to_jsonb(nowat));
    s:=jsonb_set(s,'{settings,version}',to_jsonb(coalesce((s#>>'{settings,version}')::int,0)+1));
   end if;
  elsif p_action='presentation_close' then
-  perform public.textos_scores(ev->'scores',true);
+  perform public.textos_presentation_scores(ev->'scores',4,true);
   entity:=ev||jsonb_build_object('status','closed','closedAt',nowat,'updatedAt',nowat,'version',(ev->>'version')::int+1);
+ elsif p_action='presentation_restart_scale' then
+  reason:='Actualización explícita de escala 0–2 a 0–4';
+  entity:=ev||jsonb_build_object('scaleMax',4,'scores','[null,null,null,null,null,null,null,null,null,null]'::jsonb,'status','draft','closedAt',null,'updatedAt',nowat,'rulesVersion',s#>'{settings,rules,version}','version',(ev->>'version')::int+1);
  elsif p_action='presentation_reopen' then
   reason:=trim(coalesce(p_payload->>'reason',''));
   if reason='' or jsonb_typeof(p_payload->'reason') is distinct from 'string' then perform public.textos_fail('Indique el motivo de la reapertura.'); end if;
@@ -834,7 +907,7 @@ begin
    s:=public.textos_put(s,'presentationShortlists',q||jsonb_build_object('status','superseded','version',(q->>'version')::int+1));
   end loop;
   select coalesce(max((e->>'version')::int),0)+1 into v from jsonb_array_elements(coalesce(s->'presentationShortlists','[]')) e where e->>'area'=area and e->>'block'=block;
-  entity:=jsonb_build_object('id',gen_random_uuid()::text,'version',v,'categoryId',area||'-'||block,'area',area,'block',block,'publisherIds',assessment->'finalists','status','published','statement',p_payload->>'statement','folio',p_payload->>'folio','directorApproved',true,'publishedAt',nowat,'rulesVersion',s#>'{settings,rules,version}','snapshot',jsonb_build_object('assessment',assessment,'threshold',s#>'{settings,rules,threshold}','publishers',coalesce((select jsonb_agg(jsonb_build_object('id',p->>'id','name',p->>'name')) from jsonb_array_elements(coalesce(s->'publishers','[]')) p where assessment->'finalists' ? (p->>'id')),'[]')));
+  entity:=jsonb_build_object('id',gen_random_uuid()::text,'version',v,'categoryId',area||'-'||block,'area',area,'block',block,'publisherIds',assessment->'finalists','status','published','statement',p_payload->>'statement','folio',p_payload->>'folio','directorApproved',true,'publishedAt',nowat,'rulesVersion',s#>'{settings,rules,version}','snapshot',jsonb_build_object('assessment',assessment,'scaleMax',4,'threshold',s#>'{settings,rules,threshold}','publishers',coalesce((select jsonb_agg(jsonb_build_object('id',p->>'id','name',p->>'name')) from jsonb_array_elements(coalesce(s->'publishers','[]')) p where assessment->'finalists' ? (p->>'id')),'[]')));
   s:=public.textos_put(s,'presentationShortlists',entity);
   return jsonb_build_object('state',s,'result',entity,'history',history);
  end if;
@@ -975,10 +1048,10 @@ begin
  end if;
  if actor_role is null then perform public.textos_fail('Acceso individual requerido.','PT401'); end if;
  if p_action='snapshot' then return public.textos_snapshot(s,actor_role,actor_id,actor_name,p_dataset,nowat); end if;
- if actor_role='teacher' and p_action not in ('evaluation_save','evaluation_close','presentation_save','presentation_close') then perform public.textos_fail('Operación reservada a coordinación o mesa.','PT403'); end if;
+ if actor_role='teacher' and p_action not in ('evaluation_save','evaluation_close','presentation_save','presentation_close','presentation_restart_scale') then perform public.textos_fail('Operación reservada a coordinación o mesa.','PT403'); end if;
  if actor_role='secretary' and p_action not in ('publisher_save','series_save','offer_save','book_save','teacher_save','section_save','attendance_save','delivery_mark','paper_tally_save','incident_save','import_preview','import_apply','presentation_summary') then perform public.textos_fail('Operación reservada a coordinación.','PT403'); end if;
  reason:=coalesce(p_payload->>'reason',p_payload->>'reopenReason','');
- if p_action in ('presentation_save','presentation_close','presentation_reopen','presentation_summary','presentation_shortlist_publish') then
+ if p_action in ('presentation_save','presentation_close','presentation_restart_scale','presentation_reopen','presentation_summary','presentation_shortlist_publish') then
   saved:=public.textos_presentation_api(s,p_action,p_payload,actor_role,actor_id,actor_name,nowat);
   s:=saved->'state'; result:=saved->'result'; entityid:=result->>'id';
   if p_action='presentation_summary' then return result; end if;
@@ -1023,7 +1096,7 @@ begin
   end if;
   if old is not null then insert into public.textos_history(dataset,entity,reference_id,actor,reason,previous) values(p_dataset,col,entityid,actor_name,reason,old); end if;
  elsif p_action='settings_save' then
-  old:=s->'settings'; entity:=p_payload->'settings';
+  old:=s->'settings'; entity:=p_payload->'settings'; entity:=entity||jsonb_build_object('presentationScaleMax',4);
   if coalesce((p_payload->>'expectedVersion')::int,-1)<>(old->>'version')::int then perform public.textos_fail('La configuración cambió en otra sesión.','PT409'); end if;
   if entity->'rules'<>old->'rules' and exists(select 1 from jsonb_array_elements(s->'rounds') q where q->>'status'<>'void') then perform public.textos_fail('Las reglas de representación y evaluación ya están fijadas para las rondas.','PT423'); end if;
   if old#>'{rules,lockedAt}'<>'null' and entity->'rules'<>old->'rules' then
@@ -1250,6 +1323,13 @@ begin
   if p_action='restore_preview' then return jsonb_build_object('valid',true,'dataset',p_dataset,'version',saved->'version','suspendedRoundIds',list,'books',jsonb_array_length(saved->'books'),'evaluations',jsonb_array_length(saved->'evaluations'),'rounds',jsonb_array_length(saved->'rounds')); end if;
   if p_payload->>'confirmation' is distinct from 'RESTAURAR' or nullif(trim(reason),'') is null then perform public.textos_fail('Restauración requiere confirmación RESTAURAR y motivo.'); end if;
   for x in select value from jsonb_array_elements(coalesce(backup#>'{state,evaluations}','[]')) where jsonb_array_length(value->'scores')=8 loop insert into public.textos_history(dataset,entity,reference_id,actor,reason,previous) values(p_dataset,'evaluations',x->>'id',actor_name,'Migración de ocho indicadores: I9 e I10 quedan pendientes',x); end loop;
+  -- Keep incoming old live rubric originals before metadata-only scale migration.
+  for x in select value from jsonb_array_elements(coalesce(backup#>'{state,presentationEvaluations}','[]')) loop
+   if public.textos_find(saved,'presentationEvaluations',x->>'id') is distinct from x then insert into public.textos_history(dataset,entity,reference_id,actor,reason,previous) values(p_dataset,'presentationEvaluations',x->>'id',actor_name,'Restauración de escala histórica 0–2 sin conversión numérica',x); end if;
+  end loop;
+  for x in select value from jsonb_array_elements(coalesce(backup#>'{state,presentationShortlists}','[]')) loop
+   if public.textos_find(saved,'presentationShortlists',x->>'id') is distinct from x then insert into public.textos_history(dataset,entity,reference_id,actor,reason,previous) values(p_dataset,'presentationShortlists',x->>'id',actor_name,'Restauración de publicación histórica con su escala original',x); end if;
+  end loop;
   -- Keep a complete pre-restore history; access credentials are never imported.
   insert into public.textos_history(dataset,entity,reference_id,actor,reason,previous) values(p_dataset,'restore',p_dataset,actor_name,reason,s);
   for id in select jsonb_array_elements_text(list) loop
@@ -1275,7 +1355,14 @@ begin
  elsif p_action='demo_reset' then
   if p_dataset<>'demo' then perform public.textos_fail('Solo se puede reiniciar la demostración ficticia.','PT403'); end if;
   for x in select value from jsonb_array_elements(coalesce(p_payload#>'{state,evaluations}','[]')) where jsonb_array_length(value->'scores')=8 loop insert into public.textos_history(dataset,entity,reference_id,actor,reason,previous) values(p_dataset,'evaluations',x->>'id',actor_name,'Migración de ocho indicadores: I9 e I10 quedan pendientes',x); end loop;
-  s:=public.textos_upgrade_legacy(coalesce(p_payload->'state',public.textos_empty_state())); perform public.textos_validate_state(s);
+  saved:=public.textos_upgrade_legacy(coalesce(p_payload->'state',public.textos_empty_state())); perform public.textos_validate_state(saved);
+  for x in select value from jsonb_array_elements(coalesce(p_payload#>'{state,presentationEvaluations}','[]')) loop
+   if public.textos_find(saved,'presentationEvaluations',x->>'id') is distinct from x then insert into public.textos_history(dataset,entity,reference_id,actor,reason,previous) values(p_dataset,'presentationEvaluations',x->>'id',actor_name,'Migración de escala histórica sin conversión numérica',x); end if;
+  end loop;
+  for x in select value from jsonb_array_elements(coalesce(p_payload#>'{state,presentationShortlists}','[]')) loop
+   if public.textos_find(saved,'presentationShortlists',x->>'id') is distinct from x then insert into public.textos_history(dataset,entity,reference_id,actor,reason,previous) values(p_dataset,'presentationShortlists',x->>'id',actor_name,'Migración de publicación histórica con su escala original',x); end if;
+  end loop;
+  s:=saved;
   delete from public.textos_ballots where dataset='demo'; delete from public.textos_aggregates where dataset='demo'; result:=jsonb_build_object('reset',true);
  else perform public.textos_fail('Operación desconocida.','PT404');
  end if;
@@ -1287,6 +1374,35 @@ begin
  return result;
 exception when invalid_text_representation or numeric_value_out_of_range or null_value_not_allowed or check_violation then
  raise exception using errcode='PT400',message='Tipo o valor inválido en la petición.';
+end $$;
+
+-- Preserve exact originals once, then mark legacy live scales and retire old current publications.
+-- This block is also safe on fresh installations and when the whole schema is reapplied.
+do $$
+declare d record; upgraded jsonb; e jsonb; previous_settings jsonb; migration_at timestamptz:=clock_timestamp();
+begin
+ for d in select id,state from public.textos_datasets order by id for update loop
+  upgraded:=public.textos_presentation_upgrade_scale(d.state);
+  if upgraded is distinct from d.state then
+   for e in select value from jsonb_array_elements(coalesce(d.state->'presentationEvaluations','[]')) loop
+    if public.textos_find(upgraded,'presentationEvaluations',e->>'id') is distinct from e then
+     insert into public.textos_history(dataset,entity,reference_id,actor,reason,previous,at) values(d.id,'presentationEvaluations',e->>'id','Migración de escala','Escala histórica 0–2 conservada; nueva valoración 0–4 requiere intervención del docente',e,migration_at);
+    end if;
+   end loop;
+   for e in select value from jsonb_array_elements(coalesce(d.state->'presentationShortlists','[]')) loop
+    if public.textos_find(upgraded,'presentationShortlists',e->>'id') is distinct from e then
+     insert into public.textos_history(dataset,entity,reference_id,actor,reason,previous,at) values(d.id,'presentationShortlists',e->>'id','Migración de escala','Publicación histórica conservada con su escala original',e,migration_at);
+    end if;
+   end loop;
+   if upgraded->'settings' is distinct from d.state->'settings' then
+    insert into public.textos_history(dataset,entity,reference_id,actor,reason,previous,at) values(d.id,'settings','settings','Migración de escala','Nueva escala de exposición 0–4; reglas históricas de libros conservadas',d.state->'settings',migration_at);
+   end if;
+   upgraded:=jsonb_set(upgraded,'{audit}',coalesce(upgraded->'audit','[]')||jsonb_build_array(jsonb_build_object('id',gen_random_uuid()::text,'actor','Migración de escala','action','presentation_scale_upgrade','referenceId',d.id,'reason','Escala histórica conservada; nueva valoración 0–4','at',migration_at,'summary','Actualización de metadatos sin conversión numérica de fichas')));
+   upgraded:=jsonb_set(upgraded,'{version}',to_jsonb((d.state->>'version')::integer+1));
+   perform public.textos_validate_state(upgraded);
+   update public.textos_datasets set state=upgraded,updated_at=migration_at where id=d.id;
+  end if;
+ end loop;
 end $$;
 
 -- Owner-only bootstrap, never executable through PostgREST.

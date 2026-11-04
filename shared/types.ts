@@ -4,6 +4,8 @@ export type GradeId = 'PRI1' | 'PRI2' | 'PRI3' | 'PRI4' | 'PRI5' | 'PRI6' | 'SEC
 export type Dataset = 'real' | 'demo';
 export type Role = 'coordinator' | 'secretary' | 'teacher' | 'public';
 export type Score = 0 | 1 | 2 | null;
+export type PresentationScore = 0 | 1 | 2 | 3 | 4 | null;
+export type PresentationScaleMax = 2 | 4;
 export type CheckStatus = 'pending' | 'pass' | 'fail';
 export type Verification = 'declared' | 'verified' | 'pending' | 'not_offered';
 export interface Versioned { id: string; version: number }
@@ -18,6 +20,7 @@ export interface Settings {
   venue: string; organizers: string; rules: Rules; editorsWithdrawn: boolean;
   withdrawalReference: string; directorName: string;
   evaluationMode?: 'presentation';
+  presentationScaleMax?: PresentationScaleMax;
 }
 export interface Publisher extends Versioned { name: string; contact?: string; samplesReceived: boolean; sampleNote: string }
 export interface Series extends Versioned { publisherId: string; name: string }
@@ -68,25 +71,29 @@ export interface Evaluation extends Versioned {
 /** Live observations are independent of historical book/assignment evaluations. */
 export interface PresentationEvaluation extends Versioned {
   publisherId: string; teacherId: string; area: Area; block: Block;
-  scores: Score[]; notes: string[]; generalObservation: string; physicalText: string;
+  scores: PresentationScore[]; notes: string[]; generalObservation: string; physicalText: string;
+  /** Missing metadata identifies the historical 0–2 live scale. Never infer from the numeric scores. */
+  scaleMax?: PresentationScaleMax;
   materialViewed?: boolean;
   status: 'draft' | 'closed'; closedAt: string | null; updatedAt: string; rulesVersion: number;
 }
 export interface PresentationPublisherAssessment {
   publisherId: string; area: Area; block: Block; registered: number; closed: number; pending: number;
   drafts: number; score: number | null; i2: number | null; state: 'pending' | 'eligible' | 'ineligible';
+  pendingScaleUpdate?: number;
 }
 export interface PresentationCategoryAssessment {
   categoryId: string; area: Area; block: Block;
   state: 'pending' | 'ready' | 'tie' | 'less_than_three' | 'published';
   registered: number; closed: number; pending: number;
+  pendingScaleUpdate?: number;
   ranked: PresentationPublisherAssessment[]; finalists: string[]; tied: string[]; reasons: string[];
 }
 export interface PresentationShortlist extends Versioned {
   categoryId: string; area: Area; block: Block; publisherIds: string[];
   status: 'published' | 'superseded'; statement: string; folio: string;
   directorApproved: boolean; publishedAt: string; rulesVersion: number;
-  snapshot: { assessment: PresentationCategoryAssessment; publishers: Pick<Publisher, 'id' | 'name'>[]; threshold: number };
+  snapshot: { assessment: PresentationCategoryAssessment; publishers: Pick<Publisher, 'id' | 'name'>[]; threshold: number; scaleMax?: PresentationScaleMax };
 }
 export interface Review extends Versioned { categoryId: string; offerIds: string[]; unitReference: string; reason: string }
 export interface Turn {

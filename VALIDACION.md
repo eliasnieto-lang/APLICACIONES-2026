@@ -2,18 +2,21 @@
 
 Fecha: 4 de noviembre de 2026. Aplicación nueva, separada de Círculos de Estudios.
 
-## Resultados de la actualización de acceso y evaluación de exposición
+## Resultados de la escala 0–4 y los filtros de Subdirección
 
 | Comprobación | Resultado | Evidencia |
 | --- | --- | --- |
 | TypeScript y compilación Vite | Aprobados | `npm run build` |
-| Pruebas Node de dominio, acceso, sesiones, cifrado, importación y PDF/XLSX | 66 aprobadas; 0 fallidas; 0 omitidas | [Salida](docs/pruebas-unitarias.txt), `npm test` |
-| PostgreSQL/PostgREST histórico, acceso y exposición | 49 grupos aprobados: 20 + 13 + 16 | [Informe](docs/pruebas-acceso-y-exposicion.txt), scripts `test-db.sh`, `test-access-db.sh`, `test-presentation-db.sh` |
-| Chromium contra Node/Express, PostgreSQL y PostgREST reales | 7 recorridos aprobados; 0 errores de ejecución | [Resultado](docs/pruebas-navegador.json), `tests/browser-presentation-local.mjs` |
-| Interfaz de exposición y borradores con servidor simulado | 9 comprobaciones aprobadas | Complementarias a las pruebas de servidor |
+| Pruebas Node de dominio, acceso, sesiones, cifrado, importación y PDF/XLSX | 75 aprobadas; 0 fallidas; 0 omitidas | [Salida](docs/pruebas-unitarias.txt), `npm test` |
+| PostgreSQL/PostgREST histórico, acceso y exposición | 61 grupos aprobados: 20 históricos + 13 de acceso + 21 de exposición + 7 de actualización 002→003 | [Informe](docs/pruebas-acceso-y-exposicion.txt), scripts `test-db.sh`, `test-access-db.sh`, `test-presentation-db.sh`, `test-scale-migration-db.sh` |
+| Chromium contra Node/Express, PostgreSQL y PostgREST reales | 9 recorridos aprobados; 0 errores de ejecución | [Resultado](docs/pruebas-navegador.json), `tests/browser-presentation-local.mjs` |
+| Escala docente, borradores y conflictos en Chromium con servidor simulado | 6 comprobaciones aprobadas | [Resultado](docs/pruebas-escala-docente.json), `tests/browser-presentation-scale.mjs` |
+| Filtros y ventanas de Subdirección en Chromium con servidor simulado | 8 comprobaciones aprobadas | [Resultado](docs/pruebas-filtros-subdireccion.json), `tests/browser-consolidation-filters.mjs` |
 | Instalación local Docker e idempotencia de la migración | Aprobadas | `scripts/local-start.sh` y reaplicación del esquema sobre registros existentes |
 
-Los siete recorridos reales comprueban los dos botones de entrada, contraseña de Subdirector validada por servidor, registro de una editorial sin libros ni expedientes, cinco docentes sin contraseña con categorías múltiples, cierre de diez criterios observados, promedio 80 a partir de cinco notas 70/75/80/85/90, independencia de la segunda categoría y privacidad de la proyección en celular.
+Los nueve recorridos reales comprueban los dos botones de entrada, contraseña de Subdirector validada por servidor, registro de una editorial sin libros ni expedientes, cinco docentes sin contraseña con categorías múltiples, cierre de diez criterios en escala 0–4, promedio 80 a partir de cinco notas 70/75/80/85/90, independencia de la segunda categoría, filtros que no cambian el promedio oficial, conservación de una ficha anterior 14/20 = 70/100 con reinicio explícito y privacidad de la proyección en celular.
+
+Cada criterio tiene una sola descripción y una valoración: 0 Sin valoración, 1 En inicio, 2 En proceso, 3 Logrado o 4 Destacado. El cero elegido cuenta como respuesta y suma cero puntos; una selección pendiente sigue siendo `null`. Diez ceros cierran en 0/100 y diez cuatros en 100/100. Las fichas anteriores 0–2 mantienen su rúbrica original A/B, escala y porcentaje y no se mezclan con los promedios actuales. El reinicio autorizado archiva la ficha previa y abre las diez respuestas sin marcar. La prueba de actualización carga el SQL 002 original, crea fichas antiguas y luego aplica y repite 003 para verificar conservación e idempotencia.
 
 La actualización usa una ficha por docente, editorial, área y categoría. No exige registros OBNATE, precios, muestras de práctica ni expedientes precargados para evaluar la exposición y el texto físico. Las fichas por texto/grado anteriores se conservan en sus colecciones históricas y no se reutilizan como valoraciones de exposición.
 
@@ -23,7 +26,7 @@ Los PDF nuevos de exposición y las exportaciones XLSX se abrieron y verificaron
 
 ## Alcance y límites
 
-- La publicación en la cuenta Cloudflare y la instalación en Supabase requieren los servicios de esa cuenta. La actualización se activa con el archivo completo `supabase/migrations/002-acceso-directo.sql`, idéntico al esquema actual y repetible sin borrar registros. Este informe confirma funcionamiento local; no constituye una comprobación del sitio público ni de una migración aún no ejecutada en Supabase.
+- La publicación en la cuenta Cloudflare y la instalación en Supabase requieren los servicios de esa cuenta. La actualización se activa con el archivo completo `supabase/migrations/003-escala-y-filtros.sql`, idéntico al esquema actual y repetible sin borrar registros. El archivo 002 ya instalado permanece intacto. Primero debe ejecutarse 003 en Supabase y después publicarse la interfaz compilada, porque los clientes de la escala anterior recibirán una solicitud de actualización al intentar guardar. Este informe confirma funcionamiento local; no constituye una comprobación del sitio público ni de una migración 003 aún no ejecutada en Supabase.
 - La URL, clave publishable y usuario autorizado de la instalación cloud corresponden al proyecto proporcionado por el usuario. No hay claves administrativas ni contraseñas personales en el código. Coordinación debe instalar `supabase/schema.sql` como propietario.
 - La red local funciona sin Internet después de instalar las imágenes. El borrador persistente cifrado requiere HTTPS o localhost; en HTTP desde otro dispositivo se conserva en memoria y se informa esa condición.
 - Las importaciones se previsualizan y no sobrescriben datos existentes. El servidor admite hasta 2000 filas por lote; divida las cargas mayores. Los archivos CSV/XLSX tienen un límite de 8 MB. El respaldo JSON se valida antes de aplicarse y las peticiones tienen un límite de 16 MB.

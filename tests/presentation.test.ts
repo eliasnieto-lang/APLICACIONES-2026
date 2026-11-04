@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { demoState, emptyState } from '../shared/defaults.js';
 import {
-  PRESENTATION_INDICATORS, newPresentationEvaluation, presentationCategoryAssessment,
+  PRESENTATION_INDICATORS, PRESENTATION_SCALE, newPresentationEvaluation, presentationCategoryAssessment,
   presentationEvaluationIssues, presentationPublisherAssessment, presentationPublisherAvailable,
-  presentationScore, presentationSummary, presentationTeacherInScope,
+  presentationScore, presentationSummary, presentationTeacherInScope, presentationEvaluationScaleMax,
+  presentationScaleLabel, presentationUsesCurrentScale,
 } from '../shared/presentation.js';
-import type { PresentationEvaluation, Score, State } from '../shared/types.js';
+import type { PresentationEvaluation, PresentationScore, State } from '../shared/types.js';
 
 function liveState(count = 5, publisherCount = 1): State {
   const state = emptyState();
@@ -21,9 +22,9 @@ function liveState(count = 5, publisherCount = 1): State {
 }
 
 function close(state: State, teacherIndex: number, score: number, publisherIndex = 0): PresentationEvaluation {
-  let remaining = score / 5;
+  let remaining = score / 2.5;
   const scores = Array.from({ length: 10 }, () => {
-    const value = Math.min(remaining, 2) as Score; remaining -= value!; return value;
+    const value = Math.min(remaining, 4) as PresentationScore; remaining -= value!; return value;
   });
   const evaluation: PresentationEvaluation = {
     ...newPresentationEvaluation({ publisherId: `publisher-${publisherIndex}`, teacherId: `teacher-${teacherIndex}`, area: 'MAT', block: 'P1' }),
@@ -41,6 +42,7 @@ test('a live form starts with ten unanswered indicators and optional personal ob
   assert.deepEqual(form.notes, Array(10).fill(''));
   assert.equal(form.version, 0);
   assert.equal(form.rulesVersion, 3);
+  assert.equal(form.scaleMax, 4);
   assert.equal(presentationScore(form), null);
   assert.equal(presentationEvaluationIssues(form).length, 1);
   form.scores = Array(10).fill(0);
@@ -103,11 +105,11 @@ test('invalid and duplicate live forms stay pending instead of inventing scores'
   const form = close(state, 0, 100);
   form.scores[0] = null;
   assert.equal(presentationPublisherAssessment(state, 'publisher-0', 'MAT', 'P1').pending, 1);
-  form.scores[0] = 2;
+  form.scores[0] = 4;
   state.presentationEvaluations.push({ ...form, id: 'duplicate' });
   assert.equal(presentationPublisherAssessment(state, 'publisher-0', 'MAT', 'P1').closed, 0);
-  for (const invalid of [-1, 3, 1.5, '1', undefined]) {
-    assert.throws(() => presentationScore([invalid, ...Array(9).fill(2)] as Score[]), /entero/);
+  for (const invalid of [-1, 5, 1.5, NaN, Infinity, '1', undefined]) {
+    assert.throws(() => presentationScore([invalid, ...Array(9).fill(4)] as PresentationScore[]), /entero/);
   }
 });
 
@@ -132,7 +134,7 @@ test('category ranking applies threshold to category averages and blocks an unre
   assert.deepEqual(category.tied, ['publisher-2', 'publisher-3']);
   assert.deepEqual(category.finalists, []);
   for (const form of state.presentationEvaluations.filter(item => item.publisherId === 'publisher-3')) {
-    form.scores[1] = 1; form.scores[8] = 1; // same total, lower I2
+    form.scores[1] = 3; form.scores[8] = 1; // same total, lower I2
   }
   category = presentationCategoryAssessment(state, 'MAT', 'P1');
   assert.equal(category.state, 'ready');
@@ -153,10 +155,98 @@ test('one or two eligible publishers are explicit and no grade assessment is inv
 test('real data starts empty and demonstration separates five live teachers from historical assignment pairs', () => {
   const real = emptyState();
   assert.equal(real.settings.evaluationMode, 'presentation');
+  assert.equal(real.settings.presentationScaleMax, 4);
   assert.deepEqual(real.presentationEvaluations, []); assert.deepEqual(real.presentationShortlists, []);
   const demo = demoState();
   assert.equal(demo.teachers.length, 5);
   assert.equal(presentationPublisherAssessment(demo, demo.publishers[0].id, 'MAT', 'P1').closed, 5);
   assert.equal(presentationCategoryAssessment(demo, 'MAT', 'P1').state, 'ready');
   assert.equal(demo.assignments.filter(item => item.bookId === demo.books[0].id && item.kind === 'initial').length, 2);
+  assert.ok(demo.presentationEvaluations.every(evaluation => evaluation.scaleMax === 4));
+  assert.equal(presentationPublisherAssessment(demo, demo.publishers[0].id, 'MAT', 'P1').score, 90);
+});
+
+test('the five scale choices use one unified criterion description and no A/B signals', () => {
+  assert.deepEqual(PRESENTATION_SCALE.map(item => item.value), [0, 1, 2, 3, 4]);
+  assert.deepEqual(PRESENTATION_SCALE.map(item => item.label), ['Sin valoración', 'En inicio', 'En proceso', 'Logrado', 'Destacado']);
+  assert.equal(presentationScaleLabel(0), 'Sin valoración');
+  assert.equal(presentationScaleLabel(4), 'Destacado');
+  assert.equal(presentationScaleLabel(null), 'Pendiente');
+  for (const criterion of PRESENTATION_INDICATORS) {
+    assert.ok(criterion.description.trim());
+    assert.equal('a' in criterion, false); assert.equal('b' in criterion, false);
+    for (const variant of Object.values(criterion.variants ?? {})) {
+      assert.ok(variant.description.trim()); assert.equal('a' in variant, false); assert.equal('b' in variant, false);
+    }
+  }
+});
+
+test('explicit zero counts zero in the fixed maximum of forty and is different from an unanswered criterion', () => {
+  assert.equal(presentationScore(Array(10).fill(4)), 100);
+  assert.equal(presentationScore(Array(10).fill(0)), 0);
+  assert.equal(presentationScore([0, ...Array(9).fill(4)]), 90);
+  assert.equal(presentationScore([null, ...Array(9).fill(4)]), null);
+  assert.equal(presentationScore(Array(10).fill(2)), 50);
+  assert.equal(presentationScore(Array(10).fill(3)), 75);
+  assert.equal(presentationScore([1, ...Array(9).fill(0)]), 2.5);
+  const state = liveState(1); const form = close(state, 0, 0);
+  assert.deepEqual(presentationEvaluationIssues(form), []);
+  assert.equal(presentationPublisherAssessment(state, 'publisher-0', 'MAT', 'P1').closed, 1);
+  assert.equal(presentationPublisherAssessment(state, 'publisher-0', 'MAT', 'P1').score, 0);
+  assert.equal(presentationPublisherAssessment(state, 'publisher-0', 'MAT', 'P1').state, 'ineligible');
+  const cohort = liveState(5);
+  for (let teacher = 0; teacher < 5; teacher += 1) close(cohort, teacher, teacher === 4 ? 0 : 100);
+  const summary = presentationPublisherAssessment(cohort, 'publisher-0', 'MAT', 'P1');
+  assert.equal(summary.closed, 5); assert.equal(summary.pending, 0); assert.equal(summary.score, 80);
+});
+
+test('stored legacy scale keeps its original percentage and never infers scale from the numeric values', () => {
+  const scores: PresentationScore[] = Array(10).fill(2);
+  assert.equal(presentationScore({ scores }), 100);
+  assert.equal(presentationScore({ scores, scaleMax: 2 }), 100);
+  assert.equal(presentationScore({ scores, scaleMax: 4 }), 50);
+  assert.equal(presentationScore(scores, 2), 100);
+  assert.equal(presentationScore(scores), 50);
+  assert.equal(presentationEvaluationScaleMax({}), 2);
+  assert.equal(presentationEvaluationScaleMax({ scaleMax: 4 }), 4);
+  assert.equal(presentationUsesCurrentScale({}), false);
+  assert.equal(presentationUsesCurrentScale({ scaleMax: 2 }), false);
+  assert.equal(presentationUsesCurrentScale({ scaleMax: 4 }), true);
+  assert.throws(() => presentationScore({ scores, scaleMax: 3 as never }), /escala/);
+  assert.throws(() => presentationScore(Array(10).fill(3), 2), /entero/);
+  assert.throws(() => presentationScore(Array(10).fill(4), 3 as never), /escala/);
+  assert.throws(() => presentationScore(Array(10) as PresentationScore[]), /entero/);
+});
+
+test('legacy live evaluations remain historical and pending an explicit new-scale review', () => {
+  const state = liveState();
+  close(state, 0, 100); close(state, 1, 90); close(state, 2, 80);
+  const missingMetadata = close(state, 3, 70); delete missingMetadata.scaleMax; missingMetadata.scores = Array(10).fill(2);
+  const explicitLegacy = close(state, 4, 60); explicitLegacy.scaleMax = 2; explicitLegacy.scores = Array(10).fill(1);
+  const preserved = structuredClone([missingMetadata, explicitLegacy]);
+  let summary = presentationPublisherAssessment(state, 'publisher-0', 'MAT', 'P1');
+  assert.deepEqual({ registered: summary.registered, closed: summary.closed, pending: summary.pending, pendingScaleUpdate: summary.pendingScaleUpdate, score: summary.score },
+    { registered: 5, closed: 3, pending: 2, pendingScaleUpdate: 2, score: 90 });
+  assert.equal(presentationScore(missingMetadata), 100); assert.equal(presentationScore(explicitLegacy), 50);
+  assert.match(presentationEvaluationIssues(missingMetadata)[0], /Pendiente actualizar escala/);
+  assert.match(presentationCategoryAssessment(state, 'MAT', 'P1').reasons.join(' '), /actualizar/);
+  assert.deepEqual([missingMetadata, explicitLegacy], preserved);
+  explicitLegacy.status = 'draft'; explicitLegacy.closedAt = null;
+  summary = presentationPublisherAssessment(state, 'publisher-0', 'MAT', 'P1');
+  assert.equal(summary.drafts, 1); assert.equal(summary.pendingScaleUpdate, 2); assert.equal(summary.closed, 3);
+});
+
+test('a historical published shortlist cannot mark the new scale as published', () => {
+  const state = liveState(1, 3);
+  for (let publisher = 0; publisher < 3; publisher += 1) close(state, 0, 80, publisher);
+  const assessment = presentationCategoryAssessment(state, 'MAT', 'P1');
+  state.presentationShortlists.push({ id: 'old-shortlist', version: 1, categoryId: 'MAT-P1', area: 'MAT', block: 'P1',
+    publisherIds: state.publishers.map(publisher => publisher.id), status: 'published', statement: 'Histórico', folio: 'H-1',
+    directorApproved: true, publishedAt: '2026-11-04T18:00:00.000Z', rulesVersion: 1,
+    snapshot: { assessment: structuredClone(assessment), publishers: state.publishers, threshold: 70 } });
+  assert.equal(presentationCategoryAssessment(state, 'MAT', 'P1').state, 'ready');
+  state.presentationShortlists[0].snapshot.scaleMax = 2;
+  assert.equal(presentationCategoryAssessment(state, 'MAT', 'P1').state, 'ready');
+  state.presentationShortlists[0].snapshot.scaleMax = 4;
+  assert.equal(presentationCategoryAssessment(state, 'MAT', 'P1').state, 'published');
 });

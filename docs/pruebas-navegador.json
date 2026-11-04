@@ -1,14 +1,16 @@
 {
-  "at": "2026-11-04T13:34:31.440Z",
+  "at": "2026-11-04T14:29:07.707Z",
   "backend": "Node/Express + PostgreSQL + PostgREST reales",
-  "passed": 7,
+  "passed": 9,
   "checks": [
     "two direct entry choices; Subdirector password is checked by the server",
     "editorial registration makes live forms available without books or dossiers",
     "five teachers register without password and can choose multiple categories",
     "live forms close with ten observed scores and no preloaded physical-text metadata",
     "all five teacher scores contribute to the category mean and remain private",
+    "Subdirector dropdowns filter records without changing the official mean",
     "a second selected category has an independent empty form",
+    "legacy 0–2 grades retain 14/20=70 and require an explicit fresh 0–4 review",
     "public room excludes private observations and current unpublished teacher results"
   ],
   "pageErrors": []

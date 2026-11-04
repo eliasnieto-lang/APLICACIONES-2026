@@ -1,23 +1,28 @@
-Selección de textos escolares 2027 — actualización de acceso y exposición
+Selección de textos escolares 2027 — escala 0–4 y filtros ágiles
 Fecha: 4 de noviembre de 2026
 
-Comprobaciones ejecutadas sobre PostgreSQL 16 + PostgREST 12 aislados:
-- bash scripts/test-db.sh: 20/20 grupos históricos aprobados en el esquema final.
+Resumen de las ejecuciones verificadas sobre PostgreSQL 16 + PostgREST 12 aislados:
+- bash scripts/test-db.sh: 20/20 grupos históricos aprobados.
 - bash scripts/test-access-db.sh: 13/13 grupos de acceso aprobados; requiere la variable privada TEXTOS_TEST_DIRECTOR_PASSWORD.
-- bash scripts/test-presentation-db.sh: 16/16 grupos de evaluación de exposición aprobados.
-Total: 49 grupos SQL/HTTP aprobados. No se tocaron los datos de Supabase.
+- bash scripts/test-presentation-db.sh: 21/21 grupos de exposición aprobados.
+- bash scripts/test-scale-migration-db.sh: 7/7 grupos de actualización 002→003 aprobados.
+Total: 61/61 grupos SQL/HTTP aprobados. No se conectaron a Supabase.
+Las salidas se revisaron durante su ejecución; este archivo es un resumen, no una transcripción.
 
-Acceso: contraseña validada en servidor, limitación de intentos fallidos persistente,
-registro libre sin correo/contraseña docente, cinco o más docentes, categorías múltiples,
-duplicados protegidos, recuperación por enlace privado, permisos por rol,
-reaplicación de la migración sin alterar registros, notas, accesos e historial.
+Acceso: contraseña validada en servidor, límites de intentos persistentes, registro libre,
+cinco o más docentes, categorías múltiples, protección de duplicados, recuperación,
+autorización por rol y conservación de credenciales.
 
-Exposición: cinco docentes/15 fichas sin libros ni expedientes precargados, promedio
-incluyendo todas las fichas cerradas, aislamiento entre áreas y bloques, CAS,
-privacidad de valoraciones individuales, cierre explícito, publicación formal de tres
-opciones con retiro documentado, reapertura e historial, respaldo/restauración,
-rechazo de publicaciones corruptas y nueva inscripción de un sexto docente.
-El reingreso del mismo perfil conserva la publicación; una nueva inscripción o cambio
-de ámbito deja la versión anterior como histórica hasta completar las nuevas fichas.
+Exposición: enteros 0–4, cero explícito válido, null pendiente, cierre de diez criterios,
+40 puntos equivalentes a 100/100, aislamiento entre áreas/categorías, CAS, privacidad,
+promedios de todas las fichas vigentes cerradas y publicación formal de tres opciones.
 
-Los servicios de pruebas, redes y volúmenes descartables se eliminaron al terminar.
+Históricos: la prueba instala 002 original, carga quince fichas anteriores, una terna,
+notas por libro y actores; aplica 003 y comprueba valores, porcentajes, historial y
+credenciales. Repite 003 sin generar versiones ni historial adicionales. Verifica
+rechazo de un cliente antiguo, reinicio explícito por su autor con CAS y conservación
+de la ficha previa, además de restauración de respaldos de ambas escalas.
+002 conserva SHA256 8c23c2cfb2c5d7eb87339d6c860bcf9efe78e4fa82c2c987d0912a322edca570.
+003 y schema.sql son idénticos.
+
+Los datos de ensayo, redes, servicios y volúmenes aislados se eliminaron al terminar.

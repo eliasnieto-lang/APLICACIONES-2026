@@ -1,24 +1,38 @@
 import type {
   Area, Block, PresentationCategoryAssessment, PresentationEvaluation,
-  PresentationPublisherAssessment, Score, State, Teacher,
+  PresentationPublisherAssessment, PresentationScaleMax, PresentationScore, State, Teacher,
 } from './types.js';
-import { AREAS, BLOCKS, type Indicator } from './domain.js';
+import { AREAS, BLOCKS } from './domain.js';
+
+export interface PresentationIndicator {
+  id: string; label: string; description: string;
+  variants?: Record<Area, { description: string }>;
+}
+
+export const PRESENTATION_SCALE: readonly { value: Exclude<PresentationScore, null>; label: string }[] = [
+  { value: 0, label: 'Sin valoración' }, { value: 1, label: 'En inicio' },
+  { value: 2, label: 'En proceso' }, { value: 3, label: 'Logrado' }, { value: 4, label: 'Destacado' },
+];
+
+export function presentationScaleLabel(score: PresentationScore): string {
+  return score === null ? 'Pendiente' : PRESENTATION_SCALE.find(item => item.value === score)?.label ?? 'Valor inválido';
+}
 
 /** These observations are made during the exposition with the physical text in hand. */
-export const PRESENTATION_INDICATORS: Indicator[] = [
-  { id: 'I1', label: 'Correspondencia curricular e institucional', a: 'La exposición relaciona la propuesta con los aprendizajes del área y bloque.', b: 'En el ejemplar se reconoce una actividad pertinente para el trabajo del colegio.' },
-  { id: 'I2', label: 'Enfoque del área', a: 'Se observa el enfoque del área en la explicación y en una actividad del texto.', b: 'La actividad permite comprender, explicar o producir con sentido.', variants: {
-    MAT: { a: 'Presenta una situación que el estudiante debe resolver.', b: 'Invita a representar, explicar, comparar o justificar su procedimiento.' },
-    COM: { a: 'Presenta un texto o situación con propósito y destinatario reconocibles.', b: 'Invita a interpretar con sustento, producir o revisar un texto, o adecuar una intervención oral.' },
+export const PRESENTATION_INDICATORS: PresentationIndicator[] = [
+  { id: 'I1', label: 'Correspondencia curricular e institucional', description: 'La propuesta y las actividades del ejemplar desarrollan aprendizajes pertinentes para el área, el bloque y el trabajo del colegio.' },
+  { id: 'I2', label: 'Enfoque del área', description: 'Las actividades presentadas permiten comprender, explicar y producir de acuerdo con el enfoque del área.', variants: {
+    MAT: { description: 'Las situaciones del texto promueven resolver problemas y representar, explicar, comparar o justificar los procedimientos empleados.' },
+    COM: { description: 'Los textos y situaciones tienen propósito y destinatario reconocibles y promueven interpretar con sustento, producir o revisar textos y adecuar intervenciones orales.' },
   } },
-  { id: 'I3', label: 'Secuencia y viabilidad del trabajo', a: 'El índice y la explicación permiten reconocer una secuencia de aprendizajes.', b: 'La cantidad y progresión del trabajo observado parecen viables para el bloque.' },
-  { id: 'I4', label: 'Rigor y claridad', a: 'La información, los ejemplos y la terminología observados son correctos y comprensibles.', b: 'Las consignas y sus datos son consistentes y permiten entender la tarea.' },
-  { id: 'I5', label: 'Calidad cognitiva y transferencia', a: 'Se observa una actividad que ayuda a comprender o practicar con orientación.', b: 'Se observa una oportunidad de aplicar, explicar, argumentar o producir en otra situación.' },
-  { id: 'I6', label: 'Evaluación y retroalimentación', a: 'La exposición o el texto permiten reconocer qué se espera de una respuesta o producto.', b: 'Se muestra una orientación concreta para verificar, corregir o mejorar el aprendizaje.' },
-  { id: 'I7', label: 'Diversidad y autonomía', a: 'La propuesta muestra apoyos para estudiantes que necesitan acompañamiento.', b: 'Se observa una oportunidad de refuerzo, profundización o trabajo autónomo apropiado.' },
-  { id: 'I8', label: 'Legibilidad y uso del ejemplar físico', a: 'La tipografía, los diagramas y la distribución del ejemplar son legibles para la edad.', b: 'Su organización y características físicas facilitan localizar y utilizar el material.' },
-  { id: 'I9', label: 'Práctica pertinente y suficiente', a: 'Las actividades revisadas ofrecen práctica pertinente para los aprendizajes presentados.', b: 'La variedad y extensión de la práctica observada permiten un uso razonable en clase y de forma autónoma.' },
-  { id: 'I10', label: 'Utilidad de los recursos de apoyo presentados', a: 'Se muestra cómo el docente puede utilizar un recurso de apoyo de la propuesta.', b: 'Se muestra cómo el estudiante puede usar el apoyo para una tarea o para mejorar su aprendizaje.' },
+  { id: 'I3', label: 'Secuencia y viabilidad del trabajo', description: 'El índice, la explicación y el trabajo observado presentan una secuencia progresiva y una cantidad de actividades viable para el bloque.' },
+  { id: 'I4', label: 'Rigor y claridad', description: 'La información, los ejemplos, los términos y las consignas del material son correctos, consistentes y comprensibles.' },
+  { id: 'I5', label: 'Calidad cognitiva y transferencia', description: 'Las actividades ayudan a comprender y practicar y ofrecen oportunidades para aplicar, explicar, argumentar o producir en situaciones diferentes.' },
+  { id: 'I6', label: 'Evaluación y retroalimentación', description: 'El material permite reconocer qué se espera de las respuestas o productos y ofrece orientaciones concretas para verificar, corregir y mejorar el aprendizaje.' },
+  { id: 'I7', label: 'Diversidad y autonomía', description: 'La propuesta ofrece apoyos para distintas necesidades y oportunidades apropiadas de refuerzo, profundización y trabajo autónomo.' },
+  { id: 'I8', label: 'Legibilidad y uso del ejemplar físico', description: 'La tipografía, los diagramas, la distribución, la organización y las características físicas facilitan la lectura y el uso del ejemplar para la edad.' },
+  { id: 'I9', label: 'Práctica pertinente y suficiente', description: 'Las actividades revisadas ofrecen una práctica pertinente, variada y de extensión razonable para los aprendizajes, el tiempo de clase y el trabajo autónomo.' },
+  { id: 'I10', label: 'Utilidad de los recursos de apoyo presentados', description: 'Los recursos de apoyo mostrados son utilizables por docentes y estudiantes para desarrollar tareas y mejorar el aprendizaje.' },
 ];
 
 export function newPresentationEvaluation(scope: {
@@ -27,26 +41,42 @@ export function newPresentationEvaluation(scope: {
   return {
     id: '', version: 0, publisherId: scope.publisherId, teacherId: scope.teacherId,
     area: scope.area, block: scope.block, rulesVersion: scope.rulesVersion ?? 1,
-    scores: Array<Score>(10).fill(null), notes: Array<string>(10).fill(''),
+    scaleMax: 4, scores: Array<PresentationScore>(10).fill(null), notes: Array<string>(10).fill(''),
     generalObservation: '', physicalText: '', status: 'draft', closedAt: null, updatedAt: '',
   };
 }
 
-/** A missing observation stays pending; it is never silently scored zero. */
-export function presentationScore(input: Score[] | PresentationEvaluation): number | null {
+type PresentationScoreInput = Pick<PresentationEvaluation, 'scores' | 'scaleMax'>;
+
+/** Missing metadata always means the old scale, even when every score happens to be 0–2. */
+export function presentationEvaluationScaleMax(evaluation: Pick<PresentationEvaluation, 'scaleMax'>): PresentationScaleMax {
+  const maximum = evaluation.scaleMax === undefined ? 2 : evaluation.scaleMax;
+  if (maximum !== 2 && maximum !== 4) throw new Error('La escala de la ficha debe ser 0–2 o 0–4.');
+  return maximum;
+}
+
+export function presentationUsesCurrentScale(evaluation: Pick<PresentationEvaluation, 'scaleMax'>): boolean {
+  return evaluation.scaleMax === 4;
+}
+
+/** An explicit zero contributes zero. Only unanswered indicators prevent a complete score. */
+export function presentationScore(input: PresentationScore[] | PresentationScoreInput, arrayScaleMax: PresentationScaleMax = 4): number | null {
   const scores = Array.isArray(input) ? input : input.scores;
+  const maximum = Array.isArray(input) ? arrayScaleMax : presentationEvaluationScaleMax(input);
+  if (maximum !== 2 && maximum !== 4) throw new Error('La escala de la ficha debe ser 0–2 o 0–4.');
   if (!Array.isArray(scores) || scores.length > 10) throw new Error('La ficha de exposición debe contener diez indicadores.');
-  if (Array.from(scores).some(score => score !== null && score !== 0 && score !== 1 && score !== 2)) {
-    throw new Error('Cada indicador debe ser un entero 0, 1 o 2, o quedar pendiente.');
+  if (Array.from(scores).some(score => score !== null && (typeof score !== 'number' || !Number.isInteger(score) || score < 0 || score > maximum))) {
+    throw new Error(`Cada indicador debe ser un entero entre 0 y ${maximum}, o quedar pendiente.`);
   }
   return scores.length !== 10 || scores.some(score => score === null)
-    ? null : 5 * (scores as number[]).reduce((sum, score) => sum + score, 0);
+    ? null : (10 / maximum) * (scores as number[]).reduce((sum, score) => sum + score, 0);
 }
 
 /** Only the ten intentional scores are required. Notes and book identification are optional. */
 export function presentationEvaluationIssues(evaluation: PresentationEvaluation): string[] {
+  if (!presentationUsesCurrentScale(evaluation)) return ['Pendiente actualizar escala: vuelva a valorar los diez indicadores con la escala de 0 a 4.'];
   try {
-    return presentationScore(evaluation) === null ? ['Complete los diez indicadores con 0, 1 o 2 antes de cerrar.'] : [];
+    return presentationScore(evaluation) === null ? ['Complete los diez indicadores con valores de 0 a 4 antes de cerrar.'] : [];
   } catch (error) { return [error instanceof Error ? error.message : 'Puntajes inválidos.']; }
 }
 
@@ -63,7 +93,7 @@ export function presentationPublisherAvailable(state: State, publisherId: string
 }
 
 function validClosed(evaluation: PresentationEvaluation): boolean {
-  return evaluation.status === 'closed' && presentationEvaluationIssues(evaluation).length === 0;
+  return presentationUsesCurrentScale(evaluation) && evaluation.status === 'closed' && presentationEvaluationIssues(evaluation).length === 0;
 }
 
 export function presentationPublisherAssessment(state: State, publisherId: string, area: Area, block: Block): PresentationPublisherAssessment {
@@ -73,8 +103,10 @@ export function presentationPublisherAssessment(state: State, publisherId: strin
     && evaluation.area === area && evaluation.block === block);
   const closed: PresentationEvaluation[] = [];
   let drafts = 0;
+  let pendingScaleUpdate = 0;
   if (available) for (const teacher of teachers) {
     const own = forms.filter(evaluation => evaluation.teacherId === teacher.id);
+    if (own.some(evaluation => !presentationUsesCurrentScale(evaluation))) pendingScaleUpdate += 1;
     // Duplicate imported records cannot inflate the number of evaluators or silently override a form.
     if (own.length === 1 && validClosed(own[0])) closed.push(own[0]);
     else if (own.some(evaluation => evaluation.status === 'draft')) drafts += 1;
@@ -84,7 +116,7 @@ export function presentationPublisherAssessment(state: State, publisherId: strin
   const score = closed.length ? closed.reduce((sum, evaluation) => sum + presentationScore(evaluation)!, 0) / closed.length : null;
   const i2 = closed.length ? closed.reduce((sum, evaluation) => sum + evaluation.scores[1]!, 0) / closed.length : null;
   return {
-    publisherId, area, block, registered, closed: closed.length, pending, drafts, score, i2,
+    publisherId, area, block, registered, closed: closed.length, pending, drafts, pendingScaleUpdate, score, i2,
     state: registered === 0 || pending > 0 || score === null ? 'pending'
       : score >= state.settings.rules.threshold ? 'eligible' : 'ineligible',
   };
@@ -101,6 +133,7 @@ export function presentationCategoryAssessment(state: State, area: Area, block: 
       || a.publisherId.localeCompare(b.publisherId));
   const closed = ranked.reduce((sum, publisher) => sum + publisher.closed, 0);
   const pending = ranked.reduce((sum, publisher) => sum + publisher.pending, 0);
+  const pendingScaleUpdate = ranked.reduce((sum, publisher) => sum + (publisher.pendingScaleUpdate ?? 0), 0);
   const eligible = ranked.filter(publisher => publisher.state === 'eligible');
   const tied = eligible.length > 3 && sameRank(eligible[2], eligible[3])
     ? eligible.filter(publisher => sameRank(publisher, eligible[2])).map(publisher => publisher.publisherId) : [];
@@ -111,6 +144,7 @@ export function presentationCategoryAssessment(state: State, area: Area, block: 
     if (!registered) reasons.push('Aún no hay docentes registrados en esta área y bloque.');
     if (!ranked.length) reasons.push('Aún no hay editoriales disponibles para esta área y bloque.');
     if (pending) reasons.push(`Faltan ${pending} fichas de los docentes registrados.`);
+    if (pendingScaleUpdate) reasons.push(`${pendingScaleUpdate} ficha(s) pendientes de actualizar a la escala de 0 a 4.`);
   } else if (tied.length) {
     status = 'tie'; reasons.push('Persiste un empate en el corte de tres editoriales después de comparar I2; coordinación debe resolverlo antes de publicar.');
   } else if (eligible.length < 3) {
@@ -119,8 +153,8 @@ export function presentationCategoryAssessment(state: State, area: Area, block: 
       : `Ninguna editorial alcanza el umbral de ${state.settings.rules.threshold} puntos.`);
   } else status = 'ready';
   if (!pending && registered && !tied.length && eligible.length
-    && (state.presentationShortlists ?? []).some(shortlist => shortlist.categoryId === categoryId && shortlist.status === 'published')) status = 'published';
-  return { categoryId, area, block, state: status, registered, closed, pending, ranked,
+    && (state.presentationShortlists ?? []).some(shortlist => shortlist.categoryId === categoryId && shortlist.status === 'published' && shortlist.snapshot.scaleMax === 4)) status = 'published';
+  return { categoryId, area, block, state: status, registered, closed, pending, pendingScaleUpdate, ranked,
     finalists: tied.length ? [] : eligible.slice(0, 3).map(publisher => publisher.publisherId), tied, reasons };
 }
 

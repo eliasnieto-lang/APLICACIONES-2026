@@ -1,4 +1,4 @@
-import type { Book, Evaluation, GradeId, Offer, PresentationEvaluation, Score, State, SupportProfile } from './types.js';
+import type { Book, Evaluation, GradeId, Offer, PresentationEvaluation, PresentationScore, Score, State, SupportProfile } from './types.js';
 import { AREAS, BLOCKS, CHECKS, GRADES, samplePositions } from './domain.js';
 import { presentationPublisherAvailable } from './presentation.js';
 
@@ -35,7 +35,7 @@ export function emptyState(): State {
       eventAt: '2026-11-05T17:00:00-05:00', timezone: 'America/Lima',
       venue: 'Sede 2 · Jr. Augusto B. Leguía N.º 246, Nicrupampa, Huaraz',
       organizers: 'Subdirección Académica', editorsWithdrawn: false, withdrawalReference: '', directorName: '',
-      evaluationMode: 'presentation',
+      evaluationMode: 'presentation', presentationScaleMax: 4,
       rules: {
         version: 1, threshold: 70, teacherCount: 2, indicatorCount: 10,
         presentationSeconds: 600, transitionSeconds: 120,
@@ -74,6 +74,10 @@ export function demoState(): State {
   const scoreArray = (total: number): Score[] => {
     let remaining = total;
     return Array.from({ length: 10 }, () => { const value = Math.min(2, remaining) as Score; remaining -= value!; return value; });
+  };
+  const presentationScoreArray = (percentage: number): PresentationScore[] => {
+    let remaining = percentage / 2.5;
+    return Array.from({ length: 10 }, () => { const value = Math.min(4, remaining) as PresentationScore; remaining -= value!; return value; });
   };
   function addBook(offer: Offer, gradeId: GradeId, total: number, pending = false): void {
     const grade = GRADES.find(item => item.id === gradeId)!;
@@ -175,7 +179,7 @@ export function demoState(): State {
       const evaluation: PresentationEvaluation = {
         id: `demo-presentation-${publisher.id}-${block.id}-${teacher.id}`, version: 1,
         publisherId: publisher.id, teacherId: teacher.id, area: 'MAT', block: block.id,
-        scores: scoreArray(publisherIndex < 3 ? [18, 17, 16][publisherIndex] : 12),
+        scaleMax: 4, scores: presentationScoreArray(publisherIndex < 3 ? [90, 85, 80][publisherIndex] : 60),
         notes: Array.from({ length: 10 }, (_, indicator) => indicator === 1 && teacherIndex === 0
           ? 'Observación ficticia: explicó una situación y la contrastó con la actividad del ejemplar.' : ''),
         generalObservation: 'Ficha sintética de exposición en vivo; no constituye una recomendación real.',

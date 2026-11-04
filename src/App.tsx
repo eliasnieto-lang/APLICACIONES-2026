@@ -2,7 +2,7 @@ import { Component, Suspense, lazy, useCallback, useEffect, useMemo, useState, t
 import { BookOpen, ClipboardCheck, LayoutDashboard, Settings2, Monitor, Users, FileDown, LogOut, ArrowRight, ArrowLeft, ShieldCheck, RefreshCw, Menu, X, GraduationCap } from 'lucide-react';
 import type { Area, Block, Dataset, Snapshot, Teacher, ViewProps } from '../shared/types';
 import { AREAS, BLOCKS } from '../shared/domain';
-import { presentationPublisherAvailable, presentationScore } from '../shared/presentation';
+import { presentationPublisherAvailable, presentationScore, presentationUsesCurrentScale } from '../shared/presentation';
 import { ApiError, createApi, signOut, type Config } from './client';
 import { activeEntry, lastTeacherProfile, ownTeacherCode, rememberActiveEntry, rememberTeacherCode, takeAccessFragment } from './entry-session';
 
@@ -37,7 +37,7 @@ class Boundary extends Component<{ children: ReactNode }, { error: boolean }> {
 function teacherCoverage(snapshot: Snapshot, teacher: Teacher) {
   const s = snapshot.state;
   const units = new Set((teacher.categories || []).flatMap(block => s.publishers.filter(publisher => teacher.area && presentationPublisherAvailable(s, publisher.id, teacher.area, block)).map(publisher => `${publisher.id}:${teacher.area}:${block}`)));
-  const closed = new Set(s.presentationEvaluations.filter(evaluation => evaluation.teacherId === teacher.id && evaluation.status === 'closed' && presentationScore(evaluation) !== null && units.has(`${evaluation.publisherId}:${evaluation.area}:${evaluation.block}`)).map(evaluation => `${evaluation.publisherId}:${evaluation.area}:${evaluation.block}`)).size;
+  const closed = new Set(s.presentationEvaluations.filter(evaluation => evaluation.teacherId === teacher.id && evaluation.status === 'closed' && presentationUsesCurrentScale(evaluation) && presentationScore(evaluation) !== null && units.has(`${evaluation.publisherId}:${evaluation.area}:${evaluation.block}`)).map(evaluation => `${evaluation.publisherId}:${evaluation.area}:${evaluation.block}`)).size;
   return { expected: units.size, closed, pending: Math.max(0, units.size - closed) };
 }
 

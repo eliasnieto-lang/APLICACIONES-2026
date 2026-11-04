@@ -8,7 +8,7 @@ El procedimiento histórico por libro, grado, expediente y elección familiar se
 
 1. **Preparar la jornada.** En la portada elija **INGRESAR COMO SUBDIRECTOR**, seleccione Jornada real o Demostración e ingrese la contraseña acordada por el colegio. Revise fecha, lugar, editoriales y umbral institucional, inicialmente 70/100. La primera ficha guardada fija las reglas. No necesita precargar libros, precios, registros OBNATE ni expedientes para recibir estas evaluaciones.
 2. **Ingresar como docente.** Elija **INGRESAR COMO DOCENTE EVALUADOR**, escriba nombres y apellidos, seleccione Matemática o Comunicación y al menos un bloque P1/P2/S1. El registro es directo, sin correo ni contraseña docente; no existe un cupo de dos, tres o cinco docentes. El acceso personal se conserva en el navegador. Si ya se registró y perdió el acceso, solicite a Subdirección el enlace privado de recuperación.
-3. **Evaluar la exposición.** Seleccione editorial y bloque de su perfil. Hay una ficha por docente + editorial + área + bloque. Observe la exposición y el ejemplar físico; marque expresamente diez indicadores con 0/1/2. Las observaciones breves y la identificación del ejemplar son opcionales. Guarde y cierre la ficha cuando el servidor confirme; las respuestas pendientes nunca se convierten en cero.
+3. **Evaluar la exposición.** Seleccione editorial y bloque de su perfil. Hay una ficha por docente + editorial + área + bloque. Observe la exposición y el ejemplar físico; marque expresamente diez indicadores: 0 Sin valoración, 1 En inicio, 2 En proceso, 3 Logrado o 4 Destacado. El máximo es 40 puntos y la nota /100 es la suma × 2.5 (por ejemplo, 30/40 = 75/100). Las observaciones breves y la identificación del ejemplar son opcionales. Guarde y cierre la ficha cuando el servidor confirme; un cero elegido cuenta como respuesta y aporta cero puntos; las respuestas sin marcar permanecen pendientes.
 4. **Consolidar y publicar.** Subdirección revisa inscritos, fichas cerradas, pendientes y promedios por editorial. Cada promedio incluye a todos los docentes del área y bloque que cerraron su ficha; es provisional mientras falten cierres. La publicación formal exige exactamente tres editoriales aptas, ninguna ficha pendiente, retiro documentado de las editoriales, aprobación de Dirección, apreciación y folio. El empate en el corte se compara por I2; si persiste, la publicación queda bloqueada. Menos de tres aptas requiere un procedimiento formal adicional y no se completa con opciones no aptas.
 5. **Documentar y respaldar.** En Actas y respaldos descargue la ficha de exposición PDF, la terna publicada PDF, el XLSX privado y el respaldo JSON. Las fichas individuales y sus observaciones solo corresponden al autor y a coordinación; la sala pública recibe únicamente resultados agregados publicados. Reabrir una ficha exige motivo, conserva su historial y deja sin vigencia la publicación afectada.
 
@@ -17,6 +17,8 @@ El [manual](MANUAL.md) detalla acceso, exposición, recuperación y archivos his
 ## Opción A: nube gratuita
 
 Se usa un sitio estático en Cloudflare Pages y PostgreSQL/Supabase Free. No se necesita contratar un dominio. Los equipos requieren Internet. Los límites y suspensión por inactividad del plan gratuito se consultan en el panel del proveedor; haga una prueba antes de la jornada.
+
+Si ya instaló el acceso directo (actualización 002), ejecute primero el archivo completo [003-escala-y-filtros.sql](supabase/migrations/003-escala-y-filtros.sql) en **SQL Editor → New query → Run**, y luego publique la nueva interfaz. La actualización conserva las fichas previas y no cambia sus porcentajes; los navegadores con la interfaz anterior deben recargarse después del despliegue.
 
 1. En el proyecto de Supabase existente, abra **SQL Editor**, pegue el archivo completo [supabase/schema.sql](supabase/schema.sql) y pulse **Run**. Se ejecuta como propietario, crea exclusivamente objetos `textos_*` y puede repetirse sin borrar datos. No ejecute `bootstrap-local.sql` en Supabase.
 2. La portada usa el acceso directo de Subdirección. La contraseña se verifica exclusivamente en el servidor contra una huella con sal; el SQL no almacena su texto original. Coordine su entrega y cualquier cambio por un canal privado. El registro docente solicita nombres, apellidos, área y bloques; no requiere cuentas de correo. La autorización previa mediante Supabase Authentication sigue disponible para mantenimiento y compatibilidad, no es el recorrido principal de la portada.
@@ -63,6 +65,7 @@ npm ci
 npm test
 npm run build
 bash scripts/test-presentation-db.sh
+bash scripts/test-scale-migration-db.sh
 ```
 
 Para desarrollar la interfaz: `npm run dev`. Para la base local use Compose; `npm start` sirve `dist` y reenvía las solicitudes a `POSTGREST_URL` (por defecto `http://127.0.0.1:3000`). Vite reenvía `/api` al servidor Node del puerto 8788.
@@ -73,8 +76,9 @@ Las pruebas SQL utilizan servicios Docker aislados y datos ficticios, sin conect
 
 ## Datos y privacidad
 
-- Las fichas guardan enteros 0/1/2 o pendiente; no hay puntajes precargados en la jornada real. Un dato desconocido conserva `null`.
-- El puntaje de exposición individual es cinco veces la suma de diez indicadores. El resultado por editorial, área y bloque promedia todas las fichas cerradas de sus docentes registrados, sin limitar evaluadores ni redondear para ordenar. Los cálculos históricos por libro y grado conservan sus reglas propias y no alimentan este promedio.
+- Las fichas vigentes guardan enteros 0/1/2/3/4 o pendiente; no hay puntajes precargados en la jornada real. Un dato desconocido conserva `null`.
+- El puntaje vigente de exposición individual es 2.5 veces la suma de diez indicadores (máximo 40 antes de convertir a /100). El resultado por editorial, área y bloque promedia todas las fichas cerradas en la escala vigente 0–4 de sus docentes registrados, sin limitar evaluadores ni redondear para ordenar. Los cálculos históricos por libro y grado conservan sus reglas propias y no alimentan este promedio.
+- Las fichas anteriores de exposición con escala 0–2 conservan sus respuestas, su máximo de 20 y su resultado original: 14/20 sigue siendo 70/100. Se identifican como históricas y pendientes de actualizar escala; no se mezclan con los nuevos promedios ni se convierten automáticamente. El docente debe volver a valorar los diez indicadores para usar la escala 0–4. PDF y XLSX indican la escala, suma y máximo de cada ficha.
 - Los expedientes históricos conservan fuentes y verificaciones humanas. Son un archivo administrativo independiente de la ficha de exposición; la aplicación no certifica registros OBNATE ni reemplaza el control ministerial.
 - La contraseña de Subdirección se conserva como huella con sal y se verifica en servidor. Los accesos personales emitidos tras el registro y los códigos de voto se conservan como huellas. Las opciones digitales se suman de forma atómica a contadores agregados, sin almacenar una cédula individual ni un vínculo sección/código/opción.
 - La demostración se carga y reinicia solo en `demo`. La base real queda vacía hasta que coordinación registre datos auténticos.

@@ -1,0 +1,14 @@
+{
+  "fixture": "intercepted local UI requests",
+  "checks": [
+    "compact initial results and five-teacher 0–4 official mean",
+    "editorial filter never changes the official terna",
+    "docente filter opens individual fichas and never narrows official averages",
+    "area and category dropdowns keep category rankings separate",
+    "closed, pending, historical filters and reset give clear empty results",
+    "publication requires all fichas, withdrawal, statement, folio and direction validation",
+    "individual modal closes and reopening requires a documented reason",
+    "history opens only on demand and screen fits a phone"
+  ],
+  "pageErrors": []
+}

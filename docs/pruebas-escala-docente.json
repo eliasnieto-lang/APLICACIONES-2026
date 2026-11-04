@@ -1,0 +1,14 @@
+{
+  "at": "2026-11-04T14:34:39.248Z",
+  "backend": "isolated browser UI fixture with CAS and encrypted browser drafts",
+  "passed": 6,
+  "checks": [
+    "mobile: one description, five labeled choices, no default; all editorial and category choices remain available",
+    "0 is explicit, persists as zero, counts toward all ten answers and closes at 0/100",
+    "ten Destacado values close at 40 points and 100/100 with optional notes empty",
+    "offline draft recovers 0 and 4 in isolated encrypted v2 storage; old encrypted draft is preserved",
+    "legacy 0–2 values remain read only at their original total until explicit CAS restart archives them",
+    "two tabs retain CAS protection; local changes never silently overwrite the newer version"
+  ],
+  "pageErrors": []
+}
