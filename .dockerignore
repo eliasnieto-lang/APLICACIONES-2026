@@ -6,3 +6,5 @@ local/data
 local/owner-code.txt
 test-results
 *.log
+
+local/

@@ -5,7 +5,12 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN --mount=type=secret,id=proxy_ca \
     if [ -f /run/secrets/proxy_ca ]; then NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca npm ci --strict-ssl=true; else npm ci --strict-ssl=true; fi
-COPY . .
+COPY index.html tsconfig.json vite.config.ts ./
+COPY src ./src
+COPY shared ./shared
+COPY server ./server
+COPY tests ./tests
+COPY public ./public
 RUN npm run build
 FROM ${NODE_IMAGE}
 WORKDIR /app
