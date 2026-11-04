@@ -2,28 +2,28 @@
 
 Fecha: 4 de noviembre de 2026. Aplicación nueva, separada de Círculos de Estudios.
 
-## Resultados ejecutados
+## Resultados de la actualización de acceso y evaluación de exposición
 
 | Comprobación | Resultado | Evidencia |
 | --- | --- | --- |
-| TypeScript y compilación Vite de producción | Aprobados | `npm run build` |
-| Pruebas de dominio, importaciones, cliente, borradores cifrados y PDF/XLSX | 49 aprobadas; 0 fallidas; 0 omitidas | [Salida](docs/pruebas-unitarias.txt), `npm test` |
-| PostgreSQL 16 y PostgREST 12, mediante HTTP real | 20 grupos aprobados | [Salida](docs/pruebas-sql.txt), `sh scripts/test-db.sh` |
-| Aplicación completa en Chromium con Node/Express y PostgreSQL reales | 7 recorridos aprobados; 0 errores de ejecución del navegador | [Resultado](docs/pruebas-navegador.json), `tests/browser-local.mjs` |
-| Sala, elección, cédula y comparación pública con API simulada | 22 comprobaciones aprobadas | Prueba complementaria de interfaz; no sustituye la prueba SQL |
-| Instalación local Docker, migración repetible y solicitud de salud | Aprobadas | `scripts/local-start.sh`, servicio `seleccion-textos-2027`, base `ready` |
+| TypeScript y compilación Vite | Aprobados | `npm run build` |
+| Pruebas Node de dominio, acceso, sesiones, cifrado, importación y PDF/XLSX | 66 aprobadas; 0 fallidas; 0 omitidas | [Salida](docs/pruebas-unitarias.txt), `npm test` |
+| PostgreSQL/PostgREST histórico, acceso y exposición | 49 grupos aprobados: 20 + 13 + 16 | [Informe](docs/pruebas-acceso-y-exposicion.txt), scripts `test-db.sh`, `test-access-db.sh`, `test-presentation-db.sh` |
+| Chromium contra Node/Express, PostgreSQL y PostgREST reales | 7 recorridos aprobados; 0 errores de ejecución | [Resultado](docs/pruebas-navegador.json), `tests/browser-presentation-local.mjs` |
+| Interfaz de exposición y borradores con servidor simulado | 9 comprobaciones aprobadas | Complementarias a las pruebas de servidor |
+| Instalación local Docker e idempotencia de la migración | Aprobadas | `scripts/local-start.sh` y reaplicación del esquema sobre registros existentes |
 
-Los siete recorridos reales cubren identidad correcta de la aplicación, coordinación y jornada real vacía, importación CSV con confirmación, corrección documentada de expediente cerrado, dos docentes independientes, recuperación de borrador tras corte de red y cierre confirmado, privacidad de la sala pública en celular y descarga de ficha PDF.
+Los siete recorridos reales comprueban los dos botones de entrada, contraseña de Subdirector validada por servidor, registro de una editorial sin libros ni expedientes, cinco docentes sin contraseña con categorías múltiples, cierre de diez criterios observados, promedio 80 a partir de cinco notas 70/75/80/85/90, independencia de la segunda categoría y privacidad de la proyección en celular.
 
-Las pruebas SQL incluyen rechazo de acceso directo a tablas y funciones internas, permisos por rol, privacidad de fichas, control de versión entre pestañas, puntajes inválidos y pendientes, cierre y reapertura con historial, cálculos de 70/100 y 82,50, corte por grado, desempate I2 y revisión adicional comparable, incidencia formal 11.3, publicación autorizada, escrutinio conciliado por área, voto concurrente de uso único y reinicio real de PostgreSQL, segunda vuelta limitada al área empatada, respaldo/restauración, migración de ocho indicadores y protección contra reutilización de códigos.
+La actualización usa una ficha por docente, editorial, área y categoría. No exige registros OBNATE, precios, muestras de práctica ni expedientes precargados para evaluar la exposición y el texto físico. Las fichas por texto/grado anteriores se conservan en sus colecciones históricas y no se reutilizan como valoraciones de exposición.
 
-La restauración se probó tanto sobre una base con votos posteriores conocidos como en una instalación real **aislada y descartable** sin historial previo. En la segunda, las rondas abiertas o en preparación se suspenden; los resultados cerrados se conservan. Nunca se cargaron estos datos en Supabase ni en la jornada real de desarrollo.
+Las pruebas SQL comprueban además que un sexto docente puede incorporarse sin cupo, que las publicaciones previas conservan su historial y se revisan para incorporar nuevas fichas, que el reingreso del mismo perfil no invalida publicaciones, y que la migración puede repetirse sin borrar datos, contraseñas verificadas, accesos ni historial. La contraseña de Subdirección no está en texto plano en el cliente, la configuración pública ni los archivos fuente.
 
-Los PDF se abrieron con `pdf-lib` y `pdftotext`: se verificaron A4, contenido, precios, votos y espacios de firmas, además de ausencia de datos privados en las cédulas. No se simularon firmas ni comunicaciones.
+Los PDF nuevos de exposición y las exportaciones XLSX se abrieron y verificaron. Las pruebas históricas de voto anónimo, doble envío, reinicio, conciliación, segunda vuelta y restauración siguen aprobadas. La jornada real permanece sin datos ficticios; todos los recorridos nuevos se ejecutaron en demostración o en bases descartables.
 
 ## Alcance y límites
 
-- La publicación en la cuenta Cloudflare y la instalación en Supabase requieren los servicios de esa cuenta. Este informe confirma funcionamiento local; no constituye una comprobación del sitio público ni de una migración aún no ejecutada en Supabase.
+- La publicación en la cuenta Cloudflare y la instalación en Supabase requieren los servicios de esa cuenta. La actualización se activa con el archivo completo `supabase/migrations/002-acceso-directo.sql`, idéntico al esquema actual y repetible sin borrar registros. Este informe confirma funcionamiento local; no constituye una comprobación del sitio público ni de una migración aún no ejecutada en Supabase.
 - La URL, clave publishable y usuario autorizado de la instalación cloud corresponden al proyecto proporcionado por el usuario. No hay claves administrativas ni contraseñas personales en el código. Coordinación debe instalar `supabase/schema.sql` como propietario.
 - La red local funciona sin Internet después de instalar las imágenes. El borrador persistente cifrado requiere HTTPS o localhost; en HTTP desde otro dispositivo se conserva en memoria y se informa esa condición.
 - Las importaciones se previsualizan y no sobrescriben datos existentes. El servidor admite hasta 2000 filas por lote; divida las cargas mayores. Los archivos CSV/XLSX tienen un límite de 8 MB. El respaldo JSON se valida antes de aplicarse y las peticiones tienen un límite de 16 MB.

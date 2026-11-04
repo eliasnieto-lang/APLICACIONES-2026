@@ -1,5 +1,6 @@
-import type { Book, Evaluation, GradeId, Offer, Score, State, SupportProfile } from './types.js';
+import type { Book, Evaluation, GradeId, Offer, PresentationEvaluation, Score, State, SupportProfile } from './types.js';
 import { AREAS, BLOCKS, CHECKS, GRADES, samplePositions } from './domain.js';
+import { presentationPublisherAvailable } from './presentation.js';
 
 /** Nothing announced by a publisher is silently treated as verified. */
 export function defaultSupportProfile(): SupportProfile {
@@ -34,6 +35,7 @@ export function emptyState(): State {
       eventAt: '2026-11-05T17:00:00-05:00', timezone: 'America/Lima',
       venue: 'Sede 2 · Jr. Augusto B. Leguía N.º 246, Nicrupampa, Huaraz',
       organizers: 'Subdirección Académica', editorsWithdrawn: false, withdrawalReference: '', directorName: '',
+      evaluationMode: 'presentation',
       rules: {
         version: 1, threshold: 70, teacherCount: 2, indicatorCount: 10,
         presentationSeconds: 600, transitionSeconds: 120,
@@ -42,6 +44,7 @@ export function emptyState(): State {
       },
     },
     publishers: [], series: [], offers: [], books: [], teachers: [], assignments: [], evaluations: [], reviews: [],
+    presentationEvaluations: [], presentationShortlists: [],
     turn: { publisherId: null, status: 'ready', startedAt: null, pausedAt: null, pausedMilliseconds: 0 },
     shortlists: [], sections: [], deliveries: [], rounds: [], incidents: [], audit: [],
   };
@@ -65,8 +68,8 @@ export function demoState(): State {
     sampleNote: index < 5 ? 'Ejemplares sintéticos en la mesa de demostración.' : 'Sin muestra registrada; editorial ficticia para probar más de nueve.',
   }));
   state.teachers = [
-    { id: 'demo-teacher-1', version: 1, name: 'Docente Ana · DEMO', attended: true, attendanceEvidence: 'Asistencia ficticia D-01' },
-    { id: 'demo-teacher-2', version: 1, name: 'Docente Luis · DEMO', attended: true, attendanceEvidence: 'Asistencia ficticia D-02' },
+    { id: 'demo-teacher-1', version: 1, name: 'Docente Ana · DEMO', firstNames: 'Ana', lastNames: 'Demostración', area: 'MAT', categories: ['P1', 'P2', 'S1'], selfRegistered: true, attended: true, attendanceEvidence: 'Asistencia ficticia D-01' },
+    { id: 'demo-teacher-2', version: 1, name: 'Docente Luis · DEMO', firstNames: 'Luis', lastNames: 'Demostración', area: 'MAT', categories: ['P1', 'P2', 'S1'], selfRegistered: true, attended: true, attendanceEvidence: 'Asistencia ficticia D-02' },
   ];
   const scoreArray = (total: number): Score[] => {
     let remaining = total;
@@ -159,5 +162,28 @@ export function demoState(): State {
       accredited: true, accreditationEvidence: 'Acreditación ficticia de la prueba general.' });
   }
   state.turn.publisherId = state.publishers[0].id;
+  // Keep the historical two-assignment demonstration intact. Live forms are separately
+  // authored by five registered teachers and never copied from those historical grades.
+  for (const [index, name] of ['Elena', 'José', 'Rosa'].entries()) {
+    state.teachers.push({ id: `demo-teacher-${index + 3}`, version: 1, name: `Docente ${name} · DEMO`,
+      firstNames: name, lastNames: 'Demostración', area: 'MAT', categories: ['P1', 'P2', 'S1'],
+      selfRegistered: true, attended: true, attendanceEvidence: 'Registro ficticio para la exposición en vivo.' });
+  }
+  for (const [publisherIndex, publisher] of state.publishers.entries()) for (const block of BLOCKS) {
+    if (!presentationPublisherAvailable(state, publisher.id, 'MAT', block.id)) continue;
+    for (const [teacherIndex, teacher] of state.teachers.entries()) {
+      const evaluation: PresentationEvaluation = {
+        id: `demo-presentation-${publisher.id}-${block.id}-${teacher.id}`, version: 1,
+        publisherId: publisher.id, teacherId: teacher.id, area: 'MAT', block: block.id,
+        scores: scoreArray(publisherIndex < 3 ? [18, 17, 16][publisherIndex] : 12),
+        notes: Array.from({ length: 10 }, (_, indicator) => indicator === 1 && teacherIndex === 0
+          ? 'Observación ficticia: explicó una situación y la contrastó con la actividad del ejemplar.' : ''),
+        generalObservation: 'Ficha sintética de exposición en vivo; no constituye una recomendación real.',
+        physicalText: 'Ejemplar ficticio en la mesa de demostración', materialViewed: true,
+        status: 'closed', closedAt: at, updatedAt: at, rulesVersion: state.settings.rules.version,
+      };
+      state.presentationEvaluations.push(evaluation);
+    }
+  }
   return state;
 }

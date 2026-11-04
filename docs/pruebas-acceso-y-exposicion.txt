@@ -1,0 +1,23 @@
+Selección de textos escolares 2027 — actualización de acceso y exposición
+Fecha: 4 de noviembre de 2026
+
+Comprobaciones ejecutadas sobre PostgreSQL 16 + PostgREST 12 aislados:
+- bash scripts/test-db.sh: 20/20 grupos históricos aprobados en el esquema final.
+- bash scripts/test-access-db.sh: 13/13 grupos de acceso aprobados; requiere la variable privada TEXTOS_TEST_DIRECTOR_PASSWORD.
+- bash scripts/test-presentation-db.sh: 16/16 grupos de evaluación de exposición aprobados.
+Total: 49 grupos SQL/HTTP aprobados. No se tocaron los datos de Supabase.
+
+Acceso: contraseña validada en servidor, limitación de intentos fallidos persistente,
+registro libre sin correo/contraseña docente, cinco o más docentes, categorías múltiples,
+duplicados protegidos, recuperación por enlace privado, permisos por rol,
+reaplicación de la migración sin alterar registros, notas, accesos e historial.
+
+Exposición: cinco docentes/15 fichas sin libros ni expedientes precargados, promedio
+incluyendo todas las fichas cerradas, aislamiento entre áreas y bloques, CAS,
+privacidad de valoraciones individuales, cierre explícito, publicación formal de tres
+opciones con retiro documentado, reapertura e historial, respaldo/restauración,
+rechazo de publicaciones corruptas y nueva inscripción de un sexto docente.
+El reingreso del mismo perfil conserva la publicación; una nueva inscripción o cambio
+de ámbito deja la versión anterior como histórica hasta completar las nuevas fichas.
+
+Los servicios de pruebas, redes y volúmenes descartables se eliminaron al terminar.

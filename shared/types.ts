@@ -17,6 +17,7 @@ export interface Settings {
   version: number; school: string; title: string; eventAt: string; timezone: 'America/Lima';
   venue: string; organizers: string; rules: Rules; editorsWithdrawn: boolean;
   withdrawalReference: string; directorName: string;
+  evaluationMode?: 'presentation';
 }
 export interface Publisher extends Versioned { name: string; contact?: string; samplesReceived: boolean; sampleNote: string }
 export interface Series extends Versioned { publisherId: string; name: string }
@@ -53,13 +54,39 @@ export interface Book extends Versioned {
   teacherSupport: SupportProfile; studentSupport: SupportProfile;
   dossierClosed: boolean; dossierReference: string; supersedesId?: string;
 }
-export interface Teacher extends Versioned { name: string; attended: boolean; attendanceEvidence: string }
+export interface Teacher extends Versioned {
+  name: string; attended: boolean; attendanceEvidence: string;
+  firstNames?: string; lastNames?: string; area?: Area; categories?: Block[]; selfRegistered?: boolean;
+}
 export interface Assignment extends Versioned { bookId: string; teacherId: string; kind: 'initial' | 'additional'; reviewId?: string }
 export interface Evaluation extends Versioned {
   assignmentId: string; bookId: string; teacherId: string; bookVersion: number; rulesVersion: number;
   scores: Score[]; evidence: string[]; notes: string[]; objection: boolean; objectionDetail: string;
   status: 'draft' | 'closed'; closedAt: string | null; updatedAt: string;
   legacyIndicatorCount?: number;
+}
+/** Live observations are independent of historical book/assignment evaluations. */
+export interface PresentationEvaluation extends Versioned {
+  publisherId: string; teacherId: string; area: Area; block: Block;
+  scores: Score[]; notes: string[]; generalObservation: string; physicalText: string;
+  materialViewed?: boolean;
+  status: 'draft' | 'closed'; closedAt: string | null; updatedAt: string; rulesVersion: number;
+}
+export interface PresentationPublisherAssessment {
+  publisherId: string; area: Area; block: Block; registered: number; closed: number; pending: number;
+  drafts: number; score: number | null; i2: number | null; state: 'pending' | 'eligible' | 'ineligible';
+}
+export interface PresentationCategoryAssessment {
+  categoryId: string; area: Area; block: Block;
+  state: 'pending' | 'ready' | 'tie' | 'less_than_three' | 'published';
+  registered: number; closed: number; pending: number;
+  ranked: PresentationPublisherAssessment[]; finalists: string[]; tied: string[]; reasons: string[];
+}
+export interface PresentationShortlist extends Versioned {
+  categoryId: string; area: Area; block: Block; publisherIds: string[];
+  status: 'published' | 'superseded'; statement: string; folio: string;
+  directorApproved: boolean; publishedAt: string; rulesVersion: number;
+  snapshot: { assessment: PresentationCategoryAssessment; publishers: Pick<Publisher, 'id' | 'name'>[]; threshold: number };
 }
 export interface Review extends Versioned { categoryId: string; offerIds: string[]; unitReference: string; reason: string }
 export interface Turn {
@@ -95,6 +122,7 @@ export interface State {
   schemaVersion: number; version: number; settings: Settings;
   publishers: Publisher[]; series: Series[]; offers: Offer[]; books: Book[];
   teachers: Teacher[]; assignments: Assignment[]; evaluations: Evaluation[];
+  presentationEvaluations: PresentationEvaluation[]; presentationShortlists: PresentationShortlist[];
   reviews: Review[]; turn: Turn; shortlists: Shortlist[];
   sections: Section[]; deliveries: Delivery[]; rounds: Round[];
   incidents: Incident[]; audit: AuditEntry[];

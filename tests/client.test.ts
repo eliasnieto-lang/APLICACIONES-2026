@@ -25,7 +25,30 @@ test('coordinator authentication is omitted from public projection and anonymous
     assert.equal(calls[4].body.p_code,'fixture-anonymous-code');
     assert(!calls[4].url.includes('fixture-anonymous-code'));
     assert.equal(calls[4].headers.Authorization,undefined);
+    await client.call('teacher_register',{lastNames:'Fixture',firstNames:'Docente',area:'MAT',categories:['P1','P2']});
+    await client.call('director_login',{password:'director-test-secret'});
+    assert.equal(calls[5].headers.Authorization,undefined);
+    assert.equal(calls[6].headers.Authorization,undefined);
+    assert.equal(calls[6].body.p_code,null);
+    const teacher=createApi(config,'real',{code:'own-private-fixture'});
+    await teacher.call('teacher_register',{lastNames:'Fixture',firstNames:'Docente',area:'MAT',categories:['P1']});
+    await teacher.call('public_snapshot');
+    assert.equal(calls[7].body.p_code,'own-private-fixture');
+    assert.equal(calls[7].headers.Authorization,undefined);
+    assert(!calls[7].url.includes('own-private-fixture'));
+    assert.equal(calls[8].body.p_code,null);
+    assert.equal(calls[8].headers.Authorization,undefined);
     await signOut(config);
+  }finally{globalThis.fetch=originalFetch;}
+});
+test('password entry parses nested authentication and rate-limit errors',async()=>{
+  const originalFetch=globalThis.fetch;
+  try{
+    const client=createApi(config,'real');
+    globalThis.fetch=async()=>new Response(JSON.stringify({error:{code:'PT401',message:'La contraseña del subdirector no es correcta.'}}),{status:401});
+    await assert.rejects(client.call('director_login',{password:'wrong-fixture'}),e=>e instanceof ApiError&&e.code==='PT401'&&e.status===401&&e.message.includes('subdirector'));
+    globalThis.fetch=async()=>new Response(JSON.stringify({error:{code:'PT429',message:'Espera antes del siguiente intento.'}}),{status:429});
+    await assert.rejects(client.call('director_login',{password:'wrong-fixture'}),e=>e instanceof ApiError&&e.code==='PT429'&&e.status===429&&e.message.includes('Espera'));
   }finally{globalThis.fetch=originalFetch;}
 });
 test('CAS conflict is visible and network failure never claims confirmation',async()=>{

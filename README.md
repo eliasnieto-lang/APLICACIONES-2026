@@ -1,30 +1,28 @@
 # Selección de textos escolares 2027
 
-Aplicación de la I.E.P. Albert Einstein de Huaraz para registrar expedientes, recibir valoraciones independientes de dos docentes por título y grado, validar ternas y registrar la elección familiar. Incluye Matemática y Comunicación, primaria 1.º–6.º y secundaria 1.º–3.º.
+Aplicación de la I.E.P. Albert Einstein de Huaraz para valorar exposiciones editoriales mientras cada docente revisa el libro físico, consolidar sus resultados y publicar ternas por área y bloque. Admite Matemática y Comunicación, P1 (1.º–2.º de primaria), P2 (3.º–6.º de primaria) y S1 (1.º–3.º de secundaria), con cualquier cantidad de docentes evaluadores.
 
-Esta aplicación tiene código y tablas propios (`textos_*`). No modifica los registros de Círculos de Estudios. El guion original está en [REQUISITOS.txt](REQUISITOS.txt).
+El procedimiento histórico por libro, grado, expediente y elección familiar se conserva por separado. Las notas de exposición no se convierten en notas por grado ni abren rondas familiares automáticamente. El código y las tablas propios (`textos_*`) no modifican Círculos de Estudios. El guion original está en [REQUISITOS.txt](REQUISITOS.txt).
 
-## Recorrido de coordinación en cinco pasos
+## Recorrido vigente
 
-1. **Instalar y abrir.** Elija nube gratuita o servidor local según las instrucciones siguientes. Entre como Coordinación. La jornada real inicia vacía; la demostración es otro espacio. Defina fecha, lugar, representación mínima y pautas de práctica antes de recibir fichas.
-2. **Preparar e importar.** En Preparar jornada registre editoriales, series, ofertas y un título exacto por grado/edición. Complete el expediente común, registre docentes/asistencia y asigne dos docentes distintos. Las plantillas CSV se descargan desde la aplicación; también admite XLSX. Revise los errores de la previsualización antes de confirmar. Genere y entregue privadamente un código individual a cada docente.
-3. **Evaluar.** Cada docente entra con su código y responde diez indicadores sin ver las valoraciones de su colega. Verifique «Guardado en servidor» y cierre explícitamente cada ficha. Coordinación puede reabrir con motivo; no puede emitir puntajes por el docente.
-4. **Publicar y votar.** En Consolidación revise pendientes, aptitud por grado y empates. Registre el retiro de editoriales y la validación de Dirección. Después acredite el padrón, confirme la revisión física y abra una sola modalidad por grado/ronda. Papel es la modalidad inicial. La votación digital usa fichas anónimas de un solo uso.
-5. **Cerrar y exportar.** Concilie el escrutinio por área y cierre cada ronda. Una segunda vuelta afecta solo el grado y área empatados. Descargue actas, fichas A4, tarjetas, datos y respaldo privado en Actas y respaldos. Los espacios de firma deben completarse en el documento: cerrar en pantalla no equivale a una firma formal.
+1. **Preparar la jornada.** En la portada elija **INGRESAR COMO SUBDIRECTOR**, seleccione Jornada real o Demostración e ingrese la contraseña acordada por el colegio. Revise fecha, lugar, editoriales y umbral institucional, inicialmente 70/100. La primera ficha guardada fija las reglas. No necesita precargar libros, precios, registros OBNATE ni expedientes para recibir estas evaluaciones.
+2. **Ingresar como docente.** Elija **INGRESAR COMO DOCENTE EVALUADOR**, escriba nombres y apellidos, seleccione Matemática o Comunicación y al menos un bloque P1/P2/S1. El registro es directo, sin correo ni contraseña docente; no existe un cupo de dos, tres o cinco docentes. El acceso personal se conserva en el navegador. Si ya se registró y perdió el acceso, solicite a Subdirección el enlace privado de recuperación.
+3. **Evaluar la exposición.** Seleccione editorial y bloque de su perfil. Hay una ficha por docente + editorial + área + bloque. Observe la exposición y el ejemplar físico; marque expresamente diez indicadores con 0/1/2. Las observaciones breves y la identificación del ejemplar son opcionales. Guarde y cierre la ficha cuando el servidor confirme; las respuestas pendientes nunca se convierten en cero.
+4. **Consolidar y publicar.** Subdirección revisa inscritos, fichas cerradas, pendientes y promedios por editorial. Cada promedio incluye a todos los docentes del área y bloque que cerraron su ficha; es provisional mientras falten cierres. La publicación formal exige exactamente tres editoriales aptas, ninguna ficha pendiente, retiro documentado de las editoriales, aprobación de Dirección, apreciación y folio. El empate en el corte se compara por I2; si persiste, la publicación queda bloqueada. Menos de tres aptas requiere un procedimiento formal adicional y no se completa con opciones no aptas.
+5. **Documentar y respaldar.** En Actas y respaldos descargue la ficha de exposición PDF, la terna publicada PDF, el XLSX privado y el respaldo JSON. Las fichas individuales y sus observaciones solo corresponden al autor y a coordinación; la sala pública recibe únicamente resultados agregados publicados. Reabrir una ficha exige motivo, conserva su historial y deja sin vigencia la publicación afectada.
 
-El [manual](MANUAL.md) detalla el procedimiento, recuperación de conexión y restauración. El [informe de validación](VALIDACION.md) distingue pruebas locales y publicación.
-
-![Panel de la jornada real vacía](docs/panel-principal.png)
+El [manual](MANUAL.md) detalla acceso, exposición, recuperación y archivos históricos. El [informe de validación](VALIDACION.md) distingue pruebas locales y publicación.
 
 ## Opción A: nube gratuita
 
 Se usa un sitio estático en Cloudflare Pages y PostgreSQL/Supabase Free. No se necesita contratar un dominio. Los equipos requieren Internet. Los límites y suspensión por inactividad del plan gratuito se consultan en el panel del proveedor; haga una prueba antes de la jornada.
 
 1. En el proyecto de Supabase existente, abra **SQL Editor**, pegue el archivo completo [supabase/schema.sql](supabase/schema.sql) y pulse **Run**. Se ejecuta como propietario, crea exclusivamente objetos `textos_*` y puede repetirse sin borrar datos. No ejecute `bootstrap-local.sql` en Supabase.
-2. La migración autoriza como coordinación el usuario de Authentication ya creado para `coordinacion.academica@ae.edu.pe` (UUID `b5f3904c-4557-4779-9879-33068ae28fa8`). Su contraseña sigue siendo la del usuario de Authentication. Los docentes usan códigos individuales creados desde la web, sin cuentas de correo.
-3. Revise [public/config.json](public/config.json). Contiene solo URL pública, clave **publishable** y correo de coordinación. Nunca coloque una clave `service_role`, contraseña de base de datos o contraseña personal en este archivo. Si cambia la URL del proyecto, actualice también `connect-src` en `public/_headers`.
+2. La portada usa el acceso directo de Subdirección. La contraseña se verifica exclusivamente en el servidor contra una huella con sal; el SQL no almacena su texto original. Coordine su entrega y cualquier cambio por un canal privado. El registro docente solicita nombres, apellidos, área y bloques; no requiere cuentas de correo. La autorización previa mediante Supabase Authentication sigue disponible para mantenimiento y compatibilidad, no es el recorrido principal de la portada.
+3. Revise [public/config.json](public/config.json). Contiene únicamente configuración pública, incluida la URL y la clave **publishable**. Nunca coloque una clave `service_role`, contraseña de base de datos o contraseña personal en este archivo. Si cambia la URL del proyecto, actualice también `connect-src` en `public/_headers`.
 4. Con Node.js 24, ejecute `npm ci` y `npm run build`. La carpeta de publicación es **dist**. Si conecta este código fuente por Git a Cloudflare Pages: Framework **None**, comando **npm run build**, salida **dist**, raíz vacía. Si publica una rama con los archivos ya compilados en la raíz: comando vacío, salida **.**, raíz vacía. No mezcle ambas configuraciones. No se necesita Wrangler.
-5. Abra la dirección HTTPS de Pages y compruebe que la pantalla diga **Selección de textos escolares 2027**. Entre como Coordinación, primero en Demostración. El enlace Sala pública permite proyectar sin iniciar sesión y excluye fichas y padrón.
+5. Abra la dirección HTTPS de Pages y compruebe que la pantalla diga **Selección de textos escolares 2027**. Elija **INGRESAR COMO SUBDIRECTOR**, primero en Demostración. El enlace Sala pública permite proyectar sin iniciar sesión y excluye fichas y padrón.
 
 Para otra instalación, cambie el usuario autorizado de `textos_coordinators` durante la instalación, como propietario; no se requieren claves administrativas en el navegador. Las tablas no admiten acceso directo del navegador: la función `textos_api` comprueba el rol en cada operación.
 
@@ -43,7 +41,7 @@ El comando crea contraseñas aleatorias locales en `local/.env`, inicia PostgreS
 cat local/owner-code.txt
 ```
 
-Abra `http://localhost:8080`, elija Jornada real → Coordinación y use ese código. Para la demostración use el código de `local/demo-owner-code.txt`. No es la contraseña de la nube.
+Abra `http://localhost:8080` y use los dos botones de la portada. Subdirección ingresa con su contraseña configurada en el servidor y los docentes se registran directamente. Los códigos de propietario conservan una vía administrativa de recuperación: abra privadamente `http://localhost:8080/#access=SU-CODIGO`; para demostración use `http://localhost:8080/?datos=demo#access=SU-CODIGO-DEMO`. El navegador retira el código de la barra de direcciones. Estos códigos no son contraseñas docentes ni deben publicarse.
 
 En otro equipo conectado a la misma red, abra `http://IP-DEL-SERVIDOR:8080` (por ejemplo, la dirección IPv4 que muestra `ipconfig` en Windows o la configuración de red del servidor). Permita el puerto 8080 en el cortafuegos de la red privada. Mantenga el servidor encendido y sin suspensión automática. No exponga ese puerto directamente a Internet.
 
@@ -64,20 +62,21 @@ No use `docker compose down -v`: eliminaría el volumen persistente. Guarde tamb
 npm ci
 npm test
 npm run build
+bash scripts/test-presentation-db.sh
 ```
 
 Para desarrollar la interfaz: `npm run dev`. Para la base local use Compose; `npm start` sirve `dist` y reenvía las solicitudes a `POSTGREST_URL` (por defecto `http://127.0.0.1:3000`). Vite reenvía `/api` al servidor Node del puerto 8788.
 
-Las pruebas PDF usan `pdftotext` de Poppler para abrir y comprobar el contenido; instale `poppler-utils` en Linux si no está disponible. No se requiere para usar la aplicación. La prueba completa de navegador se ejecuta en una instalación local descartable con `node --import tsx tests/browser-local.mjs` (Chromium en `/usr/bin/chromium` o `CHROMIUM_PATH`). Usa solo la demostración; no la ejecute contra la base de una jornada en curso.
+Las pruebas PDF usan `pdftotext` de Poppler para abrir y comprobar el contenido; instale `poppler-utils` en Linux si no está disponible. No se requiere para usar la aplicación. La prueba completa de navegador se ejecuta en una instalación local descartable con `node --import tsx tests/browser-presentation-local.mjs` (Chromium en `/usr/bin/chromium` o `CHROMIUM_PATH`). Usa solo la demostración; no la ejecute contra la base de una jornada en curso.
 
 Las pruebas SQL utilizan servicios Docker aislados y datos ficticios, sin conectarse a producción. Consulte `scripts/test-db.sh` y el informe de validación entregado. La migración, el control de versiones y el recuento transaccional son el mismo código tanto en nube como en red local.
 
 ## Datos y privacidad
 
 - Las fichas guardan enteros 0/1/2 o pendiente; no hay puntajes precargados en la jornada real. Un dato desconocido conserva `null`.
-- El puntaje individual es cinco veces la suma de diez indicadores. La nota por grado promedia dos docentes distintos. La nota de bloque promedia todos sus grados sin redondear para ordenar.
-- El expediente común conserva fuentes y verificaciones humanas. La aplicación no certifica registros OBNATE ni reemplaza el control ministerial.
-- Los códigos de acceso y voto se conservan como huellas. Las opciones digitales se suman de forma atómica a contadores agregados, sin almacenar una cédula individual ni un vínculo sección/código/opción.
+- El puntaje de exposición individual es cinco veces la suma de diez indicadores. El resultado por editorial, área y bloque promedia todas las fichas cerradas de sus docentes registrados, sin limitar evaluadores ni redondear para ordenar. Los cálculos históricos por libro y grado conservan sus reglas propias y no alimentan este promedio.
+- Los expedientes históricos conservan fuentes y verificaciones humanas. Son un archivo administrativo independiente de la ficha de exposición; la aplicación no certifica registros OBNATE ni reemplaza el control ministerial.
+- La contraseña de Subdirección se conserva como huella con sal y se verifica en servidor. Los accesos personales emitidos tras el registro y los códigos de voto se conservan como huellas. Las opciones digitales se suman de forma atómica a contadores agregados, sin almacenar una cédula individual ni un vínculo sección/código/opción.
 - La demostración se carga y reinicia solo en `demo`. La base real queda vacía hasta que coordinación registre datos auténticos.
 - Un respaldo privado contiene información administrativa y huellas de códigos de voto, nunca los códigos originales. La restauración no restablece códigos consumidos; si la copia es anterior a votos conocidos, suspende la ronda y exige conciliación documentada.
 

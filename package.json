@@ -12,7 +12,9 @@
     "start": "node --import tsx server/index.ts",
     "test": "node --import tsx --test --test-isolation=none tests/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "test:sql": "bash scripts/test-db.sh"
+    "test:sql": "bash scripts/test-db.sh",
+    "test:access": "bash scripts/test-access-db.sh",
+    "test:presentation": "bash scripts/test-presentation-db.sh"
   },
   "dependencies": {
     "react": "^19.1.1",

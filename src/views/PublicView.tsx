@@ -1,3 +1,4 @@
+import PresentationPublicView from './PresentationPublicView';
 import { useState } from 'react';
 import { AREAS, GRADES, basePrice, practiceSummary, workloadSummary } from '../../shared/domain';
 import type { Area, Book, GradeId, Shortlist, Snapshot, State, SupportProfile, Verification } from '../../shared/types';
@@ -51,7 +52,7 @@ function PublicBook({ state, book, shortlist }: { state: State; book: Book; shor
   </article>;
 }
 
-export default function PublicView({ data, refresh }: { data: Snapshot; refresh(): Promise<void> }) {
+function LegacyPublicView({ data, refresh }: { data: Snapshot; refresh(): Promise<void> }) {
   const { state } = data;
   const now = useServerClock(data.serverNow);
   const [gradeId, setGradeId] = useState<GradeId>('PRI1');
@@ -79,3 +80,5 @@ export default function PublicView({ data, refresh }: { data: Snapshot; refresh(
     </>}
   </main>;
 }
+
+export default function PublicView(props: {data: Snapshot;refresh():Promise<void>}) { return props.data.state.settings.evaluationMode === 'presentation' ? <PresentationPublicView {...props}/> : <LegacyPublicView {...props}/>; }

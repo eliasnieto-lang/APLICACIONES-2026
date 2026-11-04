@@ -1,5 +1,5 @@
 import type { Api, Dataset } from '../shared/types';
-export interface Config { mode: 'cloud' | 'local'; url: string; publishableKey: string; coordinatorEmail: string }
+export interface Config { mode: 'cloud' | 'local'; url: string; publishableKey: string; coordinatorEmail?: string }
 interface Session { access_token: string; refresh_token: string; expires_at: number }
 export class ApiError extends Error {
   constructor(message: string, public code: string, public status: number) { super(message); this.name = 'ApiError'; }
@@ -14,12 +14,13 @@ function remember(session: Session | null) {
 async function parseResponse(response: Response) {
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const code = String(result.code || result.error_code || response.status);
+    const detail = result.error && typeof result.error === 'object' ? result.error : result;
+    const code = String(detail.code || result.code || result.error_code || response.status);
     let message = 'No se pudo completar la operación. Inténtalo de nuevo.';
     if (code === 'invalid_credentials' || result.error === 'invalid_grant') message = 'El correo o la contraseña de coordinación no son correctos.';
     else if (code === 'email_not_confirmed') message = 'Confirma el correo de coordinación en Supabase antes de entrar.';
+    else if (/^PT(400|401|403|404|409|413|423|429)$/.test(code) && typeof detail.message === 'string') message = detail.message.slice(0, 900);
     else if (response.status === 429) message = 'Se han realizado muchos intentos. Espera unos minutos antes de volver a entrar.';
-    else if (/^PT(400|401|403|404|409|413|423)$/.test(code) && typeof result.message === 'string') message = result.message.slice(0, 900);
     else if (code === 'PGRST202') message = 'Falta instalar la base de datos de Selección de textos. Sigue el paso de instalación indicado para Supabase.';
     else if (response.status === 401) message = 'El acceso no es válido o caducó. Vuelve a entrar con tu código individual.';
     else if (response.status === 403) message = 'Tu acceso no permite esta operación.';
@@ -59,7 +60,8 @@ export function createApi(config: Config, dataset: Dataset, credential: { code?:
     dataset,
     draftSecret: () => code || '',
     async call<T>(action: string, payload: Record<string, unknown> = {}): Promise<T> {
-      const publicAction = ['public_snapshot', 'vote_preview', 'vote_cast'].includes(action);
+      const publicAction = ['public_snapshot', 'vote_preview', 'vote_cast', 'teacher_register', 'director_login'].includes(action);
+      const requestCode = ['public_snapshot', 'director_login'].includes(action) ? null : code;
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (config.mode === 'cloud') {
         headers.apikey = config.publishableKey;
@@ -68,7 +70,7 @@ export function createApi(config: Config, dataset: Dataset, credential: { code?:
       let response: Response;
       try {
         response = await fetch(config.mode === 'local' ? '/api/rpc' : `${config.url}/rest/v1/rpc/textos_api`, {
-          method: 'POST', headers, body: JSON.stringify({ p_action: action, p_payload: payload, p_code: code, p_dataset: dataset }), cache: 'no-store', referrerPolicy: 'no-referrer',
+          method: 'POST', headers, body: JSON.stringify({ p_action: action, p_payload: payload, p_code: requestCode, p_dataset: dataset }), cache: 'no-store', referrerPolicy: 'no-referrer',
         });
       } catch { throw new ApiError('Sin conexión. La operación todavía no está confirmada por el servidor.', 'NETWORK', 0); }
       return await parseResponse(response) as T;

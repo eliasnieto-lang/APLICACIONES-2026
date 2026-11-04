@@ -1,16 +1,15 @@
 {
-  "application": "Selección de textos escolares 2027",
-  "backend": "PostgreSQL 16 + PostgREST + Node Express",
-  "at": "2026-11-04T07:21:20.275Z",
+  "at": "2026-11-04T13:34:31.440Z",
+  "backend": "Node/Express + PostgreSQL + PostgREST reales",
   "passed": 7,
   "checks": [
-    "correct application identity, working coordinator login and empty real dataset",
-    "catalog CSV preview is validated on real backend and requires explicit confirmation",
-    "closed dossier correction records a reason and preserves its preceding version",
-    "two separate teacher sessions see own evaluations and independent saved drafts",
-    "offline local draft recovers after reentry and only server confirms closure",
-    "public projection contains no teacher identity or draft before authorized shortlist",
-    "PDF assessment downloads from the running application"
+    "two direct entry choices; Subdirector password is checked by the server",
+    "editorial registration makes live forms available without books or dossiers",
+    "five teachers register without password and can choose multiple categories",
+    "live forms close with ten observed scores and no preloaded physical-text metadata",
+    "all five teacher scores contribute to the category mean and remain private",
+    "a second selected category has an independent empty form",
+    "public room excludes private observations and current unpublished teacher results"
   ],
   "pageErrors": []
 }

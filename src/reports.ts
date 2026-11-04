@@ -1,6 +1,7 @@
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from 'pdf-lib';
-import type { Book, Shortlist, State } from '../shared/types';
-import { AREAS, GRADES, INDICATORS, assessBook, basePrice, practiceSummary, scoreEvaluation, workloadSummary } from '../shared/domain';
+import type { Area, Block, Book, Shortlist, State } from '../shared/types';
+import { AREAS, BLOCKS, GRADES, INDICATORS, assessBook, basePrice, practiceSummary, scoreEvaluation, workloadSummary } from '../shared/domain';
+import { PRESENTATION_INDICATORS, presentationScore, presentationSummary } from '../shared/presentation';
 
 export const A4 = { width: 595.28, height: 841.89 };
 export interface ReportOptions { demo?: boolean; generatedAt?: string }
@@ -99,6 +100,68 @@ export async function buildTeacherPdf(state: State, bookId: string, evaluationId
   report.field('Objeción / incidencia', evaluation?.objection ? evaluation.objectionDetail : 'Sin objeción registrada / completar si corresponde');
   report.field('Pauta institucional de práctica', state.settings.rules.practiceGuidelines[`${offer?.area}-${book.gradeId}`]);
   report.signatures(['Docente evaluador', 'Dirección / Subdirección']); return report.finish();
+}
+
+export interface PresentationTeacherReportScope {
+  publisherId: string; area: Area; block: Block; evaluationId?: string; teacherId?: string;
+}
+
+/** One author's live observations; never includes another teacher's sheet or a book dossier. */
+export async function buildPresentationTeacherPdf(state: State, scope: PresentationTeacherReportScope, options: ReportOptions = {}): Promise<Uint8Array> {
+  const publisher = state.publishers.find(item => item.id === scope.publisherId);
+  if (!publisher) throw new Error('No se encontró la editorial.');
+  const evaluation = scope.evaluationId ? (state.presentationEvaluations ?? []).find(item => item.id === scope.evaluationId) : undefined;
+  if (scope.evaluationId && (!evaluation || evaluation.publisherId !== scope.publisherId || evaluation.area !== scope.area || evaluation.block !== scope.block
+    || (scope.teacherId && evaluation.teacherId !== scope.teacherId))) throw new Error('La ficha seleccionada no corresponde al docente, editorial, área y categoría.');
+  const teacher = state.teachers.find(item => item.id === (evaluation?.teacherId ?? scope.teacherId));
+  const report = await new PrintedReport(state, 'Ficha individual de exposición editorial', 'DOCUMENTO INTERNO - observaciones de un solo docente', options).initialize();
+  report.field('Editorial', publisher.name);
+  report.field('Área', AREAS.find(item => item.id === scope.area)?.label ?? scope.area);
+  report.field('Categoría', BLOCKS.find(item => item.id === scope.block)?.label ?? scope.block);
+  report.field('Docente evaluador', teacher?.name);
+  report.field('Ejemplar físico observado (opcional)', evaluation?.physicalText || 'Sin identificación adicional registrada');
+  report.field('Estado / cierre', evaluation ? `${evaluation.status === 'closed' ? 'Cerrada' : 'Borrador'} / ${date(evaluation.closedAt)}` : 'Ficha en blanco - no emitida');
+  report.field('Versión de ficha / reglas', `${evaluation?.version ?? 0} / ${evaluation?.rulesVersion ?? state.settings.rules.version}`);
+  report.write('Valore lo observado durante la exposición y al revisar el ejemplar físico. Escala: 0 = ninguna señal; 1 = parcial o una señal; 2 = ambas señales; pendiente = sin responder. Cada selección es deliberada. Las observaciones breves son opcionales.');
+  for (const [index, indicator] of PRESENTATION_INDICATORS.entries()) {
+    const signals = indicator.variants?.[scope.area] ?? indicator;
+    report.heading(`${indicator.id}. ${indicator.label}`);
+    report.write(`A: ${signals.a}`, { size: 9 }); report.write(`B: ${signals.b}`, { size: 9 });
+    const score = evaluation?.scores[index];
+    report.field('Puntaje 0 / 1 / 2', score === null || score === undefined ? 'Pendiente [  ] 0   [  ] 1   [  ] 2' : score);
+    report.field('Observación propia (opcional)', evaluation?.notes[index] || '________________________________________');
+  }
+  const score = evaluation ? presentationScore(evaluation) : null;
+  report.heading('Resultado individual');
+  report.field('Puntaje /100', score === null ? 'Pendiente - diez respuestas necesarias' : `${number(score)} (5 x suma de diez indicadores)`);
+  report.field('Observación general propia (opcional)', evaluation?.generalObservation || '________________________________________');
+  report.signatures(['Docente evaluador', 'Dirección / Subdirección']);
+  return report.finish();
+}
+
+/** Uses the published aggregate snapshot, even when the catalog or live reviews change later. */
+export async function buildPresentationShortlistPdf(state: State, shortlistId: string, options: ReportOptions = {}): Promise<Uint8Array> {
+  const shortlist = (state.presentationShortlists ?? []).find(item => item.id === shortlistId);
+  if (!shortlist) throw new Error('No se encontró la terna de exposición.');
+  const report = await new PrintedReport(state, 'Constancia de terna por exposición editorial', 'RESULTADO AGREGADO - sin fichas ni observaciones individuales', options).initialize();
+  report.field('Área / categoría', `${AREAS.find(item => item.id === shortlist.area)?.label ?? shortlist.area} / ${BLOCKS.find(item => item.id === shortlist.block)?.label ?? shortlist.block}`);
+  report.field('Versión / estado / reglas', `${shortlist.version} / ${shortlist.status} / ${shortlist.rulesVersion}`);
+  report.field('Folio / publicación', `${shortlist.folio} / ${date(shortlist.publishedAt)}`);
+  report.field('Validación de Dirección', shortlist.directorApproved ? 'Registrada; recoger firma formal' : 'Pendiente');
+  const assessment = shortlist.snapshot.assessment;
+  report.field('Docentes registrados / fichas cerradas / pendientes al publicar', `${assessment.registered} / ${assessment.closed} / ${assessment.pending}`);
+  report.field('Umbral /100 utilizado', shortlist.snapshot.threshold);
+  shortlist.publisherIds.forEach((publisherId, index) => {
+    const publisher = shortlist.snapshot.publishers.find(item => item.id === publisherId);
+    const result = assessment.ranked.find(item => item.publisherId === publisherId);
+    report.heading(`${index + 1}. ${publisher?.name ?? 'Editorial de la versión publicada'}`);
+    report.field('Puntaje agregado /100', number(result?.score));
+    report.field('Docentes registrados / cerrados / pendientes', `${result?.registered ?? 0} / ${result?.closed ?? 0} / ${result?.pending ?? 0}`);
+    report.field('I2 promedio (escala 0-2)', number(result?.i2));
+  });
+  report.field('Apreciación pedagógica del portavoz', shortlist.statement);
+  report.write('El promedio utiliza todas las fichas cerradas de docentes registrados en el área y categoría. Este resultado no asigna notas individuales por grado ni sustituye el procedimiento de elección familiar.');
+  report.signatures(); return report.finish();
 }
 
 /** Anonymous paper form: no section, representative, code, teacher or individual ballot identifier. */
@@ -223,7 +286,11 @@ export async function buildPrivateWorkbook(state: State): Promise<Uint8Array> {
     const result = workbook.addWorksheet(name); result.addRow(headers); rows.forEach(row => result.addRow(row)); result.getRow(1).font = { bold: true };
     result.columns.forEach(column => { column.width = 24; }); result.views = [{ state: 'frozen', ySplit: 1 }];
   };
-  sheet('LEEME PRIVADO', ['Documento', 'Alcance'], [['EXPORTACIÓN INTERNA', 'Contiene docentes y padrón. Conservar con acceso restringido.'], ['Privacidad del voto', 'El padrón no contiene opciones marcadas ni vínculo con el sentido del voto.'], ['Reglas vigentes', JSON.stringify(state.settings.rules)], ['Versión de estado', state.version]]);
+  sheet('LEEME PRIVADO', ['Documento', 'Alcance'], [['EXPORTACIÓN INTERNA', 'Contiene docentes y observaciones privadas. Conservar con acceso restringido.'], ['Flujo vigente', 'Exposiciones PRIVADAS contiene las fichas en vivo por editorial, área y categoría. Docentes registrados conserva sus perfiles.'], ['Archivos históricos', 'Titulos y precios, Evaluaciones PRIVADAS y Ternas versiones conservan el procedimiento histórico por libro y grado; no son las notas vigentes de exposición.'], ['Privacidad del voto', 'El padrón no contiene opciones marcadas ni vínculo con el sentido del voto.'], ['Reglas vigentes', JSON.stringify(state.settings.rules)], ['Versión de estado', state.version]]);
+  sheet('Docentes registrados', ['Docente', 'Nombres', 'Apellidos', 'Área', 'Categorías', 'Registro directo', 'Versión'], state.teachers.map(teacher => [teacher.name, teacher.firstNames ?? '', teacher.lastNames ?? '', teacher.area ?? '', (teacher.categories ?? []).join(', '), teacher.selfRegistered ? 'Sí' : 'No / histórico', teacher.version]));
+  sheet('Exposiciones PRIVADAS', ['Docente', 'Editorial', 'Área', 'Categoría', 'Estado', 'I1', 'I2', 'I3', 'I4', 'I5', 'I6', 'I7', 'I8', 'I9', 'I10', 'Nota /100', 'Observaciones propias', 'Observación general', 'Ejemplar físico', 'Cierre', 'Reglas', 'Versión ficha'], (state.presentationEvaluations ?? []).map(evaluation => [state.teachers.find(teacher => teacher.id === evaluation.teacherId)?.name, state.publishers.find(publisher => publisher.id === evaluation.publisherId)?.name, evaluation.area, evaluation.block, evaluation.status, ...evaluation.scores, presentationScore(evaluation), evaluation.notes.map((note, index) => note ? `I${index + 1}: ${note}` : '').filter(Boolean).join('\n'), evaluation.generalObservation, evaluation.physicalText, evaluation.closedAt, evaluation.rulesVersion, evaluation.version]));
+  sheet('Resumen exposiciones', ['Área', 'Categoría', 'Editorial', 'Registrados', 'Cerrados', 'Pendientes', 'Promedio /100', 'I2 promedio', 'Estado'], presentationSummary(state).flatMap(category => category.ranked.map(item => [category.area, category.block, state.publishers.find(publisher => publisher.id === item.publisherId)?.name, item.registered, item.closed, item.pending, item.score, item.i2, item.state])));
+  sheet('Ternas de exposicion', ['Área', 'Categoría', 'Versión', 'Estado', 'Editoriales', 'Folio', 'Apreciación', 'Publicación', 'Reglas'], (state.presentationShortlists ?? []).map(shortlist => [shortlist.area, shortlist.block, shortlist.version, shortlist.status, shortlist.publisherIds.map(id => shortlist.snapshot.publishers.find(publisher => publisher.id === id)?.name ?? id).join('; '), shortlist.folio, shortlist.statement, shortlist.publishedAt, shortlist.rulesVersion]));
   sheet('Titulos y precios', ['Código', 'Título', 'Edición', 'Grado 2027', 'Editorial / serie', 'Base S/', 'Fuente precio', 'Vigencia', 'Verificación', 'Versión'], state.books.map(book => [book.code, book.title, book.edition, gradeName(book.gradeId), offerName(state, book.offerId), basePrice(book), book.priceSource, book.priceValidity, book.priceStatus, book.version]));
   sheet('Evaluaciones PRIVADAS', ['Docente', 'Título', 'Grado', 'Estado', 'I1', 'I2', 'I3', 'I4', 'I5', 'I6', 'I7', 'I8', 'I9', 'I10', 'Nota /100', 'Evidencias', 'Observaciones', 'Objeción', 'Reglas', 'Versión expediente', 'Versión ficha'], state.evaluations.map(evaluation => [state.teachers.find(teacher => teacher.id === evaluation.teacherId)?.name, state.books.find(book => book.id === evaluation.bookId)?.title, state.books.find(book => book.id === evaluation.bookId)?.gradeId, evaluation.status, ...evaluation.scores, scoreEvaluation(evaluation), evaluation.evidence.join('\n'), evaluation.notes.join('\n'), evaluation.objectionDetail, evaluation.rulesVersion, evaluation.bookVersion, evaluation.version]));
   sheet('Padron PRIVADO', ['Sección origen', 'Grado 2026', 'Grado 2027', 'Representante', 'Titular / suplente', 'Acreditación', 'Evidencia'], state.sections.map(section => [section.label, section.sourceGrade, gradeName(section.gradeId), section.representative, section.replacement ? 'Suplente' : 'Titular', section.accredited ? 'Acreditado' : 'Pendiente', section.accreditationEvidence]));

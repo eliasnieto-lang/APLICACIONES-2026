@@ -7,3 +7,5 @@ local/data/
 test-results/
 
 local/*owner-code.txt
+
+local/director-test-password
