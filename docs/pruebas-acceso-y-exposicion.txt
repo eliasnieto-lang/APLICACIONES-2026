@@ -1,50 +1,90 @@
-Validación006: questions
-✓ 1 solo Subdirección confirma la casilla y se validan editorial y tipos
-✓ 2 I11 se puntúa y cierra antes de empezar la sala, sin autorización ni versión de pregunta
-✓ 3 una casilla desmarcada no confirma el hecho ni permite finalizar la exposición
-✓ 4 confirmar exige solo la casilla, sin nombre, área, pregunta ni transcripción de la respuesta
-✓ 5 antes de finalizar se corrige la casilla con CAS, sin motivo ni alterar fichas cerradas
-✓ 6 finalizar conserva la confirmación y una repetición idéntica no crea otra versión
-✓ 7 dos pantallas crean una sola confirmación y no sobrescriben el valor de la otra
-✓ 8 la casilla conserva los datos anteriores de la pregunta sin volver a pedirlos
-✓ 9 cada editorial sorteada requiere su propia casilla antes de avanzar
-✓ 10 la proyección comparte confirmaciones y datos antiguos sin filtrar identidad o campos privados
-✓ 11 los respaldos rechazan confirmaciones huérfanas, duplicadas o incoherentes
-✓ 12 reaplicar el esquema no borra confirmaciones, notas, cierres ni historial
-✓ 13 borrar y recrear la confirmación no reabre ni cambia I11 y puede recuperarse tras finalizar
-13 pruebas SQL/HTTP de confirmación simple e I11 independiente aprobadas.
+Padrón y voto manual
+✓ 1 el servidor construye exactamente cinco secciones por grado y folios cortos sin duplicados
+✓ 2 solo Subdirección administra asistencia, transcripción y correcciones
+✓ 3 nuevas votaciones crean padrón proporcional de 10,20 y15 aulas y congelan ambas áreas
+✓ 4 asistencia exige versión actual y un aula de la categoría correcta
+✓ 5 el lote genera una ficha por aula elegible y devuelve solo folios cortos y etiquetas
+✓ 6 no hay conteo arbitrario ni nuevas fichas duplicadas; reimprimir conserva folio y cantidad
+✓ 7 Sin asistencia impide imprimir y votar sin inventar blancos ni nulos
+✓ 8 transcribir requiere confirmar ambas áreas y acepta solo alternativas de esta votación
+✓ 9 un aula ya recibida no se vuelve a emitir ni contabilizar
+✓ 10 la transcripción directa por folio funciona sin PDF previo y conserva blanco y nulo
+✓ 11 dos transcripciones simultáneas de una misma aula suman solo una vez
+✓ 12 la tabla pública muestra el voto por aula, conserva blancos explícitos y excluye secretos
+✓ 13 corregir exige motivo y versión del voto; sustituye opciones sin agregar fichas
+✓ 14 correcciones concurrentes no sobrescriben un voto ya actualizado
+✓ 15 un aula con voto no puede convertirse en Sin asistencia
+✓ 16 el respaldo actual conserva aulas, correcciones y registros usados al restaurarse
+✓ 17 el respaldo no puede alterar aula, conteo ni la atribución de una ficha
+✓ 18 un respaldo anterior no puede deshacer una corrección aunque conserve el total de votos
+✓ 19 validar el padrón detecta aulas, folios o conteos manipulados
+✓ 20 cerrar publica el resultado y deja bloqueadas transcripciones, asistencia y correcciones
+✓ 21 repetir el esquema no modifica padrón, folios, votos, correcciones ni tokens
+PASS 21/21 grupos SQL/HTTP de padrón, voto manual y cotejo público por aula
 
 
-Validación006: presentation
-✓ 1 cinco docentes en un bloque sin asignaciones ni libros precargados
-✓ 2 la ficha empieza pendiente y el primer guardado fija reglas sin datos de expediente
-✓ 3 autoría y perfil se verifican en servidor; no se acepta una ficha de colega
-✓ 4 la versión antigua de la aplicación debe actualizar la escala antes de guardar o cerrar
-✓ 5 CAS impide sobrescribir y puntajes fraccionarios o fuera de rango se rechazan
-✓ 6 I11 se valora y cierra sin autorización de sala ni registro de pregunta
-✓ 7 la casilla confirma la pregunta de cada editorial sin determinar la validez de I11
-✓ 8 todas las fichas cierran con once valoraciones; no exige OBNATE, precio, carga ni notas
-✓ 9 el promedio incluye a los cinco docentes y los conteos no tienen cupo de dos
-✓ 10 cada docente solo ve sus tres fichas y la proyección pública todavía no muestra notas
-✓ 11 publicar requiere retiro de editoriales documentado, sin añadir requisitos de expediente
-✓ 12 el umbral guardado no bloquea las tres editoriales clasificadas para votación familiar
-✓ 13 la clasificación publica tres editoriales orientativas sin decidir la elección de los padres
-✓ 14 campos personalizados en un respaldo no atraviesan la proyección pública
-✓ 15 reabrir requiere coordinación y motivo, conserva cierre y retira la publicación afectada
-✓ 16 respaldo y restauración conservan fichas nuevas e historial sin recrear asignaciones
-✓ 17 el servidor rechaza respaldos con fichas duplicadas o categorías docentes vacías
-✓ 18 restaurar una terna publicada exige aprobación y metadatos formales válidos
-✓ 19 una inscripción posterior exige nuevas fichas y conserva la terna anterior en historial
-✓ 20 las fichas históricas 0–2 se conservan con su porcentaje y no se mezclan con la escala 0–4
-✓ 21 solo el autor reinicia explícitamente la rúbrica histórica con CAS y sin convertir sus puntajes
-✓ 22 el cero explícito suma cero y cuenta en el promedio; null sigue pendiente
-✓ 23 la reapertura conserva la escala histórica implícita y requiere reinicio propio para valorar de nuevo
-✓ 24 I11 acepta cero y cuatro sin vincularse a una versión; pendiente todavía impide cerrar
-✓ 25 una ficha anterior de diez criterios mantiene su porcentaje hasta ampliarla explícitamente, sin borrar sus diez valoraciones
-25 pruebas de presentación SQL/HTTP aprobadas.
+Compatibilidad de votaciones anteriores
+✓ 1 solo Subdirección puede preparar o contabilizar la votación en papel
+✓ 2 ranking final actual y referencias de versión son obligatorios
+✓ 3 la ficha congela Top 3 y los polls anónimos anteriores continúan compatibles
+✓ 4 generación de fichas anónimas tiene CAS, límites y códigos únicos
+✓ 5 una lectura debe corresponder a su ficha y a todas sus áreas exactas
+✓ 6 una foto clara suma ambas áreas una sola vez y rechaza su repetición
+✓ 7 dos envíos simultáneos de la misma ficha incrementan solo una vez
+✓ 8 blancos y nulos se concilian sin asignarlos a una editorial
+✓ 9 el respaldo contiene solo huellas anónimas y restaura el estado actual sin duplicar
+✓ 10 restaurar una copia antigua no retrocede conteos ni desconsume fichas
+✓ 11 cerrar calcula ganadores de cada área y bloquea fotos posteriores
+✓ 12 proyecciones y auditoría no exponen códigos, fotos ni elecciones individuales
+✓ 13 empate y cero votos válidos nunca inventan un ganador
+✓ 14 no se crea una votación si el ranking se volvió provisional u obsoleto
+✓ 15 dos editoriales no habilitan una votación que requiere tres clasificadas
+PASS 15/15 grupos SQL/HTTP de votación A5 en papel
 
 
-Validación006: cleanup
+Migración 002–007
+✓ 1 002 crea cinco docentes y quince fichas cerradas con la escala anterior 0–2
+✓ 2 la instalación previa conserva también una ficha histórica por libro y sus referencias
+✓ 3 003 marca la escala histórica sin convertir puntajes ni modificar libros, docentes o credenciales
+✓ 4 la publicación previa pasa al historial con su porcentaje original y no aparece como vigente
+✓ 5 reaplicar 003 no agrega historial, no modifica versiones y mantiene códigos privados
+✓ 6 un navegador anterior no guarda y solo el autor reinicia explícitamente la ficha histórica
+✓ 7 restaurar una copia 002 preserva vectores previos y retira su publicación histórica sin reinterpretarla
+✓ 8 004 incorpora sorteo y papel sin alterar ningún registro, credencial ni historial de 003
+✓ 9 repetir 004 conserva el orden ya sorteado y no añade versiones ni historial
+✓ 10 005 añade borrado y rúbrica adaptada sin eliminar datos ni alterar puntajes, códigos o historial al instalarse
+✓ 11 repetir 005 y previsualizar el borrado no modifica la jornada ni ejecuta una eliminación
+✓ 12 005 conserva una pregunta transcrita y una ficha vigente cerrada con su versión de pregunta original
+✓ 13 006 se instala sin alterar datos, credenciales, accesos, notas, pregunta anterior ni historial
+✓ 14 repetir 006 conserva exactamente los datos, versiones, registros privados y el historial
+✓ 15 la confirmación simple se cambia sin transcripción ni motivo y no invalida la ficha heredada ni su I11
+✓ 16 tras 006 I11 puede guardarse y cerrarse sin turno ni confirmación de Sala; cero cuenta sobre 44
+✓ 17 006 conserva una votación anónima con fichas emitidas y un voto ya contabilizado antes de actualizar
+✓ 18 007 se instala sin cambiar votos anónimos, tokens consumidos, notas previas, credenciales ni historial
+✓ 19 repetir 007 no asigna aulas a fichas anónimas ni reabre votos ya contabilizados
+✓ 20 tras 007 una votación nueva crea diez aulas P1 con cinco secciones por grado y folios únicos
+✓ 21 el padrón marca sin asistencia y el voto manual por aula conserva I11 y suma solo una vez
+✓ 22 corregir una transcripción ajusta conteos y su versión sin duplicar la ficha ni modificar la rúbrica docente
+22 pruebas de migración 002→003→004→005→006→007 SQL/HTTP aprobadas.
+
+
+Fotos privadas
+✓ 1 fotos son privadas para Subdirección y no admiten lectura directa del navegador
+✓ 2 adjuntar una foto guarda bytes y metadatos sin cambiar votos, asistencia ni versiones
+✓ 3 la lista y descarga corresponden solo a la votación y dataset seleccionados
+✓ 4 una misma foto se identifica sin duplicar ni consumir el cupo del aula
+✓ 5 se rechazan archivos ajenos, tipos falsos, contenido inválido y fotos excesivas
+✓ 6 cada aula admite tres fotos distintas y permite reemplazar una sin afectar al voto
+✓ 7 las fotos pueden adjuntarse después del cierre sin modificar el resultado
+✓ 8 las proyecciones públicas y docentes no contienen fotos ni contenido base64
+✓ 9 reaplicar el esquema conserva las fotos y sus bytes sin alterar el padrón
+✓ 10 el respaldo identifica las fotos para su descarga separada sin incluir sus bytes
+✓ 11 previsualizar no borra fotos y eliminar su votación retira solo los respaldos relacionados
+✓ 12 limpiar registros huérfanos elimina solo sus fotos y respeta el otro espacio
+12 grupos SQL/HTTP de respaldo fotográfico opcional aprobados.
+
+
+Eliminación administrativa
 ✓ 1 solo Subdirección puede previsualizar o borrar; docentes no amplían sus permisos
 ✓ 2 la vista previa no cambia datos, versiones, historial, accesos ni códigos
 ✓ 3 CAS y confirmación impiden borrar desde una previsualización antigua o incompleta
@@ -63,58 +103,3 @@ Validación006: cleanup
 ✓ 16 la eliminación funciona en Jornada real del servidor aislado y no toca demostración
 ✓ 17 reaplicar el esquema instala funciones sin ejecutar eliminaciones ni cambiar datos
 PASS 17/17 grupos SQL/HTTP de eliminación administrativa
-
-
-Validación006: migration
-✓ 1 002 crea cinco docentes y quince fichas cerradas con la escala anterior 0–2
-✓ 2 la instalación previa conserva también una ficha histórica por libro y sus referencias
-✓ 3 003 marca la escala histórica sin convertir puntajes ni modificar libros, docentes o credenciales
-✓ 4 la publicación previa pasa al historial con su porcentaje original y no aparece como vigente
-✓ 5 reaplicar 003 no agrega historial, no modifica versiones y mantiene códigos privados
-✓ 6 un navegador anterior no guarda y solo el autor reinicia explícitamente la ficha histórica
-✓ 7 restaurar una copia 002 preserva vectores previos y retira su publicación histórica sin reinterpretarla
-✓ 8 004 incorpora sorteo y papel sin alterar ningún registro, credencial ni historial de 003
-✓ 9 repetir 004 conserva el orden ya sorteado y no añade versiones ni historial
-✓ 10 005 añade borrado y rúbrica adaptada sin eliminar datos ni alterar puntajes, códigos o historial al instalarse
-✓ 11 repetir 005 y previsualizar el borrado no modifica la jornada ni ejecuta una eliminación
-✓ 12 005 conserva una pregunta transcrita y una ficha vigente cerrada con su versión de pregunta original
-✓ 13 006 se instala sin alterar datos, credenciales, accesos, notas, pregunta anterior ni historial
-✓ 14 repetir 006 conserva exactamente los datos, versiones, registros privados y el historial
-✓ 15 la confirmación simple se cambia sin transcripción ni motivo y no invalida la ficha heredada ni su I11
-✓ 16 tras 006 I11 puede guardarse y cerrarse sin turno ni confirmación de Sala; cero cuenta sobre 44
-16 pruebas de migración 002→003→004→005→006 SQL/HTTP aprobadas.
-
-
-Validación006: jornada
-✓ 1 no se sortea sin editoriales ni se calcula ranking antes de las exposiciones
-✓ 2 solo Subdirección sortea; se exige confirmar las editoriales y se ignora cualquier orden suministrado
-✓ 3 todos los docentes y la sala pública reciben el mismo orden, sin ranking privado
-✓ 4 repetir antes de iniciar exige CAS y motivo; la versión anterior queda en historial
-✓ 5 el servidor fuerza el orden sorteado y no permite saltar ni finalizar dos veces
-✓ 6 un finish retrasado o sin identidad de turno no cierra la siguiente editorial
-✓ 7 no se agregan nuevas editoriales después de iniciar el orden de participación
-✓ 8 siguiente inicia cada editorial restante exactamente una vez y el avance es compartido
-✓ 9 el ranking tras exposiciones es provisional si faltan fichas y no convierte pendientes en cero
-✓ 10 nuevas fichas invalidan la vigencia del ranking anterior y la regeneración promedia a todos
-✓ 11 la validación de respaldo rechaza completar exposiciones fuera del orden y rankings corruptos
-✓ 12 los campos extra de un sorteo restaurado no se filtran a docentes ni sala pública
-12 grupos SQL/HTTP de sorteo, secuencia y ranking aprobados.
-
-
-Validación006: paper
-✓ 1 solo Subdirección puede preparar o contabilizar la votación en papel
-✓ 2 ranking final actual y referencias de versión son obligatorios
-✓ 3 la ficha congela Top 3 por área y categoría sin usar libros históricos
-✓ 4 generación de fichas anónimas tiene CAS, límites y códigos únicos
-✓ 5 una lectura debe corresponder a su ficha y a todas sus áreas exactas
-✓ 6 una foto clara suma ambas áreas una sola vez y rechaza su repetición
-✓ 7 dos envíos simultáneos de la misma ficha incrementan solo una vez
-✓ 8 blancos y nulos se concilian sin asignarlos a una editorial
-✓ 9 el respaldo contiene solo huellas anónimas y restaura el estado actual sin duplicar
-✓ 10 restaurar una copia antigua no retrocede conteos ni desconsume fichas
-✓ 11 cerrar calcula ganadores de cada área y bloquea fotos posteriores
-✓ 12 proyecciones y auditoría no exponen códigos, fotos ni elecciones individuales
-✓ 13 empate y cero votos válidos nunca inventan un ganador
-✓ 14 no se crea una votación si el ranking se volvió provisional u obsoleto
-✓ 15 dos editoriales no habilitan una votación que requiere tres clasificadas
-PASS 15/15 grupos SQL/HTTP de votación A5 en papel

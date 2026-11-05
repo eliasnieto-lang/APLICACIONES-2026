@@ -2,12 +2,11 @@
 import { chromium } from 'playwright';
 import { readFileSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { basename } from 'node:path';
 import assert from 'node:assert/strict';
-import { PDFDocument, rgb } from 'pdf-lib';
+import { PDFDocument } from 'pdf-lib';
 import { emptyState } from '../shared/defaults.ts';
 import { newPresentationEvaluation } from '../shared/presentation.ts';
-import { PAPER_A5, paperChoiceBoxes } from '../shared/paper-layout.ts';
+import { PAPER_A5 } from '../shared/paper-layout.ts';
 
 const base = process.env.TEXTOS_BROWSER_URL || 'http://127.0.0.1:39001';
 if (!/^http:\/\/(127\.0\.0\.1|localhost):[0-9]+$/.test(base)) throw Error('Use a disposable local development installation.');
@@ -45,7 +44,7 @@ async function newPage(viewport = { width: 1360, height: 960 }) {
   page.on('response', async response => {
     try {
       if (response.request().method() === 'POST' && response.request().postDataJSON()?.p_action === 'paper_ballots_generate' && response.ok()) {
-        const body = await response.json(); if (Array.isArray(body.codes)) secrets.push(...body.codes);
+        const body = await response.json(); if (Array.isArray(body.codes)) secrets.push(...body.codes.filter(code => code.length >= 20));
       }
     } catch { /* A non-RPC request has no JSON body. */ }
   });
@@ -57,7 +56,7 @@ async function rpcUi(page, action, click, expectedStatus = 200) {
   });
   void pending.catch(() => undefined);
   await click(); const response = await pending; const body = await response.json();
-  assert.equal(response.status(), expectedStatus, `Unexpected HTTP status for ${action}`); return body;
+  assert.equal(response.status(), expectedStatus, `Unexpected HTTP status for ${action}: ${secrets.reduce((message, secret) => secret ? message.split(secret).join('[redacted]') : message, String(body.error?.message ?? body.message ?? ''))}`); return body;
 }
 async function openAccess(page, code) {
   await page.goto(`${base}/?datos=demo#access=${encodeURIComponent(code)}`);
@@ -65,46 +64,26 @@ async function openAccess(page, code) {
   assert(!page.url().includes(code));
 }
 async function currentState() { return (await rpc('snapshot')).state; }
-function markX(page, box) {
-  const inset = 2.5;
-  page.drawLine({ start: { x: box.x + inset, y: PAPER_A5.height - box.y - inset }, end: { x: box.x + box.size - inset, y: PAPER_A5.height - box.y - box.size + inset }, thickness: 2.2, color: rgb(0, 0, 0) });
-  page.drawLine({ start: { x: box.x + inset, y: PAPER_A5.height - box.y - box.size + inset }, end: { x: box.x + box.size - inset, y: PAPER_A5.height - box.y - inset }, thickness: 2.2, color: rgb(0, 0, 0) });
-}
-async function markedPhoto(original, poll, extraMark = false) {
-  const pdf = await PDFDocument.load(original); assert.equal(pdf.getPageCount(), 1);
-  const sheet = pdf.getPage(0); assert(Math.abs(sheet.getWidth() - PAPER_A5.width) < .01); assert(Math.abs(sheet.getHeight() - PAPER_A5.height) < .01);
-  const boxes = paperChoiceBoxes(poll);
-  markX(sheet, boxes.find(box => box.area === 'MAT' && box.optionId === poll.options.MAT[0].id));
-  markX(sheet, boxes.find(box => box.area === 'COM' && box.optionId === poll.options.COM[1].id));
-  if (extraMark) markX(sheet, boxes.find(box => box.area === 'MAT' && box.optionId === poll.options.MAT[1].id));
-  const stem = extraMark ? 'test-results/anonima-demo-dudosa' : 'test-results/anonima-demo-marcada';
-  writeFileSync(`${stem}.pdf`, await pdf.save());
-  execFileSync('pdftoppm', ['-r', '144', '-png', '-singlefile', `${stem}.pdf`, stem], { stdio: ['ignore', 'ignore', 'pipe'] });
-  return `${stem}.png`;
-}
-let draw, teacherPage, poll, ballotBytes, acceptedPhoto;
+let draw, teacherPage, poll, ballotBytes;
 const director = await newPage();
-async function uploadAndObserve(photo, expectedStatus = 'Contada', expectedHttp = 200) {
-  const input = director.locator('input[type=file][aria-label="Archivos de fotos para leer"]');
-  await director.waitForFunction(() => { const input = document.querySelector('input[type=file][aria-label="Archivos de fotos para leer"]'); return input && !input.disabled; });
-  const name = basename(photo);
-  const before = await director.locator('.paper-reading').filter({ hasText: name }).count();
-  const pending = director.waitForResponse(response => { try { return response.request().method() === 'POST' && response.request().postDataJSON()?.p_action === 'paper_scan_cast'; } catch { return false; } });
-  void pending.catch(() => undefined);
-  await input.setInputFiles(photo);
-  await director.waitForFunction(({ name, before }) => [...document.querySelectorAll('.paper-reading')].filter(row => row.querySelector('strong')?.textContent === name).length > before, { name, before });
-  await director.waitForFunction(name => {
-    const row = [...document.querySelectorAll('.paper-reading')].filter(item => item.querySelector('strong')?.textContent === name).at(-1);
-    const status = row?.querySelector('.status')?.textContent?.trim(); return status && !['Leyendo foto', 'Guardando'].includes(status);
-  }, name);
-  const row = director.locator('.paper-reading').filter({ hasText: name }).last();
-  const status = (await row.locator('.status').innerText()).trim();
-  if (status !== expectedStatus) {
-    const reasons = await row.locator('.paper-reading-reasons li').allTextContents();
-    writeFileSync('test-results/jornada-lectura-diagnostico.json', JSON.stringify({ status, reasons }, null, 2));
-    throw new Error(`Photo reader status: ${status}; ${reasons.join(' · ')}`);
-  }
-  const response = await pending; const body = await response.json(); assert.equal(response.status(), expectedHttp); return body;
+const classroom = id => poll.classrooms.find(item => item.id === id);
+const classroomRow = id => director.getByRole('region', { name: 'Padrón de aulas', exact: true }).getByRole('article', { name: classroom(id).label, exact: true });
+async function currentPoll() { return (await currentState()).paperPolls.find(item => item.id === poll.id); }
+async function rawRpc(action, payload) {
+  const response = await fetch(`${base}/api/rpc`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ p_action: action, p_payload: payload, p_code: owner, p_dataset: 'demo' }) });
+  return { status: response.status, body: await response.json() };
+}
+async function manualForm(classroomId, choices, correcting = false) {
+  if (correcting) await classroomRow(classroomId).getByRole('button', { name: 'Revisar voto', exact: true }).click();
+  else await classroomRow(classroomId).getByRole('button', { name: 'Transcribir voto', exact: true }).click();
+  const form = director.getByRole('form', { name: 'Transcripción manual del voto', exact: true }); await form.waitFor();
+  const aula = form.getByLabel('Aula del voto manual', { exact: true });
+  if (await aula.isEnabled()) await aula.selectOption(classroomId);
+  await form.getByLabel('Matemática · voto manual', { exact: true }).selectOption(choices.MAT ?? '__blank__');
+  await form.getByLabel('Comunicación · voto manual', { exact: true }).selectOption(choices.COM ?? '__blank__');
+  await form.getByRole('checkbox', { name: 'Comparé los votos con la ficha de papel original.', exact: true }).check();
+  if (correcting) await form.getByLabel('Motivo de la corrección', { exact: true }).fill('Corrección contrastada con la ficha de papel original');
+  return form;
 }
 try {
   await checked('server draw saves one random participation order and shares that exact order with teacher and public views', async () => {
@@ -177,61 +156,120 @@ try {
     const publicSnapshot = (await rpc('public_snapshot')).state;
     assert(!teacherSnapshot.presentationRanking); assert(!publicSnapshot.presentationRanking);
   });
-  await checked('paper UI creates an anonymous two-area election and serves the actual one-page A5 PDF through its CSP-permitted blob frame', async () => {
+  await checked('paper voting creates exactly five A–E classrooms per grade, without a photo scanner or arbitrary ballot quantity', async () => {
     await director.getByRole('button', { name: 'Votación de padres · A5', exact: true }).click();
     await director.getByRole('heading', { name: 'Votación en papel', exact: true }).waitFor();
     await director.getByRole('checkbox', { name: 'Confirmo que las familias pudieron revisar los ejemplares físicos y que estas son las opciones que se imprimirán.', exact: true }).check();
     poll = await rpcUi(director, 'paper_poll_create', () => director.getByRole('button', { name: 'Crear votación en papel', exact: true }).click());
-    assert.deepEqual(poll.areas, ['MAT', 'COM']); assert.equal(poll.block, 'P1');
-    await director.getByLabel('Cantidad de fichas A5', { exact: true }).fill('1');
-    const generated = await rpcUi(director, 'paper_ballots_generate', () => director.getByRole('button', { name: 'Generar fichas A5', exact: true }).click());
-    secrets.push(...generated.codes); poll = generated.poll; assert.equal(poll.generated, 1);
+    assert.deepEqual(poll.areas, ['MAT', 'COM']); assert.equal(poll.block, 'P1'); assert.equal(poll.rosterVersion, 1);
+    assert.equal(poll.classrooms.length, 10);
+    for (const grade of ['PRI1', 'PRI2']) assert.deepEqual(poll.classrooms.filter(item => item.gradeId === grade).map(item => item.section), ['A', 'B', 'C', 'D', 'E']);
+    assert.equal(await director.getByRole('region', { name: 'Padrón de aulas', exact: true }).getByRole('article').count(), 10);
+    assert.equal(await director.getByLabel('Cantidad de fichas A5', { exact: true }).count(), 0);
+    assert.equal(await director.locator('input[type=file][aria-label="Archivos de fotos para leer"]').count(), 0);
+    assert.equal(await director.getByRole('button', { name: 'Leer fotos', exact: true }).count(), 0);
+  });
+  await checked('Sin asistencia is saved per classroom and excludes that classroom from printing and manual voting', async () => {
+    const attendance = director.getByLabel(`Asistencia · ${classroom('PRI2-E').label}`, { exact: true });
+    poll = await rpcUi(director, 'paper_attendance_save', () => attendance.selectOption('absent'));
+    assert.equal(classroom('PRI2-E').attendance, 'absent'); assert.equal(poll.received, 0); assert.equal(poll.generated, 0);
+    const before = await currentPoll();
+    const rejected = await rawRpc('paper_manual_cast', { pollId: poll.id, classroomId: 'PRI2-E', choices: { MAT: poll.options.MAT[0].id, COM: poll.options.COM[1].id }, expectedVersion: poll.version, confirmation: true });
+    assert([400, 409, 423].includes(rejected.status)); assert.deepEqual(await currentPoll(), before);
+    assert(await classroomRow('PRI2-E').getByRole('button', { name: 'Transcribir voto', exact: true }).isDisabled());
+    assert(await classroomRow('PRI2-E').getByRole('button', { name: 'Generar ficha A5', exact: true }).isDisabled());
+  });
+  await checked('a classroom vote can be transcribed without a photograph, QR code or previously issued ballot', async () => {
+    const form = await manualForm('PRI1-B', { MAT: poll.options.MAT[0].id, COM: poll.options.COM[1].id });
+    const absentOption = form.getByLabel('Aula del voto manual', { exact: true }).locator('option[value="PRI2-E"]');
+    assert(await absentOption.count() === 0 || await absentOption.evaluate(option => option.disabled));
+    const accepted = await rpcUi(director, 'paper_manual_cast', () => form.getByRole('button', { name: 'Guardar voto manual', exact: true }).click());
+    assert.equal(accepted.accepted, true); poll = accepted.poll;
+    assert.equal(poll.generated, 1); assert.equal(poll.received, 1);
+    assert.equal(classroom('PRI1-B').attendance, 'present'); assert.equal(classroom('PRI1-B').ballotIssued, true); assert.equal(classroom('PRI1-B').received, true);
+    assert.equal(poll.counts.MAT.options[poll.options.MAT[0].id], 1); assert.equal(poll.counts.COM.options[poll.options.COM[1].id], 1);
+    assert.equal(await director.getByLabel('Código anónimo', { exact: true }).count(), 0);
+  });
+  await checked('A5 printing uses only outstanding non-absent classrooms and shows each classroom and short folio without QR or long codes', async () => {
+    const generated = await rpcUi(director, 'paper_ballots_generate', () => director.getByRole('button', { name: 'Generar fichas A5 del padrón', exact: true }).click());
+    poll = generated.poll; assert.equal(poll.generated, 9); assert.equal(poll.received, 1); assert.equal(generated.ballots.length, 8);
+    assert(!generated.ballots.some(item => ['PRI1-B', 'PRI2-E'].includes(item.classroomId)));
+    assert(generated.ballots.every(item => /^P1-\d{2}$/.test(item.folio)));
     const frame = director.getByTitle('Vista previa de las fichas A5', { exact: true }); await frame.waitFor({ state: 'visible' });
     const url = await frame.getAttribute('src'); assert(url.startsWith('blob:'));
     ballotBytes = new Uint8Array(await director.evaluate(async source => Array.from(new Uint8Array(await (await fetch(source)).arrayBuffer())), url));
-    const pdf = await PDFDocument.load(ballotBytes); assert.equal(pdf.getPageCount(), 1);
-    assert(Math.abs(pdf.getPage(0).getWidth() - PAPER_A5.width) < .01); assert(Math.abs(pdf.getPage(0).getHeight() - PAPER_A5.height) < .01);
-    writeFileSync('test-results/anonima-demo-A5.pdf', ballotBytes);
-    acceptedPhoto = await markedPhoto(ballotBytes, poll);
+    const pdf = await PDFDocument.load(ballotBytes); assert.equal(pdf.getPageCount(), 8);
+    for (const page of pdf.getPages()) { assert(Math.abs(page.getWidth() - PAPER_A5.width) < .01); assert(Math.abs(page.getHeight() - PAPER_A5.height) < .01); }
+    writeFileSync('test-results/aulas-demo-A5.pdf', ballotBytes);
+    execFileSync('pdftotext', ['-layout', 'test-results/aulas-demo-A5.pdf', 'test-results/aulas-demo-A5.txt'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    const text = readFileSync('test-results/aulas-demo-A5.txt', 'utf8').replace(/\s+/g, ' ');
+    for (const ballot of generated.ballots) { assert(text.includes(ballot.classroomLabel)); assert(text.includes(ballot.folio)); }
+    assert.doesNotMatch(text, /Código anónimo|AE27\||Fotografíe|QR/); assert(!text.includes(classroom('PRI2-E').label)); assert(!text.includes(classroom('PRI1-B').label));
   });
-  await checked('a real rasterized A5 photograph passes local QR and mark recognition and immediately updates server vote aggregates', async () => {
-    const accepted = await uploadAndObserve(acceptedPhoto);
-    assert.equal(accepted.accepted, true); poll = accepted.poll;
-    assert.equal(poll.received, 1); assert.equal(poll.counts.MAT.options[poll.options.MAT[0].id], 1); assert.equal(poll.counts.COM.options[poll.options.COM[1].id], 1);
-    const reading = director.locator('.paper-reading').filter({ hasText: 'anonima-demo-marcada.png' });
-    await reading.getByText('Contada', { exact: true }).waitFor();
-    assert(await reading.locator('img').evaluate(image => image.complete && image.naturalWidth > 0));
-    const serverPoll = (await currentState()).paperPolls.find(item => item.id === poll.id); assert.equal(serverPoll.received, 1);
+  await checked('a second manual classroom vote is counted once and an immediate duplicate is rejected without changing aggregates', async () => {
+    const choices = { MAT: poll.options.MAT[0].id, COM: poll.options.COM[1].id };
+    const form = await manualForm('PRI1-A', choices);
+    const accepted = await rpcUi(director, 'paper_manual_cast', () => form.getByRole('button', { name: 'Guardar voto manual', exact: true }).click());
+    poll = accepted.poll; assert.equal(poll.received, 2); assert.equal(poll.generated, 9);
+    const before = await currentPoll();
+    const duplicate = await rawRpc('paper_manual_cast', { pollId: poll.id, classroomId: 'PRI1-A', choices, expectedVersion: poll.version, confirmation: true });
+    assert.equal(duplicate.status, 409); assert.deepEqual(await currentPoll(), before);
+    const absent = await rawRpc('paper_attendance_save', { pollId: poll.id, classroomId: 'PRI1-A', attendance: 'absent', expectedVersion: poll.version });
+    assert([409, 423].includes(absent.status)); assert.deepEqual(await currentPoll(), before);
   });
-  await checked('photographing the same sheet again yields a server conflict and never adds a second vote', async () => {
-    await uploadAndObserve(acceptedPhoto, 'Ya había sido contada', 409);
-    await director.getByText('La ficha ya fue registrada; esta foto no añadió votos.', { exact: true }).waitFor();
-    const serverPoll = (await currentState()).paperPolls.find(item => item.id === poll.id); assert.equal(serverPoll.received, 1); assert.equal(serverPoll.counts.MAT.options[poll.options.MAT[0].id], 1);
+  await checked('a documented correction changes only the selected choices and never adds a classroom or a received vote', async () => {
+    const choices = { MAT: poll.options.MAT[1].id, COM: poll.options.COM[1].id };
+    const originalVoteVersion = classroom('PRI1-B').voteVersion;
+    const form = await manualForm('PRI1-B', choices, true);
+    const corrected = await rpcUi(director, 'paper_manual_correct', () => form.getByRole('button', { name: 'Guardar corrección', exact: true }).click());
+    poll = corrected.poll ?? corrected;
+    assert.equal(poll.received, 2); assert.equal(poll.generated, 9);
+    assert.equal(poll.counts.MAT.options[poll.options.MAT[0].id], 1); assert.equal(poll.counts.MAT.options[poll.options.MAT[1].id], 1);
+    assert.equal(poll.counts.COM.options[poll.options.COM[1].id], 2);
+    assert.equal(classroom('PRI1-B').received, true); assert.equal(classroom('PRI1-B').voteVersion, originalVoteVersion + 1);
+    assert.deepEqual(classroom('PRI1-B').choices, choices);
+    const before = await currentPoll();
+    const stale = await rawRpc('paper_manual_correct', { pollId: poll.id, classroomId: 'PRI1-B', choices, expectedVersion: poll.version, expectedVoteVersion: originalVoteVersion, reason: 'Un intento atrasado no debe alterar el voto ya corregido', confirmation: true });
+    assert.equal(stale.status, 409); assert.deepEqual(await currentPoll(), before);
   });
-  await checked('multiple dark choices stay in manual review and cannot silently alter the anonymous count', async () => {
-    const doubtfulPhoto = await markedPhoto(ballotBytes, poll, true);
-    await director.waitForFunction(() => !document.querySelector('input[type=file][aria-label="Archivos de fotos para leer"]').disabled);
-    await director.locator('input[type=file][aria-label="Archivos de fotos para leer"]').setInputFiles(doubtfulPhoto);
-    const reading = director.locator('.paper-reading').filter({ hasText: 'anonima-demo-dudosa.png' }); await reading.getByText('Revisión necesaria', { exact: true }).waitFor();
-    assert((await reading.innerText()).includes('más de una casilla marcada'));
-    assert.equal((await currentState()).paperPolls.find(item => item.id === poll.id).received, 1);
-    assert(await director.getByRole('button', { name: 'Cerrar votación y calcular resultado', exact: true }).isDisabled());
-    await reading.getByRole('button', { name: 'Quitar anonima-demo-dudosa.png de la lista', exact: true }).click();
+  await checked('public results identify each classroom and its registered options while preserving coordinator access secrets', async () => {
+    const projected = (await rpc('public_snapshot')).state;
+    assert(!projected.presentationRanking);
+    const serialized = JSON.stringify(projected);
+    assert(serialized.includes('PRI1-A')); assert(serialized.includes('PRI1-B')); assert(serialized.includes('PRI2-E'));
+    assert(serialized.includes(poll.options.MAT[0].id)); assert(serialized.includes(poll.options.MAT[1].id)); assert(serialized.includes(poll.options.COM[1].id));
+    assert(!serialized.includes(privateObservation));
+    for (const secret of secrets) assert(!serialized.includes(secret));
+    const projection = await newPage({ width: 390, height: 844 });
+    await projection.goto(`${base}/?vista=publica&datos=demo#votacion-padres`);
+    await projection.getByRole('heading', { name: 'Votación por aula', exact: true }).waitFor();
+    const election = projection.getByLabel('Votación de familias', { exact: true });
+    if (await election.count()) await election.selectOption(poll.id);
+    const table = projection.getByRole('table', { name: 'Votos registrados por aula', exact: true });
+    await table.waitFor(); assert.equal(await table.locator('tbody tr').count(), 10);
+    const corrected = table.locator('tbody tr').filter({ hasText: classroom('PRI1-B').label });
+    assert((await corrected.innerText()).includes(poll.options.MAT[1].name));
+    assert((await corrected.innerText()).includes(poll.options.COM[1].name));
+    assert((await table.locator('tbody tr').filter({ hasText: classroom('PRI2-E').label }).innerText()).includes('Sin asistencia'));
+    assert(await projection.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await projection.screenshot({ path: 'test-results/votacion-aulas-publica-movil.png', fullPage: true });
   });
-  await checked('closing the paper election computes distinct winners without exposing codes, photos or private ranking to public and teacher snapshots', async () => {
+  await checked('closing freezes classroom entry and computes a Mathematics tie independently of the Communication winner', async () => {
+    for (const room of poll.classrooms.filter(item => !item.received && item.attendance !== 'absent')) {
+      poll = await rpc('paper_attendance_save', { pollId: poll.id, classroomId: room.id, attendance: 'absent', expectedVersion: poll.version });
+    }
+    await rpcUi(director, 'snapshot', () => director.getByRole('button', { name: 'Actualizar información', exact: true }).click());
+    await director.waitForFunction(() => [...document.querySelectorAll('select[aria-label^="Asistencia · "]')].every(select => select.value === 'absent' || select.disabled && select.value === 'present'));
     await director.getByRole('checkbox', { name: 'Confirmo que terminó la recepción y revisé el escrutinio.', exact: true }).check();
     const closed = await rpcUi(director, 'paper_poll_close', () => director.getByRole('button', { name: 'Cerrar votación y calcular resultado', exact: true }).click());
-    assert.equal(closed.status, 'closed'); assert.equal(closed.results.MAT.state, 'winner'); assert.equal(closed.results.COM.state, 'winner');
-    assert.equal(closed.results.MAT.winnerId, poll.options.MAT[0].id); assert.equal(closed.results.COM.winnerId, poll.options.COM[1].id);
+    assert.equal(closed.status, 'closed'); assert.equal(closed.results.MAT.state, 'tie'); assert.equal(closed.results.COM.state, 'winner');
+    assert.equal(closed.results.COM.winnerId, poll.options.COM[1].id); assert.equal(closed.received, 2);
     await director.locator('[aria-label="Resultados de la votación"]').screenshot({ path: 'test-results/recuento-real-resultados.png' });
-    for (const state of [(await rpc('snapshot', {}, teacherCodes[0])).state, (await rpc('public_snapshot')).state]) {
-      assert(!state.presentationRanking); assert(!state.paperPolls?.length); const serialized = JSON.stringify(state);
-      assert(!serialized.includes(privateObservation) || state.presentationEvaluations?.every(form => form.teacherId === seeded.teachers[0].id));
-      for (const secret of secrets) assert(!serialized.includes(secret));
-    }
+    const retry = await rawRpc('paper_manual_cast', { pollId: poll.id, classroomId: 'PRI1-C', choices: { MAT: poll.options.MAT[0].id, COM: poll.options.COM[1].id }, expectedVersion: closed.version, confirmation: true });
+    assert.equal(retry.status, 423);
     assert.deepEqual(cspErrors, []); assert.deepEqual(pageErrors, []);
   });
-  writeFileSync('test-results/jornada-local-browser-results.json', JSON.stringify({ at: new Date().toISOString(), backend: 'Node/Express + PostgreSQL + PostgREST reales; QR y OMR reales en Chromium', passed: checks.length, checks, pageErrors, cspErrors }, null, 2));
+  writeFileSync('test-results/jornada-local-browser-results.json', JSON.stringify({ at: new Date().toISOString(), backend: 'Node/Express + PostgreSQL + PostgREST reales; padrón, asistencia, A5 por aula y voto manual con corrección', passed: checks.length, checks, pageErrors, cspErrors }, null, 2));
 } catch (error) {
   const message = secrets.reduce((text, secret) => secret ? text.split(secret).join('[redacted]') : text, String(error?.stack ?? error)); console.error(message); process.exitCode = 1;
 } finally { await Promise.all(contexts.map(context => context.close())); await browser.close(); }

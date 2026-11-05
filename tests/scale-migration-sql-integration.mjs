@@ -159,9 +159,9 @@ await check('repetir 005 y previsualizar el borrado no modifica la jornada ni ej
   assert.equal(sql("select jsonb_build_object('datasets',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_datasets t),'history',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_history t),'access',(select jsonb_agg(to_jsonb(t) order by code_hash) from public.textos_access t))"), unchanged);
 });
 const update006 = readFileSync(new URL('../supabase/migrations/006-confirmacion-simple-e-i11-independiente.sql', import.meta.url));
-assert.equal(update006.toString(), readFileSync(new URL('../supabase/schema.sql', import.meta.url)).toString());
+assert.equal(createHash('sha256').update(update006).digest('hex'), '42d63eafe8b09e18bf7ea77b12f8e48ef2ccf3dc5733c577c30ac791b0a53c5f');
 const apply006 = () => execFileSync('docker', ['--host=unix:///var/run/docker.sock', 'exec', '-i', db, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres'], { env: dockerEnv, input: update006, stdio: ['pipe', 'pipe', 'pipe'] });
-const frozenDatabase = () => sql("select jsonb_build_object('datasets',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_datasets t),'history',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_history t),'access',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_access t),'credentials',(select jsonb_agg(to_jsonb(t) order by dataset) from public.textos_director_credentials t),'limits',(select jsonb_agg(to_jsonb(t) order by dataset) from public.textos_login_limits t),'ballots',(select jsonb_agg(to_jsonb(t) order by code_hash) from public.textos_ballots t),'paperTokens',(select jsonb_agg(to_jsonb(t) order by code_hash) from public.textos_paper_tokens t),'aggregates',(select jsonb_agg(to_jsonb(t) order by dataset,round_id,area,option_id) from public.textos_aggregates t))");
+const frozenDatabase = () => sql("select jsonb_build_object('datasets',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_datasets t),'history',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_history t),'access',(select jsonb_agg(to_jsonb(t) order by id) from public.textos_access t),'credentials',(select jsonb_agg(to_jsonb(t) order by dataset) from public.textos_director_credentials t),'limits',(select jsonb_agg(to_jsonb(t) order by dataset) from public.textos_login_limits t),'ballots',(select jsonb_agg(to_jsonb(t) order by code_hash) from public.textos_ballots t),'paperTokens',(select jsonb_agg(jsonb_strip_nulls(to_jsonb(t)) order by code_hash) from public.textos_paper_tokens t),'aggregates',(select jsonb_agg(to_jsonb(t) order by dataset,round_id,area,option_id) from public.textos_aggregates t))");
 let legacy005Form, legacy005Question;
 await check('005 conserva una pregunta transcrita y una ficha vigente cerrada con su versión de pregunta original', async () => {
   const current = await state(); const publisherId = current.presentationDraw.publishers[0].id;
@@ -212,4 +212,118 @@ await check('tras 006 I11 puede guardarse y cerrarse sin turno ni confirmación 
   assert.equal(result.closed, 1); assert.equal(result.score, 4000 / 44);
   assert.ok(!((await state()).presentationQuestions ?? []).some(question => question.publisherId === publisherId));
 });
-console.log(`${checks} pruebas de migración 002→003→004→005→006 SQL/HTTP aprobadas.`);
+
+
+// The 006 anonymous paper election remains anonymous after upgrading: a nullable
+// classroom_id column is metadata for new rosters, never a retroactive identity.
+const asSql = value => `convert_from(decode('${Buffer.from(JSON.stringify(value)).toString('hex')}','hex'),'UTF8')::jsonb`;
+let legacy006Poll, legacy006Codes, modern007Poll;
+await check('006 conserva una votación anónima con fichas emitidas y un voto ya contabilizado antes de actualizar', async () => {
+  const now = '2026-11-04T19:00:00.000Z';
+  const options = publishers.map(publisher => ({ id: publisher.id, name: publisher.name }));
+  const zero = () => ({ options: Object.fromEntries(options.map(option => [option.id, 0])), blank: 0, invalid: 0 });
+  legacy006Poll = { id: 'anonymous-before-007', version: 1, block: 'S1', areas: ['MAT', 'COM'], options: { MAT: options, COM: options }, status: 'open', rankingId: 'ranking-before-007', rankingVersion: 1, createdAt: now, closedAt: null, generated: 0, received: 0, counts: { MAT: zero(), COM: zero() }, results: {} };
+  sql(`do $$ declare s jsonb; begin select state into s from public.textos_datasets where id='demo' for update; s:=public.textos_put(s,'paperPolls',${asSql(legacy006Poll)}); perform public.textos_validate_state(s); update public.textos_datasets set state=s where id='demo'; end $$;`);
+  const batch = await ok('paper_ballots_generate', { pollId: legacy006Poll.id, expectedVersion: legacy006Poll.version, count: 3 });
+  legacy006Codes = batch.codes;
+  legacy006Poll = (await ok('paper_scan_cast', { pollId: legacy006Poll.id, code: legacy006Codes[0], choices: { MAT: options[1].id, COM: null } })).poll;
+  assert.equal(legacy006Poll.generated, 3); assert.equal(legacy006Poll.received, 1);
+  assert.equal(sql("select count(*) from public.textos_paper_tokens where consumed"), '1');
+  assert.equal(legacy006Poll.rosterVersion, undefined); assert.equal(legacy006Poll.classrooms, undefined);
+});
+const update007 = readFileSync(new URL('../supabase/migrations/007-padron-aulas-y-voto-manual.sql', import.meta.url));
+assert.equal(update007.toString(), readFileSync(new URL('../supabase/schema.sql', import.meta.url)).toString());
+const apply007 = () => execFileSync('docker', ['--host=unix:///var/run/docker.sock', 'exec', '-i', db, 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-U', 'postgres'], { env: dockerEnv, input: update007, stdio: ['pipe', 'pipe', 'pipe'] });
+await check('007 se instala sin cambiar votos anónimos, tokens consumidos, notas previas, credenciales ni historial', async () => {
+  const unchanged = frozenDatabase(); apply007(); assert.equal(frozenDatabase(), unchanged);
+  const after = await state();
+  assert.deepEqual(after.paperPolls.find(poll => poll.id === legacy006Poll.id), legacy006Poll);
+  assert.deepEqual(after.presentationEvaluations.find(form => form.id === legacy005Form.id), legacy005Form);
+  assert.equal(sql("select count(*) from public.textos_paper_tokens where classroom_id is not null"), '0');
+  const publicState = (await ok('public_snapshot', {}, null)).state;
+  const exposed = JSON.stringify(publicState);
+  assert.ok(!legacy006Codes.some(code => exposed.includes(code))); assert.ok(!exposed.includes('code_hash'));
+  const legacyPublic = publicState.paperPolls?.find(poll => poll.id === legacy006Poll.id);
+  assert.ok(!legacyPublic?.classrooms); assert.ok(!legacyPublic?.rosterVersion);
+});
+await check('repetir 007 no asigna aulas a fichas anónimas ni reabre votos ya contabilizados', async () => {
+  const unchanged = frozenDatabase(); apply007(); apply007(); assert.equal(frozenDatabase(), unchanged);
+  const duplicate = await rpc('paper_scan_cast', { pollId: legacy006Poll.id, code: legacy006Codes[0], choices: { MAT: null, COM: null } });
+  assert.equal(duplicate.status, 409);
+  assert.deepEqual((await state()).paperPolls.find(poll => poll.id === legacy006Poll.id), legacy006Poll);
+  legacy006Poll = (await ok('paper_scan_cast', { pollId: legacy006Poll.id, code: legacy006Codes[1], choices: { MAT: null, COM: legacy006Poll.options.COM[0].id } })).poll;
+  assert.equal(legacy006Poll.received, 2); assert.equal(legacy006Poll.classrooms, undefined);
+  assert.equal(sql("select count(*) from public.textos_paper_tokens where classroom_id is not null"), '0');
+});
+await check('tras 007 una votación nueva crea diez aulas P1 con cinco secciones por grado y folios únicos', async () => {
+  const source = await state(); const now = '2026-11-04T19:20:00.000Z';
+  const com = await ok('teacher_register', { firstNames: 'Docente comunicación', lastNames: 'Migración siete', area: 'COM', categories: ['P1'] }, null);
+  const fixture = await state();
+  fixture.offers.push({ id: 'upgrade-com-offer', version: 1, seriesId: 'legacy-series', area: 'COM', block: 'P1', edition: '2027', status: 'offered', withdrawalReason: '' });
+  for (const teacher of fixture.teachers.filter(teacher => ['MAT', 'COM'].includes(teacher.area) && teacher.categories.includes('P1'))) for (const [index, publisher] of fixture.publishers.entries()) {
+    const previous = fixture.presentationEvaluations.find(form => form.publisherId === publisher.id && form.teacherId === teacher.id && form.area === teacher.area && form.block === 'P1');
+    if (previous?.scaleMax === 4 && previous?.rubricVersion === 2 && previous?.status === 'closed') continue;
+    const form = { ...(previous ?? {}), id: previous?.id ?? `upgrade-${teacher.id}-${publisher.id}`, version: (previous?.version ?? 0) + 1, publisherId: publisher.id, teacherId: teacher.id, area: teacher.area, block: 'P1', scores: Array(10).fill(4 - index), scaleMax: 4, rubricVersion: 2, responseScore: 4 - index, questionVersion: null, notes: Array(10).fill('Fixture posterior a la migración; no altera la ficha005 cerrada'), physicalText: '', generalObservation: '', status: 'closed', closedAt: now, updatedAt: now, rulesVersion: fixture.settings.rules.version };
+    if (previous) fixture.presentationEvaluations[fixture.presentationEvaluations.indexOf(previous)] = form; else fixture.presentationEvaluations.push(form);
+  }
+  fixture.presentationQuestions ??= [];
+  for (const publisher of fixture.publishers) if (!fixture.presentationQuestions.some(question => question.publisherId === publisher.id && question.status === 'answered')) {
+    const prior = fixture.presentationQuestions.find(question => question.publisherId === publisher.id);
+    const confirmation = { ...(prior ?? {}), id: prior?.id ?? `upgrade-question-${publisher.id}`, publisherId: publisher.id, version: (prior?.version ?? 0) + 1, confirmed: true, status: 'answered', askedAt: now, answeredAt: now, updatedAt: now };
+    if (prior) fixture.presentationQuestions[fixture.presentationQuestions.indexOf(prior)] = confirmation; else fixture.presentationQuestions.push(confirmation);
+  }
+  fixture.presentationDraw.completedPublisherIds = fixture.presentationDraw.publishers.map(publisher => publisher.id);
+  fixture.turn = { publisherId: fixture.presentationDraw.publishers.at(-1).id, status: 'finished', startedAt: now, pausedAt: now, pausedMilliseconds: 0 };
+  sql(`do $$ declare s jsonb := ${asSql(fixture)}; begin perform public.textos_validate_state(s); update public.textos_datasets set state=s where id='demo'; end $$;`);
+  const ranking = await ok('presentation_ranking_generate', { expectedVersion: fixture.presentationRanking?.version ?? 0 });
+  assert.equal(ranking.provisional, false);
+  modern007Poll = await ok('paper_poll_create', { block: 'P1', areas: ['MAT', 'COM'], rankingId: ranking.id, expectedRankingVersion: ranking.version });
+  assert.equal(modern007Poll.rosterVersion, 1); assert.equal(modern007Poll.classrooms.length, 10);
+  for (const grade of ['PRI1', 'PRI2']) assert.deepEqual(modern007Poll.classrooms.filter(classroom => classroom.gradeId === grade).map(classroom => classroom.section), ['A', 'B', 'C', 'D', 'E']);
+  assert.equal(new Set(modern007Poll.classrooms.map(classroom => classroom.folio)).size, 10);
+  assert.ok(modern007Poll.classrooms.every(classroom => /^P1-\d{2}$/.test(classroom.folio) && classroom.attendance === 'pending' && !classroom.received));
+  assert.deepEqual((await state()).presentationEvaluations.find(form => form.id === legacy005Form.id), legacy005Form);
+  assert.ok(com.code); assert.ok(source.presentationEvaluations.some(form => form.id === legacy005Form.id));
+});
+await check('el padrón marca sin asistencia y el voto manual por aula conserva I11 y suma solo una vez', async () => {
+  const absent = modern007Poll.classrooms.find(classroom => classroom.id === 'PRI1-A');
+  modern007Poll = await ok('paper_attendance_save', { pollId: modern007Poll.id, classroomId: absent.id, attendance: 'absent', expectedVersion: modern007Poll.version });
+  assert.equal(modern007Poll.classrooms.find(classroom => classroom.id === absent.id).attendance, 'absent');
+  const denied = await rpc('paper_manual_cast', { pollId: modern007Poll.id, classroomId: absent.id, choices: { MAT: null, COM: null }, expectedVersion: modern007Poll.version, confirmation: true });
+  assert.ok([409, 423].includes(denied.status), JSON.stringify(denied));
+  const selected = modern007Poll.classrooms.find(classroom => classroom.id === 'PRI1-B');
+  const choices = { MAT: modern007Poll.options.MAT[2].id, COM: null };
+  const accepted = await ok('paper_manual_cast', { pollId: modern007Poll.id, classroomId: selected.id, choices, expectedVersion: modern007Poll.version, confirmation: true });
+  assert.equal(accepted.accepted, true); modern007Poll = accepted.poll;
+  assert.equal(modern007Poll.received, 1); assert.equal(modern007Poll.generated, 1);
+  const classroom = modern007Poll.classrooms.find(item => item.id === selected.id);
+  assert.equal(classroom.attendance, 'present'); assert.equal(classroom.received, true); assert.deepEqual(classroom.choices, choices); assert.equal(classroom.voteVersion, 1);
+  assert.equal(modern007Poll.counts.MAT.options[choices.MAT], 1); assert.equal(modern007Poll.counts.COM.blank, 1);
+  const publicPoll = (await ok('public_snapshot', {}, null)).state.paperPolls.find(poll => poll.id === modern007Poll.id);
+  assert.equal(publicPoll.status, 'open');
+  const publicClassroom = publicPoll.classrooms.find(item => item.id === classroom.id);
+  assert.deepEqual(publicClassroom.choices, choices); assert.equal(publicClassroom.voteVersion, 1);
+  assert.equal(publicClassroom.folio, classroom.folio);
+  assert.equal(publicPoll.classrooms.find(item => item.id === absent.id).attendance, 'absent');
+  assert.doesNotMatch(JSON.stringify(publicPoll), /code_hash|\"code\"|\"actor\"|\"reason\"/);
+  const duplicate = await rpc('paper_manual_cast', { pollId: modern007Poll.id, classroomId: selected.id, choices, expectedVersion: modern007Poll.version, confirmation: true });
+  assert.equal(duplicate.status, 409);
+  assert.deepEqual((await state()).presentationEvaluations.find(form => form.id === legacy005Form.id), legacy005Form);
+});
+await check('corregir una transcripción ajusta conteos y su versión sin duplicar la ficha ni modificar la rúbrica docente', async () => {
+  const classroom = modern007Poll.classrooms.find(item => item.id === 'PRI1-B');
+  const oldChoice = classroom.choices.MAT;
+  const choices = { MAT: modern007Poll.options.MAT[0].id, COM: modern007Poll.options.COM[1].id };
+  const corrected = await ok('paper_manual_correct', { pollId: modern007Poll.id, classroomId: classroom.id, choices, expectedVersion: modern007Poll.version, expectedVoteVersion: classroom.voteVersion, reason: 'Corrección contra la papeleta original' });
+  modern007Poll = corrected.poll ?? corrected;
+  const after = modern007Poll.classrooms.find(item => item.id === classroom.id);
+  assert.equal(modern007Poll.received, 1); assert.equal(modern007Poll.generated, 1); assert.equal(after.voteVersion, 2); assert.deepEqual(after.choices, choices);
+  assert.equal(modern007Poll.counts.MAT.options[oldChoice], 0); assert.equal(modern007Poll.counts.MAT.options[choices.MAT], 1); assert.equal(modern007Poll.counts.COM.blank, 0); assert.equal(modern007Poll.counts.COM.options[choices.COM], 1);
+  const stale = await rpc('paper_manual_correct', { pollId: modern007Poll.id, classroomId: classroom.id, choices: classroom.choices, expectedVersion: modern007Poll.version, expectedVoteVersion: classroom.voteVersion, reason: 'Una pantalla antigua no debe sobrescribir' });
+  assert.equal(stale.status, 409);
+  const publicClassroom = (await ok('public_snapshot', {}, null)).state.paperPolls.find(poll => poll.id === modern007Poll.id).classrooms.find(item => item.id === classroom.id);
+  assert.deepEqual(publicClassroom.choices, choices); assert.equal(publicClassroom.voteVersion, 2);
+  assert.doesNotMatch(JSON.stringify(publicClassroom), /Corrección contra|Una pantalla antigua/);
+  assert.deepEqual((await state()).presentationEvaluations.find(form => form.id === legacy005Form.id), legacy005Form);
+});
+console.log(`${checks} pruebas de migración 002→003→004→005→006→007 SQL/HTTP aprobadas.`);

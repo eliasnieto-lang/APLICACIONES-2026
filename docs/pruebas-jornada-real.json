@@ -1,16 +1,19 @@
 {
-  "at": "2026-11-04T18:54:34.481Z",
-  "backend": "Node/Express + PostgreSQL + PostgREST reales; QR y OMR reales en Chromium",
-  "passed": 8,
+  "at": "2026-11-05T00:31:39.311Z",
+  "backend": "Node/Express + PostgreSQL + PostgREST reales; padrón, asistencia, A5 por aula y voto manual con corrección",
+  "passed": 11,
   "checks": [
     "server draw saves one random participation order and shares that exact order with teacher and public views",
     "a single checkbox confirms each question and answer while existing teacher scores remain independent",
     "Subdirector home opens server-generated ranking with final values and every teacher reaches 100% confirmed progress",
-    "paper UI creates an anonymous two-area election and serves the actual one-page A5 PDF through its CSP-permitted blob frame",
-    "a real rasterized A5 photograph passes local QR and mark recognition and immediately updates server vote aggregates",
-    "photographing the same sheet again yields a server conflict and never adds a second vote",
-    "multiple dark choices stay in manual review and cannot silently alter the anonymous count",
-    "closing the paper election computes distinct winners without exposing codes, photos or private ranking to public and teacher snapshots"
+    "paper voting creates exactly five A–E classrooms per grade, without a photo scanner or arbitrary ballot quantity",
+    "Sin asistencia is saved per classroom and excludes that classroom from printing and manual voting",
+    "a classroom vote can be transcribed without a photograph, QR code or previously issued ballot",
+    "A5 printing uses only outstanding non-absent classrooms and shows each classroom and short folio without QR or long codes",
+    "a second manual classroom vote is counted once and an immediate duplicate is rejected without changing aggregates",
+    "a documented correction changes only the selected choices and never adds a classroom or a received vote",
+    "public results identify each classroom and its registered options while preserving coordinator access secrets",
+    "closing freezes classroom entry and computes a Mathematics tie independently of the Communication winner"
   ],
   "pageErrors": [],
   "cspErrors": []

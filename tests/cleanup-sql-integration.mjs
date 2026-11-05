@@ -28,7 +28,7 @@ async function seed(withPoll=false,dataset='demo'){
  sql(`delete from public.textos_history where dataset='${dataset}';delete from public.textos_paper_tokens where dataset='${dataset}';delete from public.textos_ballots where dataset='${dataset}';delete from public.textos_aggregates where dataset='${dataset}';delete from public.textos_access where dataset='${dataset}' and role='teacher';update public.textos_datasets set state=${literal(base)} where id='${dataset}';select public.textos_validate_state(state) from public.textos_datasets where id='${dataset}'`);
  const code=dataset==='demo'?director:realDirector;
  teacher=(await ok('access_create',{role:'teacher',teacherId:'clean-t1'},code,dataset)).code;
- if(withPoll){const rank=await ok('presentation_ranking_generate',{expectedVersion:0},code,dataset);poll=await ok('paper_poll_create',{block:'P1',areas:['MAT','COM'],rankingId:rank.id,expectedRankingVersion:rank.version},code,dataset);batch=await ok('paper_ballots_generate',{pollId:poll.id,expectedVersion:poll.version,count:3},code,dataset);poll=batch.poll;}
+ if(withPoll){const rank=await ok('presentation_ranking_generate',{expectedVersion:0},code,dataset);poll=await ok('paper_poll_create',{block:'P1',areas:['MAT','COM'],rankingId:rank.id,expectedRankingVersion:rank.version},code,dataset);batch=await ok('paper_ballots_generate',{pollId:poll.id,expectedVersion:poll.version,classroomIds:poll.classrooms.slice(0,3).map(item=>item.id)},code,dataset);poll=batch.poll;}
 }
 async function preview(scope,ids=[]){return ok('data_delete_preview',{scope,ids});}
 async function apply(scope,ids=[]){const p=await preview(scope,ids);return ok('data_delete_apply',{scope,ids,expectedVersion:p.stateVersion,confirmation:scope==='all'?'ELIMINAR TODO':'ELIMINAR'});}
@@ -68,7 +68,7 @@ await check('borrar una editorial elimina preguntas/fichas propias y mantiene a 
  assert(!JSON.stringify(s).includes('clean-p1'));assert.equal(sql(`select count(*) from public.textos_paper_tokens where poll_id='${poll.id}'`),'0');
 });
 await check('borrar solo una votación elimina sus códigos y no altera fichas ni el ranking',async()=>{
- await seed(true);await ok('paper_scan_cast',{pollId:poll.id,code:batch.codes[0],choices:{MAT:'clean-p1',COM:null}});await apply('paperPoll',[poll.id]);const s=await state();assert.equal(s.paperPolls.length,0);assert.equal(s.presentationEvaluations.length,6);assert(s.presentationRanking);assert.equal(sql(`select count(*) from public.textos_paper_tokens where poll_id='${poll.id}'`),'0');
+ await seed(true);await ok('paper_manual_cast',{pollId:poll.id,classroomId:poll.classrooms[0].id,expectedVersion:poll.version,choices:{MAT:'clean-p1',COM:null},confirmation:true});await apply('paperPoll',[poll.id]);const s=await state();assert.equal(s.paperPolls.length,0);assert.equal(s.presentationEvaluations.length,6);assert(s.presentationRanking);assert.equal(sql(`select count(*) from public.textos_paper_tokens where poll_id='${poll.id}'`),'0');
  await reject('paper_scan_cast',{pollId:poll.id,code:batch.codes[0],choices:{MAT:'clean-p1',COM:null}},400);
 });
 await check('reiniciar el sorteo conserva fichas y ranking puede eliminarse por separado',async()=>{

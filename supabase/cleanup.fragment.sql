@@ -120,6 +120,7 @@ begin
  select count(*) into n from public.textos_ballots b where b.dataset=p_dataset and (scope='all' or removed->'rounds' ? b.round_id); counts:=counts||jsonb_build_object('ballots',n);
  select count(*) into n from public.textos_aggregates b where b.dataset=p_dataset and (scope='all' or removed->'rounds' ? b.round_id); counts:=counts||jsonb_build_object('voteAggregates',n);
  select count(*) into n from public.textos_paper_tokens b where b.dataset=p_dataset and (scope='all' or removed->'paperPolls' ? b.poll_id); counts:=counts||jsonb_build_object('paperTokens',n);
+ select count(*) into n from public.textos_paper_evidence b where b.dataset=p_dataset and (scope='all' or removed->'paperPolls' ? b.poll_id); counts:=counts||jsonb_build_object('paperEvidence',n);
  select count(*) into n from public.textos_history h where h.dataset=p_dataset and (scope='all' or plan->'allIds' ? h.reference_id or plan->'teacherNames' ? h.actor or public.textos_cleanup_mentions(h.previous,plan->'allIds')); counts:=counts||jsonb_build_object('history',n);
  preview:=jsonb_set(preview,'{counts}',counts);
  if p_action='data_delete_preview' then return jsonb_build_object('state',s,'result',preview,'referenceId',scope,'reason','','history','[]'::jsonb); end if;
@@ -129,6 +130,7 @@ begin
  delete from public.textos_ballots b where b.dataset=p_dataset and (scope='all' or removed->'rounds' ? b.round_id);
  delete from public.textos_aggregates b where b.dataset=p_dataset and (scope='all' or removed->'rounds' ? b.round_id);
  delete from public.textos_paper_tokens b where b.dataset=p_dataset and (scope='all' or removed->'paperPolls' ? b.poll_id);
+ delete from public.textos_paper_evidence b where b.dataset=p_dataset and (scope='all' or removed->'paperPolls' ? b.poll_id);
  delete from public.textos_history h where h.dataset=p_dataset and (scope='all' or plan->'allIds' ? h.reference_id or plan->'teacherNames' ? h.actor or public.textos_cleanup_mentions(h.previous,plan->'allIds'));
  return jsonb_build_object('state',plan->'state','result',jsonb_build_object('deleted',true,'preview',preview),'referenceId',scope,'reason','Eliminación administrativa de información confirmada','history','[]'::jsonb);
 end $$;

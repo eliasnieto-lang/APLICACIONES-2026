@@ -1,5 +1,6 @@
 import MineduReference from '../components/MineduReference';
-import { useState } from 'react';
+import PublicPaperLedger from '../components/PublicPaperLedger';
+import { useEffect, useState } from 'react';
 import type { Snapshot } from '../../shared/types';
 import { AREAS, BLOCKS } from '../../shared/domain';
 import { timerAudioSample, useTimerSound } from '../timer-audio';
@@ -14,10 +15,12 @@ export default function PresentationPublicView({ data, refresh }: { data: Snapsh
   const timing = turnTiming(s.turn, now, s.settings.rules.presentationSeconds, s.settings.rules.transitionSeconds);
   const sound = useTimerSound(timerAudioSample(s.turn, timing.elapsed, s.settings.rules.presentationSeconds));
   const published = (s.presentationShortlists ?? []).filter(item => item.status === 'published');
+  useEffect(() => { if (window.location.hash === '#votacion-padres') document.getElementById('votacion-padres')?.scrollIntoView(); }, [s.paperPolls?.length]);
   const sync = async () => { setBusy(true); setError(''); try { await refresh(); } catch (problem) { setError((problem as Error).message); } finally { setBusy(false); } };
   return <main className="stack" style={{ maxWidth: 1400, margin: '0 auto', padding: 'clamp(18px,4vw,45px)' }}>
     <header className="row between"><div><span className="eyebrow">{s.settings.school} · {data.dataset === 'demo' ? 'DEMOSTRACIÓN' : 'SALA PÚBLICA'}</span><h1>{s.settings.title}</h1></div><button disabled={busy} onClick={() => void sync()}>{busy ? 'Actualizando…' : 'Actualizar'}</button></header>
     {error && <div className="notice danger" role="alert">{error}</div>}
+    <PublicPaperLedger polls={s.paperPolls ?? []} />
     <MineduReference compact />
     {(active || published.length === 0 || Boolean(s.presentationDraw && s.presentationDraw.completedPublisherIds.length < s.presentationDraw.publishers.length)) && <>
       <section className="card stack" style={{ textAlign: 'center' }}>

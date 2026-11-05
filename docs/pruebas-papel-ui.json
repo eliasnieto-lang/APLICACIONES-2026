@@ -1,15 +1,20 @@
 {
-  "at": "2026-11-04T18:51:09.845Z",
-  "backend": "isolated UI API and scanner fixture; real PDF/scanner tested separately",
-  "passed": 7,
+  "at": "2026-11-05T00:19:57.108Z",
+  "backend": "isolated UI API; real SQL and PDF tested separately",
+  "passed": 12,
   "checks": [
-    "provisional rankings cannot create paper voting; both areas share one A5",
-    "create from final category ranking requires physical-review confirmation and sends both areas",
-    "generate unique-code batch and offer A5 print preview plus PDF download",
-    "clear photos process immediately and duplicate QR never adds another vote",
-    "uncertain marks wait for manual review of each area and explicit confirmation",
-    "wrong files are rejected locally and disabling automatic counting leaves clear scans pending",
-    "mobile view fits and closing produces visible independent area results including a tie"
+    "provisional ranking cannot open voting and the form has no scanner or long-code input",
+    "P1 creates ten named classrooms A–E, with short folios and both areas on one ballot",
+    "manual transcription needs only classroom and two choices, without printing or uploading a photo",
+    "Sin asistencia is saved and blocks voting and printing for that classroom",
+    "the PDF batch follows remaining classrooms and passes only classroom labels and short folios",
+    "replacing one classroom ballot keeps its folio and does not create a second eligible vote",
+    "blank and invalid votes are explicit manual choices and an already received classroom cannot be recounted",
+    "review shows the recorded vote and correction updates counts without adding a received ballot",
+    "a rejected attendance change keeps the saved selection and a failed correction preserves entered work",
+    "mobile ledger fits and closing leaves the votes visible with no further editing",
+    "changing category creates twenty or fifteen classrooms and clears the previous manual form",
+    "legacy polls remain readable and non-coordinators never see recording controls"
   ],
   "pageErrors": []
 }

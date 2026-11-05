@@ -45,16 +45,19 @@ Una ronda restaurada desde antes del último voto queda suspendida y conserva el
 
 `presentation_ranking_generate` recibe la versión esperada del ranking (0 al crearlo), requiere el sorteo terminado y toma los promedios actuales de todas las categorías. Distingue resultados provisionales y conserva su snapshot; `stale` se calcula mediante una huella de catálogo, docentes, fichas, reglas y sorteo. Los filtros y Top no cambian las notas ni publican una terna formal. El progreso docente cuenta criterios guardados (incluido 0) y cierres por separado.
 
-## Votación de padres A5
+## Votación de padres A5 por aula (actualización 007)
 
-`paper_poll_create` recibe `block`, `areas`, `rankingId` y `expectedRankingVersion`. La interfaz usa MAT y COM en una misma categoría. Se exige ranking final vigente y dos o tres opciones reales por área; la consulta del servidor recalcula las categorías y no confía en datos de un respaldo modificado.
+`paper_poll_create {block,areas,rankingId,expectedRankingVersion}` mantiene tres opciones por área y ahora crea `rosterVersion:1` y `classrooms`, con cinco secciones A–E por grado (P1=10, P2=20, S1=15). Cada aula tiene id, grado, sección, etiqueta, folio corto, asistencia, ficha emitida y voto recibido. Las votaciones anteriores siguen sin padrón y conservan su compatibilidad.
 
-`paper_ballots_generate` recibe `pollId`, `expectedVersion` y cantidad 1–200; retorna `{poll,codes}` una sola vez. El PDF y el QR se construyen localmente. Los códigos anónimos se guardan solo como huellas en una tabla privada, sin nombre ni selección.
+`paper_attendance_save {pollId,classroomId,attendance,expectedVersion}` guarda pending/present/absent. Un aula recibida no puede convertirse en ausente. La ausencia bloquea la emisión y el registro; puede corregirse mientras siga sin votar.
 
-`paper_scan_cast` recibe `pollId`, código y `choices` para todas las áreas: id de editorial, `null` para blanco o `__invalid__` para nulo. Consume el código e incrementa los agregados en una transacción; una repetición devuelve PT409. Las fotos y píxeles no salen del navegador. La detección de marcas requiere el formato generado y las lecturas dudosas pasan a revisión. No se escribe el código ni las selecciones en auditoría.
+`paper_ballots_generate {pollId,expectedVersion,classroomIds?}` retorna `{poll,codes,ballots}`. En los nuevos padrones, `codes` son folios cortos y `ballots` contiene `{classroomId,classroomLabel,folio}`; no se exponen secretos ni QR. Sin selección se emiten solo las aulas pendientes y no ausentes; una reposición explícita conserva su folio y no aumenta generated. Los polls anónimos antiguos conservan el contrato count/codes anterior únicamente como compatibilidad.
 
-`paper_poll_close` requiere versión, cierra recepción y devuelve resultados separados por área, sin declarar ganador en empate o ausencia de votos válidos. El respaldo incluye `paperTokens` como huellas; su restauración no puede reducir conteos, perder códigos emitidos ni volver a habilitar un código consumido. La votación actual por exposición se conserva separada de las rondas históricas por libro y grado.
+`paper_manual_cast {pollId,classroomId,choices,expectedVersion,confirmation:true}` registra una opción por área, `null` para blanco o `__invalid__` para nulo. Puede registrar antes de imprimir; el aula pasa a presente/emitida/recibida una sola vez. `paper_manual_correct {pollId,classroomId,choices,expectedVersion,expectedVoteVersion,reason}` corrige durante la apertura, con motivo y dos controles de versión; resta lo anterior y suma lo nuevo sin aumentar received. El historial conserva la revisión. `paper_poll_close` fija los resultados separados de ambas áreas.
 
+Los nuevos registros incluyen `choices`, `voteVersion`, `recordedAt` y `correctedAt` por aula. Su tabla pública está autorizada para el cotejo familiar: expone solo aula, folio, asistencia, opciones y estado, sin nombres de padres, credenciales ni fotos. `textos_paper_public` excluye los polls anónimos anteriores. Las nuevas fichas se registran manualmente; el scanner se conserva solo como compatibilidad de datos anteriores y no aparece en la interfaz.
+
+`paper_evidence_add/list/get/delete` gestiona fotografías privadas independientes del conteo, exclusivamente para coordinación. Una imagen se asocia a poll/aula; puede subirse después del cierre. No cambia versiones de votos ni resultados. El JSON administrativo incluye un manifiesto; las imágenes se descargan separadamente. El borrado de un poll o del espacio elimina también sus imágenes.
 
 ## Actualización 005: valoración adaptada y eliminación
 
@@ -69,4 +72,8 @@ Las referencias MINEDU son documentales: el colegio conserva su escala0–4; no 
 
 ## Actualización 006: I11 independiente y confirmación simple
 
-Ejecutar `supabase/migrations/006-confirmacion-simple-e-i11-independiente.sql` como propietario antes de publicar la interfaz. Es idéntica al esquema actual. Su instalación no modifica datos ni elimina fichas, notas, accesos o transcripciones anteriores. El seguimiento y los promedios cuentan I11 sin consultar el registro de confirmación. La huella del ranking excluye esa confirmación administrativa.
+Ejecutar `supabase/migrations/006-confirmacion-simple-e-i11-independiente.sql` como propietario antes de publicar la interfaz. Se conserva inmutable; la instalación vigente corresponde a007. Su instalación no modifica datos ni elimina fichas, notas, accesos o transcripciones anteriores. El seguimiento y los promedios cuentan I11 sin consultar el registro de confirmación. La huella del ranking excluye esa confirmación administrativa.
+
+## Instalación vigente007
+
+Ejecutar `supabase/migrations/007-padron-aulas-y-voto-manual.sql` antes de publicar la nueva interfaz. Coincide con el esquema actual y no elimina ni reidentifica datos anteriores. Los archivos 002–006 permanecen intactos.

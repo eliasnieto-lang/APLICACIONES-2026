@@ -35,8 +35,8 @@ await check('ranking final actual y referencias de versión son obligatorios',as
  await reject('paper_poll_create',{block:'P1',areas:['MAT','MAT'],rankingId:ranking.id,expectedRankingVersion:ranking.version});
  await reject('paper_poll_create',{block:'S1',areas:['MAT','COM'],rankingId:ranking.id,expectedRankingVersion:ranking.version},423);
 });
-await check('la ficha congela Top 3 por área y categoría sin usar libros históricos',async()=>{
- poll=await ok('paper_poll_create',{block:'P1',areas:['MAT','COM'],rankingId:ranking.id,expectedRankingVersion:ranking.version});assert.equal(poll.block,'P1');assert.deepEqual(poll.areas,['MAT','COM']);assert.equal(poll.generated,0);assert.equal(poll.received,0);assert.equal(poll.options.MAT.length,3);assert.equal(poll.options.COM.length,3);assert.equal(poll.options.MAT[0].id,state.publishers[0].id);
+await check('la ficha congela Top 3 y los polls anónimos anteriores continúan compatibles',async()=>{
+ poll=await ok('paper_poll_create',{block:'P1',areas:['MAT','COM'],rankingId:ranking.id,expectedRankingVersion:ranking.version});assert.equal(poll.classrooms.length,10);assert.equal(poll.rosterVersion,1);delete poll.rosterVersion;delete poll.classrooms;sql(`update public.textos_datasets set state=public.textos_put(state,'paperPolls',${asSql(poll)}) where id='demo'`);assert.equal(poll.block,'P1');assert.deepEqual(poll.areas,['MAT','COM']);assert.equal(poll.generated,0);assert.equal(poll.received,0);assert.equal(poll.options.MAT.length,3);assert.equal(poll.options.COM.length,3);assert.equal(poll.options.MAT[0].id,state.publishers[0].id);
  await reject('paper_poll_create',{block:'P1',areas:['MAT'],rankingId:ranking.id,expectedRankingVersion:ranking.version},409);
 });
 await check('generación de fichas anónimas tiene CAS, límites y códigos únicos',async()=>{

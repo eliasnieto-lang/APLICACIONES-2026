@@ -1,72 +1,71 @@
+import PaperEvidence from '../components/PaperEvidence';
 import { useEffect, useRef, useState } from 'react';
-import { Camera, CheckCircle2, Download, FilePlus2, Printer, RefreshCw, Upload, X } from 'lucide-react';
+import { Download, FilePlus2, PencilLine, Printer, RefreshCw, X } from 'lucide-react';
 import type { Area, Block, State, ViewProps } from '../../shared/types';
-import type { PaperPoll } from '../../shared/paper-vote';
+import type { PaperAttendance, PaperBallotsGenerated, PaperClassroom, PaperClassroomBallot, PaperPoll } from '../../shared/paper-vote';
 import type { PresentationRanking } from '../../shared/jornada';
-import { AREAS, BLOCKS } from '../../shared/domain';
+import { AREAS, BLOCKS, GRADES } from '../../shared/domain';
+import { paperClassroomRoster } from '../../shared/paper-vote';
 import { buildPaperVotingPdf } from '../paper-reports';
-import { scanPaperBallot } from '../paper-scan';
 import { downloadBytes } from '../reports';
 
 type PaperState = State & { paperPolls?: PaperPoll[]; presentationRanking?: PresentationRanking & { stale?: boolean } };
 type Choices = Partial<Record<Area, string | null | '__invalid__'>>;
-type ReadStatus = 'analyzing' | 'review' | 'submitting' | 'accepted' | 'duplicate' | 'error' | 'rejected';
-interface Reading {
-  id: string; name: string; previewUrl: string; status: ReadStatus;
-  code: string; pollId: string | null; choices: Choices; reasons: string[]; error: string;
-  reviewed: boolean;
-}
-interface PrintBatch { poll: PaperPoll; codes: string[]; bytes?: Uint8Array; url?: string }
-const MAX_PHOTO_BYTES = 12 * 1024 * 1024;
-const MAX_BATCH_PHOTOS = 100;
-const MAX_BATCH_BYTES = 80 * 1024 * 1024;
+interface PrintBatch { poll: PaperPoll; codes: string[]; ballots?: PaperClassroomBallot[]; bytes?: Uint8Array; url?: string }
 const areaName = (area: Area) => AREAS.find(item => item.id === area)?.label ?? area;
 const categoryName = (block: Block) => BLOCKS.find(item => item.id === block)?.label ?? block;
 const messageOf = (error: unknown) => error instanceof Error ? error.message : 'No se pudo confirmar la operación.';
-const statusName: Record<ReadStatus, string> = { analyzing: 'Leyendo foto', review: 'Revisión necesaria', submitting: 'Guardando', accepted: 'Contada', duplicate: 'Ya había sido contada', error: 'Sin confirmar', rejected: 'No se puede leer' };
-const choiceName = (poll: PaperPoll, area: Area, value: string | null | undefined) => value === null ? 'En blanco' : value === '__invalid__' ? 'Nulo' : value === undefined ? 'Pendiente de revisar' : poll.options[area]?.find(option => option.id === value)?.name ?? 'Opción desconocida';
-function validChoices(poll: PaperPoll, choices: Choices) { return poll.areas.every(area => Object.hasOwn(choices, area) && (choices[area] === null || choices[area] === '__invalid__' || poll.options[area]?.some(option => option.id === choices[area]))); }
-function isDuplicate(error: unknown) { return /ya (?:ha |había |fue )?(?:sido )?(?:registrad|recibid|contad|contabilizad|procesad)|cédula.*(?:usad|consumid)|duplicad/i.test(messageOf(error)); }
+const choiceName = (poll: PaperPoll, area: Area, value: string | null | undefined) => value === null ? 'En blanco' : value === '__invalid__' ? 'Nulo' : value === undefined ? 'Pendiente' : poll.options[area]?.find(option => option.id === value)?.name ?? 'Opción no disponible';
+const attendanceName: Record<PaperAttendance, string> = { pending: 'Pendiente de confirmar', present: 'Con asistencia', absent: 'Sin asistencia' };
+function validChoices(poll: PaperPoll, choices: Choices) {
+  return poll.areas.every(area => Object.hasOwn(choices, area) && (choices[area] === null || choices[area] === '__invalid__' || poll.options[area]?.some(option => option.id === choices[area])));
+}
 
 export default function PaperVoting({ snapshot, api, refresh, notify }: ViewProps) {
   const state = snapshot.state as PaperState;
   const rank = state.presentationRanking;
   const [block, setBlock] = useState<Block>('P1');
   const areas: Area[] = ['MAT', 'COM'];
-  const [selectedId, setSelectedId] = useState(() => state.paperPolls?.find(poll => poll.status === 'open')?.id ?? state.paperPolls?.at(-1)?.id ?? '');
+  const [selectedId, setSelectedId] = useState(() => state.paperPolls?.find(item => item.status === 'open')?.id ?? state.paperPolls?.at(-1)?.id ?? '');
   const [updatedPolls, setUpdatedPolls] = useState<Record<string, PaperPoll>>({});
   const [busy, setBusy] = useState(false);
-  const [processing, setProcessing] = useState(false);
-  const [autoProcess, setAutoProcess] = useState(true);
-  const [count, setCount] = useState('20');
   const [error, setError] = useState('');
-  const [readings, setReadings] = useState<Reading[]>([]);
+  const [success, setSuccess] = useState('');
   const [printBatch, setPrintBatch] = useState<PrintBatch | null>(null);
   const [pdfLoaded, setPdfLoaded] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const [reviewedSamples, setReviewedSamples] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const cameraRef = useRef<HTMLInputElement>(null);
+  const [gradeFilter, setGradeFilter] = useState('all');
+  const [attendanceFilter, setAttendanceFilter] = useState('all');
+  const [manualOpen, setManualOpen] = useState(false);
+  const [manualClassroomId, setManualClassroomId] = useState('');
+  const [manualChoices, setManualChoices] = useState<Choices>({});
+  const [manualReviewed, setManualReviewed] = useState(false);
+  const [manualCorrection, setManualCorrection] = useState(false);
+  const [manualVoteVersion, setManualVoteVersion] = useState(0);
+  const [manualReason, setManualReason] = useState('');
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const activeRef = useRef(false);
   const mountedRef = useRef(true);
-  const autoRef = useRef(autoProcess);
   const urlRef = useRef(new Set<string>());
-  const inFlightRef = useRef(new Set<string>());
   const printRef = useRef<PrintBatch | null>(null);
-  autoRef.current = autoProcess;
   printRef.current = printBatch;
+
   const polls = [...(state.paperPolls ?? [])];
-  for (const poll of Object.values(updatedPolls)) {
-    const index = polls.findIndex(item => item.id === poll.id);
-    if (index < 0) polls.push(poll); else if (poll.version >= polls[index].version) polls[index] = poll;
+  for (const value of Object.values(updatedPolls)) {
+    const index = polls.findIndex(item => item.id === value.id);
+    if (index < 0) polls.push(value); else if (value.version >= polls[index].version) polls[index] = value;
   }
   const poll = polls.find(item => item.id === selectedId);
+  const classrooms = poll?.rosterVersion === 1 ? poll.classrooms ?? [] : [];
+  const classroomPoll = poll?.rosterVersion === 1;
+  const availablePrint = classrooms.filter(item => !item.received && !item.ballotIssued && item.attendance !== 'absent');
+  const shownClassrooms = classrooms.filter(item => (gradeFilter === 'all' || item.gradeId === gradeFilter)
+    && (attendanceFilter === 'all' || attendanceFilter === 'received' && item.received || item.attendance === attendanceFilter));
+  const manualClassroom = classrooms.find(item => item.id === manualClassroomId);
   const coordinator = snapshot.actor.role === 'coordinator';
-  const locked = busy || processing;
-  const pending = readings.filter(item => ['review', 'error', 'analyzing', 'submitting'].includes(item.status)).length;
   const rankingReady = !!rank && !rank.provisional && !rank.stale;
-  const configuredAreasReady = areas.length > 0 && areas.every(area => (rank?.categories.find(category => category.area === area && category.block === block)?.ranked.filter(row => row.score !== null).length ?? 0) >= 3);
+  const configuredAreasReady = areas.every(area => (rank?.categories.find(category => category.area === area && category.block === block)?.ranked.filter(row => row.score !== null).length ?? 0) >= 3);
+  const publicUrl = '/?vista=publica' + (snapshot.dataset === 'demo' ? '&datos=demo' : '') + '#votacion-padres';
 
   useEffect(() => {
     if (!selectedId && polls.length) setSelectedId(polls.find(item => item.status === 'open')?.id ?? polls.at(-1)!.id);
@@ -76,43 +75,49 @@ export default function PaperVoting({ snapshot, api, refresh, notify }: ViewProp
     return () => { mountedRef.current = false; for (const url of urlRef.current) URL.revokeObjectURL(url); urlRef.current.clear(); };
   }, []);
   useEffect(() => { setConfirmClose(false); }, [selectedId, poll?.version]);
+  useEffect(() => {
+    setGradeFilter('all'); setAttendanceFilter('all'); setManualOpen(false);
+    setManualClassroomId(''); setManualChoices({}); setManualReviewed(false); setManualCorrection(false); setManualReason('');
+  }, [selectedId]);
 
-  function keepUrl(blob: Blob) { const url = URL.createObjectURL(blob); urlRef.current.add(url); return url; }
   function dropUrl(url?: string) { if (url) { URL.revokeObjectURL(url); urlRef.current.delete(url); } }
   function rememberPoll(value: PaperPoll) { if (mountedRef.current) setUpdatedPolls(current => ({ ...current, [value.id]: value })); }
-  function changeReading(id: string, values: Partial<Reading>) { if (mountedRef.current) setReadings(current => current.map(item => item.id === id ? { ...item, ...values } : item)); }
-  async function sync() { try { await refresh(); } catch { notify('La operación ya fue confirmada. No se pudo actualizar la vista; use Actualizar.', true); } }
-  function clearReadings() { if (activeRef.current) return; for (const item of readings) dropUrl(item.previewUrl); setReadings([]); }
-  function choosePoll(id: string) { if (activeRef.current || busy) return; clearReadings(); setSelectedId(id); setError(''); setConfirmClose(false); }
-
+  async function sync() {
+    try { await refresh(); }
+    catch { notify('No se pudo actualizar la vista. Use Actualizar para consultar la información del servidor.', true); }
+  }
+  function choosePoll(id: string) {
+    if (busy) return;
+    setSelectedId(id); setError(''); setSuccess(''); setConfirmClose(false);
+  }
   async function createPoll() {
     if (!rank || !rankingReady || !configuredAreasReady || !reviewedSamples) return;
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setSuccess('');
     try {
       const result = await api.call<PaperPoll>('paper_poll_create', { block, areas, rankingId: rank.id, expectedRankingVersion: rank.version });
-      rememberPoll(result); clearReadings(); setSelectedId(result.id); setReviewedSamples(false); await sync();
-      notify('Votación en papel preparada. Genere e imprima las fichas A5 para entregarlas a las familias.');
+      rememberPoll(result); setSelectedId(result.id); setReviewedSamples(false); await sync();
+      notify('Votación preparada con cinco secciones por grado y una ficha por aula.');
     } catch (problem) { setError(messageOf(problem)); }
     finally { if (mountedRef.current) setBusy(false); }
   }
   async function preparePdf(batch: PrintBatch) {
-    const bytes = await buildPaperVotingPdf(state, batch.poll, batch.codes, { demo: snapshot.dataset === 'demo', generatedAt: new Date().toISOString() });
-    const url = keepUrl(new Blob([new Uint8Array(bytes).buffer], { type: 'application/pdf' }));
+    const bytes = await buildPaperVotingPdf(state, batch.poll, batch.codes, { demo: snapshot.dataset === 'demo', generatedAt: new Date().toISOString(), ballots: batch.ballots });
+    const url = URL.createObjectURL(new Blob([new Uint8Array(bytes).buffer], { type: 'application/pdf' }));
+    urlRef.current.add(url);
     if (!mountedRef.current) { dropUrl(url); return; }
-    dropUrl(printRef.current?.url);
-    setPdfLoaded(false); setPrintBatch({ ...batch, bytes, url });
+    dropUrl(printRef.current?.url); setPdfLoaded(false); setPrintBatch({ ...batch, bytes, url });
   }
-  async function generate() {
-    const amount = Number(count);
-    if (!poll || poll.status !== 'open' || !Number.isInteger(amount) || amount < 1 || amount > 200) return;
-    setBusy(true); setError('');
+  async function generate(classroomIds?: string[]) {
+    if (!poll || !classroomPoll || poll.status !== 'open' || busy || !classroomIds && !availablePrint.length) return;
+    setBusy(true); setError(''); setSuccess('');
     try {
-      const result = await api.call<{ poll: PaperPoll; codes: string[] }>('paper_ballots_generate', { pollId: poll.id, expectedVersion: poll.version, count: amount });
+      const result = await api.call<PaperBallotsGenerated>('paper_ballots_generate', { pollId: poll.id, expectedVersion: poll.version, ...(classroomIds ? { classroomIds } : {}) });
       rememberPoll(result.poll);
-      const batch = { poll: result.poll, codes: result.codes };
+      const batch: PrintBatch = { poll: result.poll, codes: result.codes, ballots: result.ballots };
       dropUrl(printRef.current?.url); setPrintBatch(batch); printRef.current = batch;
-      await preparePdf(batch); await sync(); notify(`${result.codes.length} fichas A5 listas. Imprima a tamaño real, sin recortar las marcas ni el QR.`);
-    } catch (problem) { setError(`${messageOf(problem)}${printRef.current && !printRef.current.bytes ? ' Puede reintentar preparar el mismo PDF sin generar fichas nuevas.' : ''}`); }
+      await preparePdf(batch); await sync();
+      notify(result.codes.length + ' fichas A5 listas, identificadas por aula y folio.');
+    } catch (problem) { setError(messageOf(problem) + (printRef.current && !printRef.current.bytes ? ' Puede reintentar preparar el mismo PDF.' : '')); }
     finally { if (mountedRef.current) setBusy(false); }
   }
   async function retryPdf() {
@@ -126,105 +131,99 @@ export default function PaperVoting({ snapshot, api, refresh, notify }: ViewProp
     try { const win = frameRef.current?.contentWindow; if (!win) throw new Error(); win.focus(); win.print(); }
     catch { window.open(printBatch.url, '_blank', 'noopener,noreferrer'); }
   }
-
-  async function cast(row: Reading, selectedPoll: PaperPoll, manual: boolean) {
-    if (inFlightRef.current.has(row.id)) return;
-    if (selectedPoll.status !== 'open') return changeReading(row.id, { status: 'error', error: 'Esta votación ya está cerrada.' });
-    if (!row.code.trim() || !validChoices(selectedPoll, row.choices) || (row.pollId && row.pollId !== selectedPoll.id)) return changeReading(row.id, { status: 'review', error: 'Revise el código y una respuesta de cada área. La foto debe corresponder a esta votación.' });
-    if (manual && !row.reviewed) return changeReading(row.id, { status: 'review', error: 'Confirme que comparó la lectura con el papel original.' });
-    inFlightRef.current.add(row.id);
-    changeReading(row.id, { status: 'submitting', error: '' });
+  async function saveAttendance(classroom: PaperClassroom, attendance: PaperAttendance) {
+    if (!poll || poll.status !== 'open' || busy || classroom.received) return;
+    setBusy(true); setError(''); setSuccess('');
     try {
-      const result = await api.call<{ poll: PaperPoll; accepted: boolean }>('paper_scan_cast', { pollId: selectedPoll.id, code: row.code.trim(), choices: row.choices });
-      if (!result.accepted) throw new Error('El servidor no confirmó la recepción de esta ficha.');
-      rememberPoll(result.poll); changeReading(row.id, { status: 'accepted', code: '', reviewed: false, reasons: [] });
-      await sync();
-    } catch (problem) {
-      const duplicate = isDuplicate(problem);
-      changeReading(row.id, { status: duplicate ? 'duplicate' : 'error', error: duplicate ? 'La ficha ya fue registrada; esta foto no añadió votos.' : messageOf(problem), ...(duplicate ? { code: '' } : {}) });
-      if (duplicate) await sync();
-    } finally { inFlightRef.current.delete(row.id); }
-  }
-  async function confirmReading(row: Reading, selectedPoll: PaperPoll) {
-    if (busy || activeRef.current) return;
-    setBusy(true);
-    try { await cast(row, selectedPoll, true); }
+      const result = await api.call<PaperPoll>('paper_attendance_save', { pollId: poll.id, classroomId: classroom.id, attendance, expectedVersion: poll.version });
+      rememberPoll(result); await sync(); notify(classroom.label + ': ' + attendanceName[attendance] + '.');
+    } catch (problem) { setError(messageOf(problem)); }
     finally { if (mountedRef.current) setBusy(false); }
   }
-  async function loadPhotos(files: FileList | File[]) {
-    if (!poll || poll.status !== 'open' || activeRef.current || busy) return;
-    const batch = Array.from(files);
-    if (!batch.length) return;
-    if (batch.length > MAX_BATCH_PHOTOS) { setError(`Seleccione como máximo ${MAX_BATCH_PHOTOS} fotos por lote.`); return; }
-    if (batch.reduce((sum, file) => sum + file.size, 0) > MAX_BATCH_BYTES) { setError('El lote supera 80 MB. Cargue las fotos en grupos más pequeños.'); return; }
-    activeRef.current = true; setProcessing(true); setError('');
-    const selectedPoll = poll;
+  function openManual(classroomId = '', correction = false) {
+    const classroom = classrooms.find(item => item.id === classroomId);
+    setManualOpen(true); setManualClassroomId(classroomId);
+    setManualCorrection(correction); setManualChoices(correction ? { ...classroom?.choices } : {});
+    setManualVoteVersion(classroom?.voteVersion ?? 0); setManualReason(''); setManualReviewed(false); setError(''); setSuccess('');
+  }
+  async function saveManual() {
+    if (!poll || poll.status !== 'open' || !manualClassroom || busy || manualClassroom.attendance === 'absent'
+      || !manualReviewed || !validChoices(poll, manualChoices) || manualCorrection && manualReason.trim().length < 8
+      || !manualCorrection && manualClassroom.received) return;
+    setBusy(true); setError(''); setSuccess('');
     try {
-      for (const file of batch) {
-        if (!mountedRef.current) break;
-        const row: Reading = { id: crypto.randomUUID(), name: file.name, previewUrl: '', status: 'analyzing', code: '', pollId: null, choices: {}, reasons: [], error: '', reviewed: false };
-        const allowed = ['image/jpeg', 'image/png', 'image/webp'].includes(file.type);
-        if (!allowed || !file.size || file.size > MAX_PHOTO_BYTES) {
-          row.status = 'rejected'; row.error = !allowed ? 'Use una foto JPEG, PNG o WebP.' : 'La foto debe pesar hasta 12 MB y contener una imagen.';
-          setReadings(current => [...current, row]); continue;
-        }
-        row.previewUrl = keepUrl(file); setReadings(current => [...current, row]);
-        try {
-          const result = await scanPaperBallot(file, selectedPoll, snapshot.dataset);
-          if (!mountedRef.current) break;
-          const samePoll = !result.pollId || result.pollId === selectedPoll.id;
-          const complete = validChoices(selectedPoll, result.choices);
-          const ready: Reading = { ...row, code: result.code ?? '', pollId: result.pollId, choices: result.choices, reasons: [...result.reasons], status: 'review' };
-          if (!samePoll) ready.reasons.push('El QR pertenece a otra votación. Seleccione la votación correcta y vuelva a cargar la foto.');
-          if (!result.code) ready.reasons.push('No se pudo leer el código. Escríbalo desde la ficha original.');
-          if (!complete) ready.reasons.push('Complete la revisión de todas las áreas.');
-          changeReading(row.id, ready);
-          if (!result.needsReview && samePoll && result.code && complete && autoRef.current) await cast(ready, selectedPoll, false);
-        } catch (problem) { changeReading(row.id, { status: 'review', reasons: ['No se pudo completar la lectura automática. Revise el papel original.'], error: messageOf(problem) }); }
-      }
-    } finally {
-      activeRef.current = false;
-      if (mountedRef.current) setProcessing(false);
-      if (inputRef.current) inputRef.current.value = '';
-      if (cameraRef.current) cameraRef.current.value = '';
-    }
+      const result = await api.call<{ poll: PaperPoll; accepted: boolean }>(manualCorrection ? 'paper_manual_correct' : 'paper_manual_cast', {
+        pollId: poll.id, classroomId: manualClassroom.id, choices: manualChoices, expectedVersion: poll.version,
+        ...(manualCorrection ? { expectedVoteVersion: manualVoteVersion, reason: manualReason.trim() } : { confirmation: true }),
+      });
+      if (!result.accepted) throw new Error('El servidor no confirmó el registro del voto.');
+      rememberPoll(result.poll);
+      setSuccess(manualCorrection ? 'Voto de ' + manualClassroom.label + ' corregido. Se ajustó el conteo sin sumar otra ficha.' : 'Voto de ' + manualClassroom.label + ' registrado.');
+      setManualOpen(false); setManualClassroomId(''); setManualChoices({}); setManualReviewed(false); setManualReason('');
+      await sync();
+    } catch (problem) { setError(messageOf(problem)); }
+    finally { if (mountedRef.current) setBusy(false); }
   }
   async function closePoll() {
-    if (!poll || !confirmClose || pending || activeRef.current) return;
-    setBusy(true); setError('');
-    try { const result = await api.call<PaperPoll>('paper_poll_close', { pollId: poll.id, expectedVersion: poll.version }); rememberPoll(result); await sync(); notify('Recepción cerrada. El resultado distingue ganadores, empates, blancos y nulos.'); }
-    catch (problem) { setError(messageOf(problem)); }
+    if (!poll || !confirmClose || busy) return;
+    setBusy(true); setError(''); setSuccess('');
+    try {
+      const result = await api.call<PaperPoll>('paper_poll_close', { pollId: poll.id, expectedVersion: poll.version });
+      rememberPoll(result); setManualOpen(false); await sync(); notify('Votación cerrada. El resultado distingue ganadores, empates, blancos y nulos.');
+    } catch (problem) { setError(messageOf(problem)); }
     finally { if (mountedRef.current) setBusy(false); }
   }
-  const removeReading = (row: Reading) => { if (['analyzing', 'submitting'].includes(row.status)) return; dropUrl(row.previewUrl); setReadings(current => current.filter(item => item.id !== row.id)); };
 
-  if (!coordinator) return <section className="card"><h1>Votación familiar en papel</h1><p>La generación y lectura de fichas corresponde a Subdirección.</p></section>;
+  if (!coordinator) return <section className="card"><h1>Votación familiar en papel</h1><p>El registro de la votación corresponde a Subdirección.</p></section>;
   return <div className="paper-voting stack"><style>{paperStyles}</style>
-    <div><span className="eyebrow">ELECCIÓN DE LAS FAMILIAS</span><h1>Votación en papel</h1><p className="muted">Imprima fichas A5, lea sus fotos y revise el escrutinio de cada área. La valoración docente orienta la clasificación de tres editoriales; los padres eligen libremente entre ellas y su votación determina la elección final.</p></div>
+    <div><span className="eyebrow">ELECCIÓN DE LAS FAMILIAS</span><h1>Votación en papel</h1><p className="muted">Una ficha A5 por aula, con Matemática y Comunicación. Transcriba los votos del papel para actualizar el conteo y la tabla que pueden consultar los padres.</p></div>
     {error && <div className="notice danger" role="alert">{error}</div>}
+    {success && <div className="notice" role="status">{success}</div>}
     <details open={!polls.length}><summary>Preparar votación desde el ranking final</summary><div className="stack">
       {!rankingReady && <div className="notice warning">Primero complete las presentaciones y las fichas docentes y genere el ranking final en <strong>Ranking / Top</strong>. Un ranking provisional o desactualizado no abre la votación.</div>}
-      <div className="field-row"><label className="field">Categoría de la votación<select aria-label="Categoría de la votación" disabled={locked} value={block} onChange={event => setBlock(event.target.value as Block)}>{BLOCKS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label><div className="notice"><strong>Matemática y Comunicación</strong><br />Ambas áreas en una misma ficha A5, para esta categoría.</div></div>
-      <p className="muted">Se usarán las tres editoriales clasificadas del ranking de cada área y categoría. La ficha no pide nombre ni sección del votante.</p>
-      {areas.length > 0 && <div className="grid">{areas.map(area => { const category = rank?.categories.find(item => item.area === area && item.block === block); return <div key={area}><h3>{areaName(area)}</h3><ol>{category?.ranked.filter(item => item.score !== null).slice(0, 3).map(item => <li key={item.publisherId}>{state.publishers.find(publisher => publisher.id === item.publisherId)?.name ?? item.publisherId}</li>)}</ol>{(category?.ranked.filter(item => item.score !== null).length ?? 0) < 3 && <p className="notice warning">Se necesitan tres editoriales valoradas para esta área.</p>}</div>; })}</div>}
-      <label><input type="checkbox" disabled={locked} checked={reviewedSamples} onChange={event => setReviewedSamples(event.target.checked)} />Confirmo que las familias pudieron revisar los ejemplares físicos y que estas son las opciones que se imprimirán.</label>
-      <button className="primary" disabled={locked || !rankingReady || !configuredAreasReady || !reviewedSamples} onClick={() => void createPoll()}><FilePlus2 size={18} />Crear votación en papel</button>
+      <div className="field-row"><label className="field">Categoría de la votación<select aria-label="Categoría de la votación" disabled={busy} value={block} onChange={event => setBlock(event.target.value as Block)}>{BLOCKS.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label><div className="notice"><strong>Matemática y Comunicación</strong><br />Ambas áreas en una misma ficha A5, para esta categoría.</div></div>
+      <p className="muted">Se prepararán {paperClassroomRoster(block).length} aulas: cinco secciones por grado, de la A a la E. Se usarán las tres editoriales clasificadas de cada área. La valoración docente orienta; las familias eligen.</p>
+      <div className="grid">{areas.map(area => { const category = rank?.categories.find(item => item.area === area && item.block === block); return <div key={area}><h3>{areaName(area)}</h3><ol>{category?.ranked.filter(item => item.score !== null).slice(0, 3).map(item => <li key={item.publisherId}>{state.publishers.find(publisher => publisher.id === item.publisherId)?.name ?? item.publisherId}</li>)}</ol>{(category?.ranked.filter(item => item.score !== null).length ?? 0) < 3 && <p className="notice warning">Se necesitan tres editoriales valoradas para esta área.</p>}</div>; })}</div>
+      <label><input type="checkbox" disabled={busy} checked={reviewedSamples} onChange={event => setReviewedSamples(event.target.checked)} />Confirmo que las familias pudieron revisar los ejemplares físicos y que estas son las opciones que se imprimirán.</label>
+      <button className="primary" disabled={busy || !rankingReady || !configuredAreasReady || !reviewedSamples} onClick={() => void createPoll()}><FilePlus2 size={18} />Crear votación en papel</button>
     </div></details>
-    <section className="card stack"><div className="row between"><h2>Fichas y recepción</h2><button disabled={locked} onClick={() => void sync()}><RefreshCw size={16} />Actualizar</button></div>
-      <label className="field">Votación<select aria-label="Votación" disabled={locked} value={selectedId} onChange={event => choosePoll(event.target.value)}><option value="">Seleccione una votación</option>{polls.map(item => <option key={item.id} value={item.id}>{categoryName(item.block)} · {item.areas.map(areaName).join(' y ')} · {item.status === 'open' ? 'Abierta' : 'Cerrada'} · {new Date(item.createdAt).toLocaleString('es-PE')}</option>)}</select></label>
-      {!poll && <div className="empty-state">Cree una votación para generar sus fichas.</div>}
-      {poll && <><div className="paper-stats"><span><strong>{poll.generated}</strong> fichas generadas</span><span><strong>{poll.received}</strong> fichas recibidas</span><span className={`status ${poll.status === 'open' ? 'pending' : 'closed'}`}>{poll.status === 'open' ? 'Recepción abierta' : 'Recepción cerrada'}</span></div>
-        {poll.status === 'open' && <><div className="paper-print-controls"><label className="field">Cantidad de fichas A5<input type="number" min={1} max={200} step={1} value={count} disabled={locked} onChange={event => setCount(event.target.value)} /></label><button className="primary" disabled={locked || !Number.isInteger(Number(count)) || Number(count) < 1 || Number(count) > 200} onClick={() => void generate()}><Printer size={18} />Generar fichas A5</button></div><p className="muted">Cada ficha tiene un código anónimo de un solo uso. Imprima a tamaño real (100 %), con las cuatro esquinas y el QR completos. No fotocopie la misma ficha para distintos votos.</p></>}
-        {printBatch && printBatch.poll.id === poll.id && <section className="paper-print-preview stack" aria-label="Fichas A5 preparadas"><div className="row between"><h3>{printBatch.codes.length} fichas A5 preparadas</h3><button className="secondary" disabled={locked} onClick={() => { dropUrl(printBatch.url); setPrintBatch(null); }}><X size={16} />Cerrar PDF</button></div>{printBatch.bytes && printBatch.url ? <><div className="row"><button disabled={locked || !pdfLoaded} onClick={print}><Printer size={18} />Imprimir fichas A5</button><button disabled={locked} onClick={() => downloadBytes(printBatch.bytes!, `fichas-A5-${poll.block}.pdf`, 'application/pdf')}><Download size={18} />Descargar PDF A5</button><a href={printBatch.url} target="_blank" rel="noreferrer">Abrir PDF</a></div><iframe ref={frameRef} src={printBatch.url} onLoad={() => setPdfLoaded(true)} title="Vista previa de las fichas A5" /></> : <><p>Los códigos ya fueron generados. Prepare el mismo archivo para no emitir fichas nuevas.</p><button disabled={locked} onClick={() => void retryPdf()}>Reintentar preparar PDF</button></>}</section>}
-        {poll.status === 'open' && <section className="paper-upload stack"><h3>Cargar y leer fotos</h3><p>Fotografíe una ficha completa por imagen, sobre una superficie lisa y bien iluminada. Las fotos se analizan en este dispositivo; se envían únicamente los votos y el código anónimo.</p><label><input type="checkbox" checked={autoProcess} onChange={event => setAutoProcess(event.target.checked)} disabled={locked} />Registrar automáticamente las lecturas claras</label><p className="muted">Las lecturas dudosas requieren revisión. El servidor rechaza una ficha ya contada, aunque se fotografíe otra vez.</p><div className="row"><button className="primary" disabled={locked} onClick={() => inputRef.current?.click()}><Upload size={18} />{processing ? 'Procesando fotos…' : 'Cargar fotos de las fichas'}</button><button disabled={locked} onClick={() => cameraRef.current?.click()}><Camera size={18} />Tomar foto</button></div><input className="visually-hidden" disabled={locked} ref={inputRef} aria-label="Archivos de fotos para leer" type="file" multiple accept="image/jpeg,image/png,image/webp" onChange={event => { if (event.target.files) void loadPhotos(event.target.files); }} /><input className="visually-hidden" disabled={locked} ref={cameraRef} aria-label="Archivo de foto tomada con cámara" type="file" capture="environment" accept="image/jpeg,image/png,image/webp" onChange={event => { if (event.target.files) void loadPhotos(event.target.files); }} /><small>JPEG, PNG o WebP · hasta 12 MB por foto · hasta {MAX_BATCH_PHOTOS} fotos por lote (80 MB en total).</small></section>}
-        <section className="stack" aria-label="Resultados de la votación"><h3>Resultado por área</h3><p className="muted">Cada ficha recibida suma una respuesta por área. Las casillas sin marcar son votos en blanco; varias opciones marcadas son nulos.</p><div className="grid">{poll.areas.map(area => { const counts = poll.counts[area]; const result = poll.results[area]; const resultText = result?.state === 'winner' ? `Mayoría: ${poll.options[area]?.find(item => item.id === result.winnerId)?.name ?? 'opción ganadora'}` : result?.state === 'tie' ? `Empate: ${(result.tiedIds ?? []).map(id => poll.options[area]?.find(item => item.id === id)?.name ?? id).join(' / ')}` : result?.state === 'no_valid_votes' ? 'Sin votos válidos para determinar una mayoría.' : 'Conteo provisional · recepción abierta'; return <div className="card stack" key={area}><h3>{areaName(area)}</h3><div className="table-wrap"><table><thead><tr><th>Editorial</th><th>Votos</th></tr></thead><tbody>{poll.options[area]?.map(option => <tr key={option.id}><td>{option.name}</td><td>{counts?.options[option.id] ?? 0}</td></tr>)}<tr><td>En blanco</td><td>{counts?.blank ?? 0}</td></tr><tr><td>Nulos</td><td>{counts?.invalid ?? 0}</td></tr></tbody></table></div><strong>{resultText}</strong></div>; })}</div></section>
-        {!!readings.length && <section className="stack" aria-label="Lecturas de las fotos"><div className="row between"><h3>Lecturas de este dispositivo</h3><button disabled={locked} onClick={clearReadings}>Limpiar lista de fotos</button></div><p className="muted">{readings.filter(item => item.status === 'accepted').length} contadas ahora · {readings.filter(item => item.status === 'duplicate').length} repetidas · {pending} por revisar o confirmar.</p>{readings.map(row => <article className="paper-reading card stack" key={row.id}><div className="row between"><div><strong>{row.name}</strong><br /><span className={`status ${row.status === 'accepted' ? 'closed' : ['review', 'error', 'rejected'].includes(row.status) ? 'pending' : ''}`}>{row.status === 'accepted' && <CheckCircle2 size={13} />}{statusName[row.status]}</span></div><button aria-label={`Quitar ${row.name} de la lista`} disabled={locked || ['analyzing', 'submitting'].includes(row.status)} onClick={() => removeReading(row)}><X size={16} /></button></div><div className="paper-reading-layout">{row.previewUrl && <a href={row.previewUrl} target="_blank" rel="noreferrer"><img src={row.previewUrl} alt={`Foto de la ficha ${row.name}`} /></a>}<div className="stack">{row.reasons.length > 0 && <ul className="paper-reading-reasons">{row.reasons.map((reason, index) => <li key={index}>{reason}</li>)}</ul>}{row.error && <div className="notice danger" role="alert">{row.error}</div>}{['review', 'error'].includes(row.status) && poll.status === 'open' ? <><label className="field">Código anónimo de la ficha<input value={row.code} autoComplete="off" spellCheck={false} disabled={locked} onChange={event => changeReading(row.id, { code: event.target.value, reviewed: false })} /></label>{poll.areas.map(area => <label className="field" key={area}>{areaName(area)} · lectura<select aria-label={`${areaName(area)} · lectura`} value={Object.hasOwn(row.choices, area) ? row.choices[area] === null ? '__blank__' : row.choices[area] : '__pending__'} disabled={locked} onChange={event => changeReading(row.id, { choices: { ...row.choices, [area]: event.target.value === '__blank__' ? null : event.target.value }, reviewed: false })}><option value="__pending__">Seleccione después de revisar</option>{poll.options[area]?.map(option => <option key={option.id} value={option.id}>{option.name}</option>)}<option value="__blank__">En blanco</option><option value="__invalid__">Nulo · varias marcas o voto no válido</option></select></label>)}<label><input type="checkbox" checked={row.reviewed} disabled={locked} onChange={event => changeReading(row.id, { reviewed: event.target.checked })} />Comparé esta lectura con la ficha original.</label><button className="primary" disabled={locked || !row.reviewed || !row.code.trim() || !validChoices(poll, row.choices) || !!row.pollId && row.pollId !== poll.id} onClick={() => void confirmReading(row, poll)}>Confirmar y contar esta ficha</button></> : row.status !== 'rejected' && <ul>{poll.areas.map(area => <li key={area}><strong>{areaName(area)}:</strong> {choiceName(poll, area, row.choices[area])}</li>)}</ul>}</div></div></article>)}</section>}
-        {poll.status === 'open' && <section className="notice stack"><strong>Cerrar recepción</strong><p>Revise todos los papeles y las incidencias antes de cerrar. Después no se aceptarán más fichas en esta votación.</p>{pending > 0 && <p>Hay {pending} lecturas sin resolver en este dispositivo. Revise o retire esas fotos de la lista antes de cerrar.</p>}<label><input type="checkbox" disabled={locked || pending > 0} checked={confirmClose} onChange={event => setConfirmClose(event.target.checked)} />Confirmo que terminó la recepción y revisé el escrutinio.</label><button className="danger" disabled={locked || pending > 0 || !confirmClose} onClick={() => void closePoll()}>Cerrar votación y calcular resultado</button></section>}
+    <section className="card stack"><div className="row between"><h2>Fichas y recepción</h2><button disabled={busy} onClick={() => void sync()}><RefreshCw size={16} />Actualizar</button></div>
+      <label className="field">Votación<select aria-label="Votación" disabled={busy} value={selectedId} onChange={event => choosePoll(event.target.value)}><option value="">Seleccione una votación</option>{polls.map(item => <option key={item.id} value={item.id}>{categoryName(item.block)} · {item.areas.map(areaName).join(' y ')} · {item.status === 'open' ? 'Abierta' : 'Cerrada'} · {new Date(item.createdAt).toLocaleString('es-PE')}</option>)}</select></label>
+      {!poll && <div className="empty-state">Cree una votación para preparar sus fichas por aula.</div>}
+      {poll && <>
+        <div className="paper-stats">{classroomPoll && <span><strong>{classrooms.length}</strong> aulas</span>}<span><strong>{poll.generated}</strong> fichas habilitadas</span><span><strong>{poll.received}</strong> fichas recibidas</span><span className={'status ' + (poll.status === 'open' ? 'pending' : 'closed')}>{poll.status === 'open' ? 'Recepción abierta' : 'Recepción cerrada'}</span></div>
+        {!classroomPoll && <div className="notice warning">Esta votación anterior conserva sus resultados sin asignarlos retroactivamente a un aula. Para usar fichas por aula y transcripción manual, cierre esta votación y prepare una nueva.</div>}
+        {classroomPoll && <section className="stack" aria-label="Padrón de aulas">
+          <div className="row between"><h3>Padrón de aulas y votos</h3><a href={publicUrl} target="_blank" rel="noreferrer">Tabla pública para padres ↗</a></div>
+          <p className="muted">{classrooms.filter(item => item.attendance === 'present').length} con asistencia · {classrooms.filter(item => item.attendance === 'absent').length} sin asistencia · {classrooms.filter(item => item.attendance === 'pending').length} pendientes de confirmar. Cada aula tiene un folio y una sola ficha para ambas áreas.</p>
+          <div className="field-row"><label className="field">Filtrar por grado<select aria-label="Filtrar por grado" value={gradeFilter} onChange={event => setGradeFilter(event.target.value)}><option value="all">Todos los grados</option>{GRADES.filter(item => item.block === poll.block).map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label><label className="field">Filtrar aulas<select aria-label="Filtrar aulas" value={attendanceFilter} onChange={event => setAttendanceFilter(event.target.value)}><option value="all">Todas las aulas</option><option value="pending">Asistencia pendiente</option><option value="present">Con asistencia</option><option value="absent">Sin asistencia</option><option value="received">Voto registrado</option></select></label></div>
+          <div className="paper-classroom-list">{shownClassrooms.map(classroom => <article className="paper-classroom-row" key={classroom.id} aria-label={classroom.label}>
+            <div><h3>{classroom.label}</h3><span className="paper-folio">Folio {classroom.folio}</span><br /><small>{classroom.received ? 'Voto registrado' : classroom.ballotIssued ? 'Ficha habilitada' : 'Ficha pendiente'}</small></div>
+            <label className="field">Asistencia<select aria-label={'Asistencia · ' + classroom.label} value={classroom.attendance} disabled={busy || poll.status !== 'open' || classroom.received} onChange={event => void saveAttendance(classroom, event.target.value as PaperAttendance)}><option value="pending">Pendiente de confirmar</option><option value="present">Con asistencia</option><option value="absent">Sin asistencia</option></select></label>
+            <div className="paper-classroom-votes">{poll.areas.map(area => <div key={area}><strong>{areaName(area)}</strong><span>{classroom.received ? choiceName(poll, area, classroom.choices?.[area]) : 'Pendiente'}</span></div>)}</div>
+            {poll.status === 'open' && <div className="paper-classroom-actions"><button type="button" disabled={busy || classroom.attendance === 'absent'} onClick={() => openManual(classroom.id, classroom.received)}><PencilLine size={15} />{classroom.received ? 'Revisar voto' : 'Transcribir voto'}</button>{!classroom.received && <button type="button" disabled={busy || classroom.attendance === 'absent'} onClick={() => void generate([classroom.id])}><Printer size={15} />{classroom.ballotIssued ? 'Reponer ficha A5' : 'Generar ficha A5'}</button>}</div>}
+          </article>)}</div>
+          {!shownClassrooms.length && <p className="empty-state">No hay aulas con los filtros elegidos.</p>}
+          {poll.status === 'open' && <><div className="paper-print-controls"><button className="primary" disabled={busy || !availablePrint.length} onClick={() => void generate()}><Printer size={18} />Generar fichas A5 del padrón</button><span>{availablePrint.length} fichas pendientes de emitir. Se excluyen las aulas sin asistencia y los votos ya registrados.</span></div><p className="muted">La ficha muestra el aula y su folio corto. Una reposición conserva el mismo folio y no suma otra ficha. Puede registrar la asistencia después de imprimir.</p><button className="primary" type="button" disabled={busy} onClick={() => openManual()}><PencilLine size={18} />Transcribir voto manualmente</button></>}
+        </section>}
+        {printBatch && printBatch.poll.id === poll.id && <section className="paper-print-preview stack" aria-label="Fichas A5 preparadas"><div className="row between"><h3>{printBatch.codes.length} {printBatch.codes.length === 1 ? 'ficha A5 preparada' : 'fichas A5 preparadas'}</h3><button className="secondary" disabled={busy} onClick={() => { dropUrl(printBatch.url); setPrintBatch(null); }}><X size={16} />Cerrar PDF</button></div>{printBatch.bytes && printBatch.url ? <><div className="row"><button disabled={busy || !pdfLoaded} onClick={print}><Printer size={18} />Imprimir fichas A5</button><button disabled={busy} onClick={() => downloadBytes(printBatch.bytes!, 'fichas-A5-' + poll.block + '.pdf', 'application/pdf')}><Download size={18} />Descargar PDF A5</button><a href={printBatch.url} target="_blank" rel="noreferrer">Abrir PDF</a></div><iframe ref={frameRef} src={printBatch.url} onLoad={() => setPdfLoaded(true)} title="Vista previa de las fichas A5" /></> : <><p>Las fichas ya están habilitadas. Prepare el mismo archivo sin emitirlas otra vez.</p><button disabled={busy} onClick={() => void retryPdf()}>Reintentar preparar PDF</button></>}</section>}
+        {manualOpen && classroomPoll && poll.status === 'open' && <form className="paper-manual card stack" aria-label="Transcripción manual del voto" onSubmit={event => { event.preventDefault(); void saveManual(); }}>
+          <div className="row between"><h3>{manualCorrection ? 'Revisar y corregir voto' : 'Transcribir voto manualmente'}</h3><button type="button" disabled={busy} onClick={() => { setManualOpen(false); setError(''); }}>Cancelar</button></div>
+          <p>Lea la ficha de papel y seleccione lo marcado en cada área. No necesita cargar una foto ni escribir un código largo.</p>
+          <label className="field">Aula y folio<select aria-label="Aula del voto manual" disabled={busy || manualCorrection} value={manualClassroomId} onChange={event => openManual(event.target.value)}><option value="">Seleccione el aula</option>{classrooms.map(classroom => <option key={classroom.id} value={classroom.id} disabled={classroom.attendance === 'absent' || !manualCorrection && classroom.received}>{classroom.folio + ' · ' + classroom.label + (classroom.attendance === 'absent' ? ' · Sin asistencia' : classroom.received ? ' · Registrado' : '')}</option>)}</select></label>
+          {manualClassroom?.attendance === 'absent' && <p className="notice warning">Esta aula está sin asistencia. Corrija su asistencia antes de registrar un voto.</p>}
+          {manualCorrection && manualClassroom && <div className="notice paper-manual-current"><strong>Registro actual · versión {manualVoteVersion}</strong>{poll.areas.map(area => <p key={area}>{areaName(area)}: {choiceName(poll, area, manualClassroom.choices?.[area])}</p>)}<p>La corrección ajusta el conteo; no añade otra ficha recibida.</p></div>}
+          <div className="field-row">{poll.areas.map(area => <label className="field" key={area}>{areaName(area)} · voto manual<select aria-label={areaName(area) + ' · voto manual'} value={Object.hasOwn(manualChoices, area) ? manualChoices[area] === null ? '__blank__' : manualChoices[area] : '__pending__'} disabled={busy || !manualClassroom} onChange={event => { setManualChoices(current => ({ ...current, [area]: event.target.value === '__blank__' ? null : event.target.value })); setManualReviewed(false); }}><option value="__pending__" disabled>Seleccione lo marcado en el papel</option>{poll.options[area]?.map(option => <option key={option.id} value={option.id}>{option.name}</option>)}<option value="__blank__">En blanco</option><option value="__invalid__">Nulo · varias marcas o voto no válido</option></select></label>)}</div>
+          {manualCorrection && <label className="field">Motivo de la corrección<textarea aria-label="Motivo de la corrección" disabled={busy} minLength={8} maxLength={1000} value={manualReason} onChange={event => setManualReason(event.target.value)} placeholder="Explique brevemente la corrección del registro" /></label>}
+          <label><input type="checkbox" checked={manualReviewed} disabled={busy || !manualClassroom} onChange={event => setManualReviewed(event.target.checked)} />Comparé los votos con la ficha de papel original.</label>
+          <button className="primary" disabled={busy || !manualClassroom || manualClassroom.attendance === 'absent' || !manualReviewed || !validChoices(poll, manualChoices) || manualCorrection && manualReason.trim().length < 8 || !manualCorrection && manualClassroom.received}>{busy ? 'Guardando…' : manualCorrection ? 'Guardar corrección' : 'Guardar voto manual'}</button>
+        </form>}
+        <PaperEvidence poll={poll} api={api} notify={notify} />
+        <section className="stack" aria-label="Resultados de la votación"><h3>Resultado por área</h3><p className="muted">Cada ficha recibida suma una respuesta por área. Los votos en blanco y los nulos se registran por separado.</p><div className="grid">{poll.areas.map(area => { const counts = poll.counts[area]; const result = poll.results[area]; const resultText = result?.state === 'winner' ? 'Mayoría: ' + (poll.options[area]?.find(item => item.id === result.winnerId)?.name ?? 'opción ganadora') : result?.state === 'tie' ? 'Empate: ' + (result.tiedIds ?? []).map(id => poll.options[area]?.find(item => item.id === id)?.name ?? id).join(' / ') : result?.state === 'no_valid_votes' ? 'Sin votos válidos para determinar una mayoría.' : 'Conteo provisional · recepción abierta'; return <div className="card stack" key={area}><h3>{areaName(area)}</h3><div className="table-wrap"><table><thead><tr><th>Editorial</th><th>Votos</th></tr></thead><tbody>{poll.options[area]?.map(option => <tr key={option.id}><td>{option.name}</td><td>{counts?.options[option.id] ?? 0}</td></tr>)}<tr><td>En blanco</td><td>{counts?.blank ?? 0}</td></tr><tr><td>Nulos</td><td>{counts?.invalid ?? 0}</td></tr></tbody></table></div><strong>{resultText}</strong></div>; })}</div></section>
+        {poll.status === 'open' && <section className="notice stack"><strong>Cerrar recepción</strong><p>Revise los votos de la tabla y marque las aulas sin asistencia antes de cerrar. Después no se aceptarán más votos ni correcciones en esta votación.</p><label><input type="checkbox" disabled={busy || manualOpen} checked={confirmClose} onChange={event => setConfirmClose(event.target.checked)} />Confirmo que terminó la recepción y revisé el escrutinio.</label><button className="danger" disabled={busy || manualOpen || !confirmClose} onClick={() => void closePoll()}>Cerrar votación y calcular resultado</button></section>}
       </>}
     </section>
   </div>;
 }
 
-const paperStyles = `
-.paper-voting{min-width:0}.paper-voting h2,.paper-voting h3{margin-bottom:0}.paper-voting table{min-width:0;width:100%;table-layout:fixed}.paper-voting th:last-child,.paper-voting td:last-child{width:64px;text-align:right;white-space:nowrap}.paper-voting td:first-child{overflow-wrap:anywhere}.paper-voting th,.paper-voting td{padding:10px 8px}.paper-area-options{display:flex;gap:16px;align-items:center;flex-wrap:wrap}.paper-area-options label{font-weight:500}.paper-stats{display:flex;gap:24px;flex-wrap:wrap;align-items:center;color:var(--muted)}.paper-stats strong{font-size:21px;color:var(--ink);margin-right:5px}.paper-print-controls{display:flex;gap:15px;align-items:flex-end;flex-wrap:wrap}.paper-print-controls .field{width:180px}.paper-print-preview{border:1px solid var(--line);border-radius:10px;padding:18px;background:#f7f9fc}.paper-print-preview iframe{width:100%;height:450px;border:1px solid var(--line);border-radius:8px;background:#fff}.paper-upload{padding:20px;border:1px dashed #9cb3ce;border-radius:10px;background:#f6faff}.paper-reading{padding:18px}.paper-reading-layout{display:grid;grid-template-columns:minmax(150px,260px) 1fr;gap:20px;align-items:start}.paper-reading-layout img{display:block;max-width:100%;max-height:340px;object-fit:contain;border:1px solid var(--line);border-radius:7px;background:#f4f6f9}.paper-reading-layout .field{min-width:0}.paper-reading-reasons{padding-left:19px;margin:0;font-size:13px;color:#876329}.paper-voting .notice p:last-child{margin-bottom:0}@media(max-width:680px){.paper-reading-layout{grid-template-columns:1fr}.paper-reading-layout img{max-height:260px}.paper-stats{gap:12px}.paper-print-controls{align-items:stretch;flex-direction:column}.paper-print-controls .field{width:100%}.paper-print-preview iframe{height:330px}.paper-voting h1{font-size:27px}}
-`;
+const paperStyles = '.paper-voting{min-width:0}.paper-voting h2,.paper-voting h3{margin-bottom:0}.paper-voting table{min-width:0;width:100%;table-layout:fixed}.paper-voting th:last-child,.paper-voting td:last-child{width:64px;text-align:right;white-space:nowrap}.paper-voting td:first-child{overflow-wrap:anywhere}.paper-voting th,.paper-voting td{padding:10px 8px}.paper-stats{display:flex;gap:24px;flex-wrap:wrap;align-items:center;color:var(--muted)}.paper-stats strong{font-size:21px;color:var(--ink);margin-right:5px}.paper-print-controls{display:flex;gap:15px;align-items:center;flex-wrap:wrap}.paper-print-controls span{font-size:13px;color:var(--muted)}.paper-print-preview{border:1px solid var(--line);border-radius:10px;padding:18px;background:#f7f9fc}.paper-print-preview iframe{width:100%;height:450px;border:1px solid var(--line);border-radius:8px;background:#fff}.paper-voting .notice p:last-child{margin-bottom:0}.paper-classroom-list{display:grid;gap:10px}.paper-classroom-row{display:grid;grid-template-columns:minmax(135px,1.1fr) minmax(150px,1fr) minmax(160px,1.2fr) auto;gap:15px;align-items:center;border:1px solid var(--line);border-radius:9px;padding:15px}.paper-classroom-row h3{font-size:14px;margin:0 0 5px}.paper-folio{font-size:12px;font-weight:700;color:var(--navy)}.paper-classroom-row small{color:var(--muted)}.paper-classroom-row .field{min-width:0;font-size:12px}.paper-classroom-votes{display:grid;gap:8px;font-size:12px;overflow-wrap:anywhere}.paper-classroom-votes strong,.paper-classroom-votes span{display:block}.paper-classroom-actions{display:flex;gap:6px;flex-direction:column}.paper-classroom-actions button{font-size:11px;justify-content:center;white-space:normal}.paper-manual{background:#f5f9ff}.paper-manual .field{min-width:0}.paper-manual-current p{margin:5px 0}@media(max-width:1050px){.paper-classroom-row{grid-template-columns:minmax(130px,1fr) minmax(150px,1fr)}.paper-classroom-actions{flex-direction:row;flex-wrap:wrap}}@media(max-width:680px){.paper-classroom-row{grid-template-columns:minmax(0,1fr)}.paper-classroom-actions button{flex:1}.paper-stats{gap:12px}.paper-print-controls{align-items:stretch;flex-direction:column}.paper-print-preview iframe{height:330px}.paper-voting h1{font-size:27px}.paper-manual .field-row{grid-template-columns:minmax(0,1fr)}}';

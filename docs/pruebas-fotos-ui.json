@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-05T00:21:03.194Z",
+  "fixture": "isolated API; real browser photo decode, resize, preview and download",
+  "passed": 5,
+  "checks": [
+    "photos stay optional and collapsed without requesting a code or recognizing a vote",
+    "a photo may be saved after closing and is listed under its classroom without changing totals",
+    "stored photos can be viewed and downloaded separately from the JSON backup",
+    "a failed upload remains unsaved and can retry without altering the count",
+    "an invalid image is rejected locally and a saved photo can be removed without changing votes"
+  ],
+  "pageErrors": []
+}

@@ -50,3 +50,57 @@ test('paper generation rejects duplicate codes and malformed polls instead of pr
   await assert.rejects(buildPaperVotingPdf(emptyState(), { ...poll, options: { ...poll.options, MAT: [] } }, [firstCode]), /dos o tres opciones/);
   await assert.rejects(buildPaperVotingPdf(emptyState(), poll, ['invalid-code']), /identificador anónimo/);
 });
+
+async function extractPdfText(bytes: Uint8Array): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'textos-classroom-pdf-'));
+  try {
+    await writeFile(join(dir, 'ballots.pdf'), bytes);
+    const process = spawnSync('pdftotext', ['-layout', join(dir, 'ballots.pdf'), join(dir, 'ballots.txt')], { encoding: 'utf8' });
+    assert.equal(process.status, 0, process.stderr);
+    return await readFile(join(dir, 'ballots.txt'), 'utf8');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+}
+
+test('classroom PDFs print exactly 10, 20 and 15 A5 ballots with complete classroom names and short folios', async () => {
+  const { paperClassroomRoster } = await import('../shared/paper-vote');
+  for (const [block, expected] of [['P1', 10], ['P2', 20], ['S1', 15]] as const) {
+    const roster = paperClassroomRoster(block);
+    const ballots = roster.map(classroom => ({ classroomId: classroom.id, classroomLabel: classroom.label, folio: classroom.folio }));
+    const bytes = await buildPaperVotingPdf(emptyState(), { ...poll, block, rosterVersion: 1 }, ballots.map(item => item.folio), { demo: true, ballots });
+    const document = await PDFDocument.load(bytes); const text = await extractPdfText(bytes);
+    assert.equal(document.getPageCount(), expected);
+    for (const page of document.getPages()) { assert(Math.abs(page.getWidth() - PAPER_A5.width) < .001); assert(Math.abs(page.getHeight() - PAPER_A5.height) < .001); }
+    for (const classroom of roster) {
+      assert.ok(text.includes(`Aula: ${classroom.label}`), classroom.label);
+      assert.ok(text.includes(`Folio: ${classroom.folio}`), classroom.folio);
+    }
+    assert.equal((text.match(/FICHA DE VOTACIÓN FAMILIAR POR AULA/g) ?? []).length, expected);
+    assert.equal((text.match(/MATEMÁTICA/g) ?? []).length, expected); assert.equal((text.match(/COMUNICACIÓN/g) ?? []).length, expected);
+    assert.equal((text.match(/DEMOSTRACIÓN - SIN VALIDEZ/g) ?? []).length, expected);
+    assert.doesNotMatch(text, /ANÓNIMA|Código anónimo|Código de ficha|Fotografíe|QR|cuatro marcas|[a-f0-9]{64}/);
+    assert.match(document.getSubject() ?? '', /por aula/);
+  }
+});
+
+test('personalized print batches reject duplicate, missing or misassigned classrooms and folios', async () => {
+  const { paperClassroomRoster } = await import('../shared/paper-vote');
+  const classroom = paperClassroomRoster('P1')[0]; const newPoll = { ...poll, rosterVersion: 1 as const };
+  const ballot = { classroomId: classroom.id, classroomLabel: classroom.label, folio: classroom.folio };
+  await assert.rejects(buildPaperVotingPdf(emptyState(), newPoll, [classroom.folio]), /aula/);
+  await assert.rejects(buildPaperVotingPdf(emptyState(), newPoll, [classroom.folio], { ballots: [] }), /distintos/);
+  await assert.rejects(buildPaperVotingPdf(emptyState(), newPoll, [classroom.folio], { ballots: [{ ...ballot, classroomId: 'SEC3-E' }] }), /distintos/);
+  await assert.rejects(buildPaperVotingPdf(emptyState(), newPoll, [classroom.folio], { ballots: [{ ...ballot, folio: 'P1-02' }] }), /distintos/);
+  await assert.rejects(buildPaperVotingPdf(emptyState(), newPoll, ['P1-01', 'P1-02'], { ballots: [ballot, { ...ballot, folio: 'P1-02' }] }), /distintos/);
+  await assert.rejects(buildPaperVotingPdf(emptyState(), newPoll, [classroom.folio], { ballots: [{ ...ballot, classroomLabel: 'W'.repeat(120) }] }), /demasiado largo/);
+});
+
+test('a roster subset prints only the requested classrooms without exposing any internal recovery code', async () => {
+  const { paperClassroomRoster } = await import('../shared/paper-vote');
+  const selected = [paperClassroomRoster('P1')[1], paperClassroomRoster('P1')[9]];
+  const ballots = selected.map((classroom, index) => ({ code: index ? secondCode : firstCode, classroomId: classroom.id, classroomLabel: classroom.label, folio: classroom.folio }));
+  const text = await extractPdfText(await buildPaperVotingPdf(emptyState(), { ...poll, rosterVersion: 1 }, [firstCode, secondCode], { ballots }));
+  assert.match(text, /Aula: 1\.º de primaria · B/); assert.match(text, /Aula: 2\.º de primaria · E/);
+  assert.match(text, /Folio: P1-02/); assert.match(text, /Folio: P1-10/);
+  assert.doesNotMatch(text, /Aula: 1\.º de primaria · A|DEMOSTRACIÓN|Fotografíe|QR/);
+  assert.ok(!text.includes(firstCode) && !text.includes(secondCode));
+});

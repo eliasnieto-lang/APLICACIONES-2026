@@ -11,6 +11,7 @@ export const PAPER_QR = { x: PAPER_A5.width - 113, y: PAPER_A5.height - 116, siz
 export interface PaperBallotDefinition {
   id: string; block: Block; areas: Area[];
   options: Partial<Record<Area, { id: string; name: string }[]>>;
+  rosterVersion?: 1;
 }
 export interface PaperPoint { x: number; y: number }
 export interface PaperChoiceBox { area: Area; optionId: string | null; name: string; x: number; y: number; size: number }
