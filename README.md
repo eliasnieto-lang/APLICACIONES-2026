@@ -1,25 +1,26 @@
-# Selección de textos escolares 2027 — I11 independiente
+# Selección de textos escolares 2027 — votación por aula
 
-Cada docente puede puntuar, guardar y cerrar I11 sin iniciar Sala en vivo ni esperar
-una confirmación administrativa, en Jornada real y en Demostración.
+Padrón con cinco secciones A–E por grado: P1=10 aulas, P2=20 y S1=15.
+Cada aula tiene una ficha A5 personalizada con aula y folio corto, por ejemplo P1-01,
+con opciones de Matemática y Comunicación. Las nuevas fichas no usan QR ni códigos largos.
 
-Sala en vivo usa una sola casilla que confirma que un representante docente hizo
-la pregunta y la editorial respondió. Se guarda automáticamente, sin solicitar
-nombre, área ni transcripciones. El turno conserva esa confirmación al finalizar;
-marcarla, retirarla o borrarla no modifica las notas docentes ya registradas.
+El voto se transcribe manualmente seleccionando el aula y las dos opciones del papel.
+Sin asistencia se registra por separado. Cada aula se cuenta una sola vez;
+las correcciones antes del cierre conservan historial y no aumentan recibidas.
+La tabla pública permite a las familias cotejar los votos registrados por aula.
+Las fotos son un respaldo privado opcional que puede adjuntarse después del cierre.
+El respaldo JSON incluye un manifiesto; las fotografías se descargan por separado.
 
-Se conservan la escala 0–4, once criterios de igual peso (máximo 44 y nota /100),
-las referencias a la guía MINEDU y los 70 puntos solo informativos. La valoración
-docente orienta la clasificación de tres propuestas; las familias realizan la elección.
-También se conservan sorteo, cronómetro, seguimiento, eliminación administrativa,
-ranking y votación A5. Los datos anteriores mantienen sus valores e historial.
+Se conservan las votaciones anteriores, las notas y el historial sin reidentificarlos.
+I11 sigue independiente de Sala, la escala es 0–4, máximo 44 y sin puntaje mínimo.
+Las referencias MINEDU y los 70 puntos informativos se mantienen.
 
 Fuente, manual y evidencia:
-https://github.com/eliasnieto-lang/APLICACIONES-2026/tree/b14458301e555bd7e8c0865099fd29527f2a19a7
+https://github.com/eliasnieto-lang/APLICACIONES-2026/tree/d9336b071026c5ccba7dcc4d9b691007110a0da5
 
 Ejecutar como propietario de Supabase ANTES de activar esta rama:
-https://raw.githubusercontent.com/eliasnieto-lang/APLICACIONES-2026/b14458301e555bd7e8c0865099fd29527f2a19a7/supabase/migrations/006-confirmacion-simple-e-i11-independiente.sql
-Instalar o repetir la actualización no borra datos.
+https://raw.githubusercontent.com/eliasnieto-lang/APLICACIONES-2026/d9336b071026c5ccba7dcc4d9b691007110a0da5/supabase/migrations/007-padron-aulas-y-voto-manual.sql
+Instalar o repetir la actualización no borra datos ni convierte los registros anónimos anteriores.
 
 Cloudflare Pages: rama compilada, comando vacío, raíz vacía, salida `.`. Sin Wrangler.
 Después del despliegue, recargar los navegadores.
