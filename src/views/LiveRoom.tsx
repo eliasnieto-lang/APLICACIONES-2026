@@ -52,8 +52,8 @@ export function PresentationOrder({ draw, currentPublisherId }: { draw: Presenta
 
 export function TimerSoundControls({ sound }: { sound: ReturnType<typeof useTimerSound> }) {
   return <div className="stack" style={{ gap: 8 }}>
-    <div className="row"><button type="button" onClick={() => sound.enabled ? sound.disable() : void sound.enable()} aria-pressed={sound.enabled}>{sound.enabled ? 'Silenciar avisos' : 'Activar sonido'}</button>{sound.enabled && <button type="button" onClick={() => void sound.enable(true)}>Probar sonido</button>}<span className="muted small">{sound.enabled ? 'Sonido activado en este equipo' : 'Sonido desactivado en este equipo'}</span></div>
-    <p className="muted small" style={{ margin: 0 }}>Un pitido al iniciar, una alarma cuando falten 5 segundos y otra al terminar. Active el sonido en el equipo conectado a los parlantes.</p>
+    <div className="row"><button type="button" onClick={() => sound.enabled ? sound.disable() : void sound.enable()} aria-pressed={sound.enabled}>{sound.enabled ? 'Silenciar avisos' : 'Activar sonido'}</button>{sound.enabled && <button type="button" onClick={() => void sound.enable(true)}>Probar sirena</button>}<span className="muted small">{sound.enabled ? 'Sonido activado en este equipo' : 'Sonido desactivado en este equipo'}</span></div>
+    <p className="muted small" style={{ margin: 0 }}>Un pitido al iniciar, una sirena cuando falten 5 segundos y otra más prolongada al terminar. Active el sonido en el equipo conectado a los parlantes.</p>
     {sound.error && <div className="notice danger" role="alert">{sound.error}</div>}
   </div>;
 }

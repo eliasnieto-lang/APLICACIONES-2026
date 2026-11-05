@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-05T00:19:57.108Z",
+  "at": "2026-11-05T18:59:33.096Z",
   "backend": "isolated UI API; real SQL and PDF tested separately",
   "passed": 12,
   "checks": [

@@ -2,6 +2,14 @@
 
 Fecha local: 5 de noviembre de 2026. Código y tablas separados de Círculos de Estudios.
 
+## Sirena y texto de resultados
+
+La alarma usa barridos de frecuencia más presentes: 2,4 segundos al faltar cinco segundos y 4,2 al finalizar. Se conserva el pitido inicial, la detección única de cada umbral y el bloqueo de sonidos antiguos al recargar, pausar o silenciar. **Probar sirena** reproduce la alarma final.
+
+Chromium aprobó 7 recorridos del controlador y WebAudio nativo, incluida cancelación de la sirena al silenciar. La medición OfflineAudioContext dio RMS 0,306/0,360 frente a 0,125 de referencia y picos 0,629/0,736, inferiores al nivel de saturación ([medición](docs/pruebas-sirena-medicion.json), [recorridos](docs/pruebas-sirena-ui.json)).
+
+La regresión de votación aprobó 12 recorridos y confirma **Editorial elegida** para resultados ganadores; empates, blancos y nulos conservan sus estados. Son cambios de interfaz/audio: no se modifican SQL, reglas, puntajes ni votos.
+
 ## Indicaciones y visita compartida a mesas de muestra
 
 | Comprobación actual | Resultado | Evidencia |

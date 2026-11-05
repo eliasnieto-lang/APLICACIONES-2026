@@ -1,0 +1,14 @@
+{
+  "at": "2026-11-05T19:01:55.509Z",
+  "fixture": "isolated intercepted server and instrumented audio driver",
+  "checks": [
+    "draw requires arrivals confirmation and uses only the persisted server result",
+    "repeating a draw requires a reason; failed CAS keeps the previous visible order",
+    "starting beeps once, then plays louder swept sirens at five seconds and zero without duplicates",
+    "finish/next respect the draw; an older tab cannot finish the following publisher",
+    "public projection shares the order, starts muted, and fits a phone",
+    "siren preview uses the final alarm and muting disconnects it without replaying old thresholds",
+    "native offline Web Audio renders bounded, louder frequency sweeps and cancels active sirens"
+  ],
+  "pageErrors": []
+}

@@ -243,6 +243,16 @@ try {
     await p.getByRole('button', { name: 'Cerrar votación y calcular resultado', exact: true }).click();
     await p.getByText('Recepción cerrada', { exact: true }).waitFor();
     assert.equal(f.state.paperPolls[0].status, 'closed');
+    const outcome = await p.locator('[aria-label="Resultados de la votación"]').innerText();
+    assert.doesNotMatch(outcome, /[Mm]ayoría/);
+    for (const area of f.state.paperPolls[0].areas) {
+      const result = f.state.paperPolls[0].results[area];
+      if (result?.state === 'winner') {
+        const name = f.state.paperPolls[0].options[area].find(option => option.id === result.winnerId).name;
+        assert(outcome.includes('Editorial elegida: ' + name));
+      }
+    }
+
     assert.equal(await p.getByRole('button', { name: 'Transcribir voto manualmente', exact: true }).count(), 0);
     assert.equal(await p.getByRole('button', { name: 'Revisar voto', exact: true }).count(), 0);
     assert((await row(p, f.state.paperPolls[0].classrooms[0].label).innerText()).includes('Editorial Alfa'));
