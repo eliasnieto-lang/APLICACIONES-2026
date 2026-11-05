@@ -1,0 +1,16 @@
+{
+  "at": "2026-11-05T16:09:11.832Z",
+  "fixture": "isolated intercepted settings_save API, no database changes",
+  "passed": 8,
+  "checks": [
+    "instructions project before the draw and need no ranking, extra password or SQL action",
+    "visit duration is editable from 1 to 60 minutes and missing finalists never enable it",
+    "a final ranking projects exactly three proposals per ready category with a shared end timestamp",
+    "pause, reload, resume and finish preserve the visit clock and never touch an exposition",
+    "a stale settings version cannot overwrite the other screen and preserves the locally edited duration",
+    "connection failure never pretends to change the screen and retries preserve duration",
+    "a stale ranking blocks publishing another visit and returning to the room removes only the display",
+    "control permissions and a 390px phone keep projection actions private and readable"
+  ],
+  "pageErrors": []
+}

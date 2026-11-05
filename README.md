@@ -16,6 +16,8 @@ El panel incorpora **Sorteo en vivo**, **Ranking / Top**, **Docentes y avance** 
 
 La ficha conserva **0–4** y los **70 puntos como referencia informativa**, con los indicadores observables enriquecidos a partir de la guía adjunta. Cada criterio remite a su fuente; el PDF completo se consulta desde la aplicación. Esta observación institucional orientativa no se confunde con la ficha integral MINEDU por texto. **Eliminar información** permite borrar registros concretos o vaciar Jornada real o Demostración con previsualización y confirmación, preservando el acceso de Subdirección.
 
+Sala en vivo incluye **Indicaciones generales** y **Pantalla del auditorio**. Permite proyectar el procedimiento editorial o las tres finalistas por área y categoría durante una visita a mesas de 10 minutos por defecto, ajustable, con pausa y reanudación. El respeto del tiempo se incluye en I3 y la agenda sigue la duración configurada. Con SQL007 ya instalado, esta mejora solo requiere actualizar la interfaz.
+
 El [manual](MANUAL.md) detalla acceso, exposición, recuperación y archivos históricos. El [informe de validación](VALIDACION.md) distingue pruebas locales y publicación.
 
 ## Opción A: nube gratuita

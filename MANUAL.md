@@ -42,6 +42,18 @@ Inicie la primera editorial y use **Finalizar** y el botón del siguiente turno 
 
 En el equipo con parlantes mantenga abierta Sala en vivo o la proyección, pulse **Activar sonido** y compruebe el volumen. Hay un pitido al comenzar, un aviso cuando faltan cinco segundos y una alarma al llegar a cero. En la sala administrativa, Iniciar también activa el sonido; la proyección empieza silenciada. Las pausas no consumen tiempo y los avisos no se repiten con cada actualización. Al salir de la pantalla se desactiva ese audio.
 
+## Indicaciones editoriales y pantalla del auditorio
+
+En **Sala en vivo**, despliegue **Indicaciones generales para representantes editoriales** para leer el procedimiento completo. El tiempo mostrado corresponde a la configuración de la jornada: los representantes de una misma editorial comparten ese total, aunque sean dos o más. Deben explicar la propuesta, año de edición, precio de venta al público del kit de Matemática y de Comunicación, materiales incluidos, opcionales y beneficios. El cumplimiento del tiempo se considera dentro de I3, sin agregar criterios ni modificar el máximo de 44.
+
+Pulse **Proyectar indicaciones** y abra **Abrir pantalla pública** en el equipo conectado al proyector. La misma información queda disponible en la pantalla pública. Tras la última presentación, todos los representantes editoriales deben abandonar el auditorio antes de exponer resultados y de la votación. Las puntuaciones docentes orientan la clasificación; las familias eligen entre tres propuestas después de conocer precios y beneficios y revisar las muestras.
+
+Para proyectar las mesas, finalice las exposiciones, cierre las fichas y genere un ranking final actualizado. Cada categoría mostrada debe tener exactamente tres finalistas y ningún empate de corte pendiente. En **Pantalla del auditorio**, ajuste **Tiempo de visita a las mesas (minutos)** y pulse **Iniciar visita a mesas**. El valor inicial es 10 minutos, editable entre 1 y 60. La pantalla muestra tres editoriales y sus puntajes orientativos por área y grupo de grados para indicar a qué mesas acercarse.
+
+Puede **Pausar visita**, **Reanudar visita** o **Finalizar visita**. El tiempo se comparte entre dispositivos y se conserva al recargar; no modifica el reloj de exposición, las notas ni los votos. Al terminar, se indica el retorno para recibir la ficha A5 por aula y marcar una editorial en cada área. **Volver a Sala en vivo** retira esta proyección. La tabla pública de votos continúa accesible y las familias mantienen la decisión final. Si la clasificación cambia, actualice el ranking y vuelva a iniciar la visita con las finalistas vigentes.
+
+Esta mejora utiliza la configuración compartida existente y no requiere otro SQL cuando ya está instalada la versión 007.
+
 ## Ranking y seguimiento docente
 
 El panel del Subdirector incluye **Ranking / Top** y **Docentes y avance**. Genere el ranking después de finalizar todas las exposiciones sorteadas. Puede filtrar área y categoría y elegir Top 3, Top 5 o todos; un empate en el límite conserva a todos los empatados. Si faltan fichas cerradas, el resultado se identifica como provisional. Si cambian las evaluaciones, docentes, reglas o catálogo, vuelva a generar el ranking para actualizarlo. Esta vista de consulta no publica automáticamente una terna formal.

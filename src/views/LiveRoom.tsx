@@ -1,4 +1,7 @@
 import { useEffect, useId, useState } from 'react';
+import EditorialInstructions from '../components/EditorialInstructions';
+import AuditoriumControls from '../components/AuditoriumControls';
+import { editorialAgenda } from '../../shared/editorial-agenda';
 import type { Turn, ViewProps } from '../../shared/types';
 import type { PresentationDraw } from '../../shared/jornada';
 import { isQuestionAnswered, presentationQuestionForPublisher, type PresentationQuestion } from '../../shared/questions';
@@ -158,6 +161,8 @@ export default function LiveRoom({ snapshot, api, refresh, notify }: ViewProps) 
   const status = { ready: 'Preparado', running: 'En curso', paused: 'Pausado', finished: 'Finalizado' }[state.turn.status];
   return <div className="stack">
     <div className="row between"><div><h1>Sala en vivo</h1><p className="muted">Reloj común del servidor · exposición de {Math.round(state.settings.rules.presentationSeconds / 60)} min + registro y cambio de {Math.round(state.settings.rules.transitionSeconds / 60)} min</p></div><button disabled={busy} onClick={() => void refresh()}>Sincronizar</button></div>
+    <details className="card" aria-label="Indicaciones generales de la jornada"><summary style={{ cursor: 'pointer', fontWeight: 700 }}>Indicaciones generales para representantes editoriales</summary><div style={{ marginTop: 18 }}><EditorialInstructions settings={state.settings} /></div></details>
+    {snapshot.actor.role === 'coordinator' && <AuditoriumControls snapshot={snapshot} api={api} refresh={refresh} notify={notify} />}
     {snapshot.actor.role === 'coordinator' && <section className="card stack" aria-label="Sorteo de editoriales">
       <div><h2>{draw ? 'Sorteo de editoriales realizado' : 'Sortear el orden de participación'}</h2><p>Registre todas las editoriales que llegaron antes de sortear. El resultado se guarda y se comparte con cada docente.</p></div>
       {(!draw || repeatAllowed) && <><p><strong>{state.publishers.length} editoriales registradas:</strong> {state.publishers.map(publisher => publisher.name).join(' · ') || 'Ninguna todavía'}</p>
@@ -192,7 +197,7 @@ export default function LiveRoom({ snapshot, api, refresh, notify }: ViewProps) 
       <hr /><TimerSoundControls sound={sound} />
     </section>
     {snapshot.actor.role === 'coordinator' && current && <MandatoryQuestion key={current.id} snapshot={snapshot} api={api} refresh={refresh} notify={notify} publisherId={current.id} publisherName={current.name} disabled={busy} />}
-    <section className="card"><h2>Guion de exposición</h2><div className="table-wrap"><table><thead><tr><th>Minutos de referencia</th><th>Contenido</th></tr></thead><tbody>{ROOM_SCRIPT.map(([time, label]) => <tr key={time}><th>{time}</th><td>{label}</td></tr>)}</tbody></table></div><p className="muted">El docente valora la exposición y revisa el ejemplar físico. El fin del tiempo conserva las fichas guardadas.</p></section>
+    <section className="card"><h2>Guion de exposición</h2><div className="table-wrap"><table><thead><tr><th>Minutos de referencia</th><th>Contenido</th></tr></thead><tbody>{editorialAgenda(state.settings.rules.presentationSeconds).map(([time, label]) => <tr key={time}><th>{time}</th><td>{label}</td></tr>)}</tbody></table></div><p className="muted">El docente valora la exposición y revisa el ejemplar físico. El fin del tiempo conserva las fichas guardadas.</p></section>
     {canManage && <section className="card"><h2>Recepción de muestras</h2>{!state.publishers.length && <p>Registre primero las editoriales en Preparación.</p>}<div className="stack">{state.publishers.map(p => <div className="row" key={p.id}><strong>{p.name}</strong><span className="status">{p.samplesReceived ? 'Recibidas' : 'Pendiente'}</span><input aria-label={`Constancia de muestras de ${p.name}`} placeholder="Mesa, cantidad o constancia" value={sampleNotes[p.id] ?? p.sampleNote} onChange={e => setSampleNotes(old => ({ ...old, [p.id]: e.target.value }))} /><button disabled={busy} onClick={() => void saveSample(p.id, true)}>Guardar recepción</button></div>)}</div></section>}
     {snapshot.actor.role === 'coordinator' && <section className="card"><h2>Retiro de las editoriales</h2><p>Después de la última exposición, registre el retiro de todas las editoriales antes de publicar las ternas.</p><label className="field">Constancia o referencia<input value={withdrawal} onChange={e => setWithdrawal(e.target.value)} /></label><button disabled={busy || !withdrawal.trim()} onClick={() => void saveWithdrawal()}>{state.settings.editorsWithdrawn ? 'Actualizar constancia de retiro' : 'Confirmar retiro de todas las editoriales'}</button>{state.settings.editorsWithdrawn && <p className="status">Retiro registrado: {state.settings.withdrawalReference}</p>}</section>}
   </div>;

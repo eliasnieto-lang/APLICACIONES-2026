@@ -1,3 +1,4 @@
+import type { AuditoriumDisplay } from './auditorium';
 import type { PresentationQuestion } from './questions';
 import type { PresentationDraw, PresentationRanking } from './jornada';
 import type { PaperPoll } from './paper-vote';
@@ -24,6 +25,7 @@ export interface Settings {
   withdrawalReference: string; directorName: string;
   evaluationMode?: 'presentation';
   presentationScaleMax?: PresentationScaleMax;
+  auditoriumDisplay?: AuditoriumDisplay | null;
 }
 export interface Publisher extends Versioned { name: string; contact?: string; samplesReceived: boolean; sampleNote: string }
 export interface Series extends Versioned { publisherId: string; name: string }

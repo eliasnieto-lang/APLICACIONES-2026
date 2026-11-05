@@ -1,0 +1,19 @@
+{
+  "at": "2026-11-05T16:14:12.869Z",
+  "backend": "real local Node/Express + PostgreSQL/PostgREST, SQL007 unchanged; demo mutations only",
+  "passed": 10,
+  "checks": [
+    "Sala explains the complete process with fifteen shared minutes, public pack prices, eleven criteria and mandatory withdrawal",
+    "instructions can be projected before a ranking through the existing API and appear to an unauthenticated public viewer",
+    "a real final ranking enables exactly three current proposals per area while previous classroom votes remain available",
+    "starting a ten-minute visit publishes only six aggregate finalist cards and a shared persistent deadline",
+    "Subdirection can choose a prudent visit duration and another public session keeps the same countdown after reloading",
+    "pausing freezes the public timer across a page reload without affecting the exposition or teacher scores",
+    "resuming assigns a new shared end timestamp and keeps the same classified proposals",
+    "the public board fits a phone and a projector while the classroom-vote ledger remains accessible",
+    "expiry reaches zero without a new SQL action and explicit finish preserves the finalists for the families",
+    "returning to Sala removes the projection, keeps the classroom ledger and rejects a stale settings write"
+  ],
+  "pageErrors": [],
+  "cspErrors": []
+}

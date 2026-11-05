@@ -77,3 +77,9 @@ Ejecutar `supabase/migrations/006-confirmacion-simple-e-i11-independiente.sql` c
 ## Instalación vigente007
 
 Ejecutar `supabase/migrations/007-padron-aulas-y-voto-manual.sql` antes de publicar la nueva interfaz. Coincide con el esquema actual y no elimina ni reidentifica datos anteriores. Los archivos 002–006 permanecen intactos.
+
+## Proyección del auditorio (sin cambio de SQL007)
+
+`Settings.auditoriumDisplay?:AuditoriumDisplay|null` se guarda mediante `settings_save {settings,expectedVersion}` existente. Los modos `instructions` y `samples` comparten indicaciones y una visita con deadline, pausa, duración y categorías. El payload de finalistas enumera únicamente id/nombre/puntaje agregado de exactamente tres editoriales por área y bloque; nunca incluye fichas o nombres docentes.
+
+El lector rechaza versiones futuras, datos inválidos y temporizadores fuera de rango. La selección exige ranking final vigente, sorteo completo, fichas cerradas y un corte de tres sin empate. La pantalla usa el reloj calibrado del servidor; recargar no reinicia la visita. Publica mediante `public_snapshot.settings` ya existente, conserva accesible la tabla por aula y mantiene los permisos/CAS de configuración. Cambiar esta proyección conserva reglas, turnos, notas, votos y fotos. No se añade ninguna migración ni se cambia el esquema007.

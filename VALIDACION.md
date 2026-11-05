@@ -1,13 +1,31 @@
 # Validación de Selección de textos escolares 2027
 
-Fecha local: 4 de noviembre de 2026. Código y tablas separados de Círculos de Estudios.
+Fecha local: 5 de noviembre de 2026. Código y tablas separados de Círculos de Estudios.
+
+## Indicaciones y visita compartida a mesas de muestra
+
+| Comprobación actual | Resultado | Evidencia |
+| --- | --- | --- |
+| TypeScript y compilación final | Aprobados | `npm run build` |
+| Node completo, incluidas indicaciones, agenda, modelo y pantalla pública | 135 aprobadas; 0 fallidas; 0 omitidas | [Salida](docs/pruebas-unitarias.txt) |
+| SQL/HTTP sobre versión 007 inmutable | 10 grupos aprobados | [Salida](docs/pruebas-auditorio-api.txt) |
+| Chromium con backend local real | 10 recorridos aprobados | [Resultado](docs/pruebas-auditorio-real.json) |
+| Chromium aislado: controles y público | 8 + 5 recorridos aprobados | [Controles](docs/pruebas-auditorio-controles.json), [Público](docs/pruebas-auditorio-publico.json) |
+
+Se comprobó el procedimiento completo, el tiempo compartido entre representantes, I3, edición/PVP por área y el retiro de todas las editoriales. La agenda de referencia se ajusta al tiempo configurado, sin presentar diez minutos cuando corresponden quince.
+
+La proyección de indicaciones funciona antes del ranking. La visita exige finalistas vigentes y tres propuestas por categoría, conserva un deadline compartido y admite duración de 1–60 minutos, pausa, reanudación, vencimiento y retorno a Sala. El reloj y las finalistas se conservan al recargar y en otra sesión. Se probaron móvil de 390 px y proyector de 1920 px sin desbordes, además del acceso permanente a la tabla de votos.
+
+La prueba SQL instala expresamente 007 sin cambios. `settings_save` y `public_snapshot` conservan la proyección, con CAS y permisos vigentes. Reglas bloqueadas, notas de máximo 44, cierres, turnos, votos, fotografías y credenciales permanecen iguales. Las modificaciones se probaron solo en demo local o bases descartables; no se escribió configuración en producción. El esquema y las migraciones 002–007 permanecen intactos y esta interfaz no necesita otro SQL.
+
+## Validación de referencia del padrón 007
 
 ## Padrón por aula, transcripción y cotejo familiar
 
 | Comprobación | Resultado | Evidencia |
 | --- | --- | --- |
 | TypeScript y compilación Vite final | Aprobados | `npm run build` |
-| Node: dominio, acceso, sesiones, criterios, PDF/XLSX, padrón y tabla pública | 120 aprobadas; 0 fallidas; 0 omitidas | [Salida](docs/pruebas-unitarias.txt) |
+| Node: dominio, acceso, sesiones, criterios, PDF/XLSX, padrón y tabla pública | 120 pruebas de base, incluidas en las 135 actuales | [Salida](docs/pruebas-unitarias.txt) |
 | PostgreSQL/PostgREST aislados | 87 grupos: 21 padrón y voto manual + 15 compatibilidad anónima + 22 migraciones + 12 fotos privadas + 17 eliminación | [Salida](docs/pruebas-acceso-y-exposicion.txt) |
 | Chromium sobre Node/Express + PostgreSQL/PostgREST reales | 11 recorridos de jornada, padrón, voto manual, A5, corrección y cotejo público | [Resultado](docs/pruebas-jornada-real.json) |
 | Chromium aislado, transcripción e impresión por aula | 12 recorridos aprobados | [Resultado](docs/pruebas-papel-ui.json) |
@@ -36,4 +54,4 @@ Las pruebas cubren borrado en cascada de una votación y sus fotos, así como vi
 
 Se conservan I11 independiente de Sala, la escala 0–4, once criterios de máximo 44, las referencias MINEDU y los 70 puntos solo informativos. Las fichas históricas retienen sus porcentajes hasta su actualización expresa. La valoración docente orienta; la elección final corresponde a las familias.
 
-Las pruebas usan demostración local o bases descartables y no escriben en producción. La jornada real no recibió datos ficticios. Esta entrega requiere ejecutar 007 en Supabase antes de publicar la nueva interfaz. Las comprobaciones descritas aquí no equivalen a un ingreso probado en el sitio público. El código y las tablas de Círculos de Estudios se mantienen separados.
+Las pruebas usan demostración local o bases descartables y no escriben en producción. La jornada real no recibió datos ficticios. La instalación 007 fue confirmada por el usuario y su despliegue se completó previamente; la mejora actual de auditorio utiliza esa misma base. Las comprobaciones descritas aquí no equivalen a un ingreso probado en el sitio público. El código y las tablas de Círculos de Estudios se mantienen separados.

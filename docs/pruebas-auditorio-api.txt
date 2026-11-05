@@ -1,0 +1,11 @@
+✓ 1 SQL007 ya permite las indicaciones antes de generar un ranking y no modifica notas ni reglas bloqueadas
+✓ 2 solo Subdirección puede cambiar la pantalla; docentes, mesa y accesos ajenos se rechazan
+✓ 3 la pantalla de finalistas publica solo tres agregados por área y conserva fichas privadas, votos y fotografías
+✓ 4 otra sesión y una recarga recuperan el mismo vencimiento sin reiniciar los diez minutos
+✓ 5 pausar y reanudar conserva el tiempo restante y no altera la exposición ni los datos académicos
+✓ 6 una pestaña atrasada recibe409 y no sobrescribe el reloj ni las finalistas de otra pantalla
+✓ 7 finalizar la visita publica cero y conserva la lista para que las familias vuelvan a votar
+✓ 8 el respaldo y su previsualización conservan la proyección sin tocar fotos ni reabrir votos
+✓ 9 Jornada real y Demostración conservan pantallas independientes con los mismos permisos y CAS
+✓ 10 volver a la sala retira la pantalla especial sin cambiar reglas, puntajes ni registros de padres
+10 grupos SQL/HTTP de proyección de Sala compatibles con el esquema007 existente aprobados.

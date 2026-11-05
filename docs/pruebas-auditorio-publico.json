@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-05T16:05:03.318Z",
+  "fixture": "isolated public projection; no database or official data",
+  "passed": 5,
+  "checks": [
+    "public sample screen lists exactly three finalists per area and keeps the family ledger accessible",
+    "the shared deadline continues after a reload instead of restarting the ten-minute visit",
+    "paused and concluded visits keep the same finalists and show the next family-voting step",
+    "instructions replace the live clock while the published vote ledger stays available",
+    "both projection modes fit a phone without hiding the vote table or exposing private forms"
+  ],
+  "pageErrors": []
+}
