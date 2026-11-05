@@ -2,6 +2,16 @@
 
 Fecha local: 5 de noviembre de 2026. Código y tablas separados de Círculos de Estudios.
 
+## Evaluación docente desde celulares
+
+La vista del docente tiene navegación propia, avance individual, selectores de categoría y editorial, cinco niveles 0–4 en una fila, observaciones desplegables y acciones de guardado accesibles durante la ficha. El estado distingue guardado confirmado, cambios pendientes y conflictos; los avisos conservan un acceso para revisar el detalle. Se respetan las áreas seguras y, en pantallas de poca altura o con teclado, las acciones vuelven al flujo para no cubrir el formulario.
+
+Chromium comprobó en un navegador con emulación táctil los anchos 320, 360, 390 y 430 px: sin desbordes horizontales, objetivos de pulsación de al menos 44 px, campos de 16 px y etiquetas completas dentro de sus botones. También se verificaron navegación al siguiente criterio pendiente, campos inferiores accesibles y disposición horizontal. Esto no sustituye una prueba física en cada modelo de teléfono o en Safari de iOS.
+
+La ficha aislada aprobó 10 recorridos, incluidos los valores 0 y 4, cierre de once criterios, borradores cifrados sin conexión, conflictos entre pestañas y conservación de notas históricas ([resultado](docs/pruebas-docente-movil-ficha.json)). La suite Node completa conserva 135 pruebas aprobadas; TypeScript y Vite compilan sin errores. El esquema y las migraciones SQL permanecen sin cambios: no se requiere otra instalación en Supabase.
+
+El recorrido integrado con Node/Express, PostgreSQL y PostgREST locales aprobó **9 comprobaciones**: registro desde el teléfono, navegación, guardado y cierre real con I11 igual a cero, avance propio de 1/9 = 11 %, restauración de sesión y escritorio de Subdirección a 1440 px. Se incluyeron 320 × 568, 390 × 500 y 844 × 390 para revisar pantallas cortas, teclado simulado y orientación horizontal. No hubo errores de página ni solicitudes de escritura a la jornada real ([resultado y medidas](docs/pruebas-docente-movil.json)).
+
 ## Sirena y texto de resultados
 
 La alarma usa barridos de frecuencia más presentes: 2,4 segundos al faltar cinco segundos y 4,2 al finalizar. Se conserva el pitido inicial, la detección única de cada umbral y el bloqueo de sonidos antiguos al recargar, pausar o silenciar. **Probar sirena** reproduce la alarma final.

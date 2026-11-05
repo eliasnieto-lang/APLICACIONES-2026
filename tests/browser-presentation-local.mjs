@@ -102,7 +102,7 @@ try{
   await director.screenshot({path:'test-results/consolidado-desplegables-real.png',fullPage:true});
  });
  await checked('a second selected category has an independent empty form',async()=>{
-  const p=pages[0];const tabs=p.locator('[aria-label="Área y bloque de evaluación"] button');await tabs.nth(1).click();await p.getByRole('button',{name:/^I1: 0 puntos/}).waitFor();assert.equal(await p.getByRole('button',{name:/^I1: 0 puntos/}).getAttribute('aria-pressed'),'false');
+  const p=pages[0];await p.getByLabel('Categoría de evaluación',{exact:true}).selectOption('MAT-P2');await p.getByRole('button',{name:/^I1: 0 puntos/}).waitFor();assert.equal(await p.getByRole('button',{name:/^I1: 0 puntos/}).getAttribute('aria-pressed'),'false');
  });
  await checked('one minimal live-room confirmation can change without reopening closed fichas or changing their scores',async()=>{
   const before=(await rpc('snapshot',{},directorCode)).state;await rpc('turn_control',{command:'start',publisherId,expectedTurn:before.turn},directorCode);

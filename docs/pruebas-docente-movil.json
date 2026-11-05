@@ -1,0 +1,562 @@
+{
+  "at": "2026-11-05T21:08:04.929Z",
+  "backend": "Local Node/Express + PostgreSQL + PostgREST",
+  "browser": "Chromium mobile emulation, touch enabled",
+  "passed": 9,
+  "checks": [
+    "320, 360, 390 and 430px: direct entry, readable fields, large choice targets and no horizontal overflow",
+    "phone registration accepts a full name, one area and all three categories without a password",
+    "all phone widths: visible personal navigation, readable editor, single-row 0–4 scores and large controls",
+    "pending jump focuses the next ungraded criterion below the phone header; disclosure and guide targets remain easy to tap",
+    "small 320×568 and short 390×500 screens retain scoring and leave the last text field clear of the action panel",
+    "phone scoring saves explicit I11 zero, closes all eleven criteria and preserves the current editorial",
+    "personal home reports only this teacher progress; another category remains ungraded",
+    "phone session survives refresh without asking for a password; landscape remains usable",
+    "1440px Subdirector retains the desktop sidebar and access to live projection controls"
+  ],
+  "measurements": [
+    {
+      "screen": "teacher-registration",
+      "width": 320,
+      "fontSizes": [
+        {
+          "tag": "SELECT",
+          "size": 16
+        },
+        {
+          "tag": "INPUT",
+          "size": 16
+        },
+        {
+          "tag": "INPUT",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "screen": "teacher-registration",
+      "width": 360,
+      "fontSizes": [
+        {
+          "tag": "SELECT",
+          "size": 16
+        },
+        {
+          "tag": "INPUT",
+          "size": 16
+        },
+        {
+          "tag": "INPUT",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "screen": "teacher-registration",
+      "width": 390,
+      "fontSizes": [
+        {
+          "tag": "SELECT",
+          "size": 16
+        },
+        {
+          "tag": "INPUT",
+          "size": 16
+        },
+        {
+          "tag": "INPUT",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "screen": "teacher-registration",
+      "width": 430,
+      "fontSizes": [
+        {
+          "tag": "SELECT",
+          "size": 16
+        },
+        {
+          "tag": "INPUT",
+          "size": 16
+        },
+        {
+          "tag": "INPUT",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "screen": "teacher-editor",
+      "width": 320,
+      "rows": [
+        {
+          "criterion": 1,
+          "targets": [
+            {
+              "width": 50.796875,
+              "height": 105.28125
+            },
+            {
+              "width": 50.796875,
+              "height": 105.28125
+            },
+            {
+              "width": 50.796875,
+              "height": 105.28125
+            },
+            {
+              "width": 50.796875,
+              "height": 105.28125
+            },
+            {
+              "width": 50.796875,
+              "height": 105.28125
+            }
+          ]
+        },
+        {
+          "criterion": 11,
+          "targets": [
+            {
+              "width": 50.796875,
+              "height": 105.28125
+            },
+            {
+              "width": 50.796875,
+              "height": 105.28125
+            },
+            {
+              "width": 50.796875,
+              "height": 105.28125
+            },
+            {
+              "width": 50.796875,
+              "height": 105.28125
+            },
+            {
+              "width": 50.796875,
+              "height": 105.28125
+            }
+          ]
+        }
+      ],
+      "fontSizes": [
+        {
+          "tag": "SELECT",
+          "size": 16
+        },
+        {
+          "tag": "SELECT",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "INPUT",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "screen": "teacher-editor",
+      "width": 360,
+      "rows": [
+        {
+          "criterion": 1,
+          "targets": [
+            {
+              "width": 58.796875,
+              "height": 89.6875
+            },
+            {
+              "width": 58.796875,
+              "height": 89.6875
+            },
+            {
+              "width": 58.796875,
+              "height": 89.6875
+            },
+            {
+              "width": 58.796875,
+              "height": 89.6875
+            },
+            {
+              "width": 58.796875,
+              "height": 89.6875
+            }
+          ]
+        },
+        {
+          "criterion": 11,
+          "targets": [
+            {
+              "width": 58.796875,
+              "height": 89.6875
+            },
+            {
+              "width": 58.796875,
+              "height": 89.6875
+            },
+            {
+              "width": 58.796875,
+              "height": 89.6875
+            },
+            {
+              "width": 58.796875,
+              "height": 89.6875
+            },
+            {
+              "width": 58.796875,
+              "height": 89.6875
+            }
+          ]
+        }
+      ],
+      "fontSizes": [
+        {
+          "tag": "SELECT",
+          "size": 16
+        },
+        {
+          "tag": "SELECT",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "INPUT",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "screen": "teacher-editor",
+      "width": 390,
+      "rows": [
+        {
+          "criterion": 1,
+          "targets": [
+            {
+              "width": 63.1875,
+              "height": 89.6875
+            },
+            {
+              "width": 63.203125,
+              "height": 89.6875
+            },
+            {
+              "width": 63.203125,
+              "height": 89.6875
+            },
+            {
+              "width": 63.203125,
+              "height": 89.6875
+            },
+            {
+              "width": 63.203125,
+              "height": 89.6875
+            }
+          ]
+        },
+        {
+          "criterion": 11,
+          "targets": [
+            {
+              "width": 63.1875,
+              "height": 89.6875
+            },
+            {
+              "width": 63.203125,
+              "height": 89.6875
+            },
+            {
+              "width": 63.203125,
+              "height": 89.6875
+            },
+            {
+              "width": 63.203125,
+              "height": 89.6875
+            },
+            {
+              "width": 63.203125,
+              "height": 89.6875
+            }
+          ]
+        }
+      ],
+      "fontSizes": [
+        {
+          "tag": "SELECT",
+          "size": 16
+        },
+        {
+          "tag": "SELECT",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "INPUT",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "screen": "teacher-editor",
+      "width": 430,
+      "rows": [
+        {
+          "criterion": 1,
+          "targets": [
+            {
+              "width": 71.1875,
+              "height": 89.6875
+            },
+            {
+              "width": 71.203125,
+              "height": 89.6875
+            },
+            {
+              "width": 71.203125,
+              "height": 89.6875
+            },
+            {
+              "width": 71.203125,
+              "height": 89.6875
+            },
+            {
+              "width": 71.1875,
+              "height": 89.6875
+            }
+          ]
+        },
+        {
+          "criterion": 11,
+          "targets": [
+            {
+              "width": 71.1875,
+              "height": 89.6875
+            },
+            {
+              "width": 71.203125,
+              "height": 89.6875
+            },
+            {
+              "width": 71.203125,
+              "height": 89.6875
+            },
+            {
+              "width": 71.203125,
+              "height": 89.6875
+            },
+            {
+              "width": 71.1875,
+              "height": 89.6875
+            }
+          ]
+        }
+      ],
+      "fontSizes": [
+        {
+          "tag": "SELECT",
+          "size": 16
+        },
+        {
+          "tag": "SELECT",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        },
+        {
+          "tag": "INPUT",
+          "size": 16
+        },
+        {
+          "tag": "TEXTAREA",
+          "size": 16
+        }
+      ]
+    },
+    {
+      "screen": "short-phone",
+      "width": 320,
+      "height": 568,
+      "footerPosition": "fixed",
+      "fieldHeight": 96.78125
+    },
+    {
+      "screen": "short-phone",
+      "width": 390,
+      "height": 500,
+      "footerPosition": "static",
+      "fieldHeight": 96.78125
+    }
+  ],
+  "pageErrors": []
+}

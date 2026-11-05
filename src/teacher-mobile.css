@@ -1,0 +1,114 @@
+/* Personal teacher dashboard. The coordinator keeps the desktop workspace. */
+.teacher-topbar-brand,.teacher-mobile-nav{display:none}
+.teacher-home{max-width:850px;margin:0 auto;gap:20px}
+.teacher-home .page-heading p{margin-bottom:0}
+.teacher-progress-heading{display:flex;justify-content:space-between;align-items:center;gap:18px}
+.teacher-progress-heading h2{margin-bottom:4px}
+.teacher-progress-heading p{margin-bottom:18px;font-size:14px}
+.teacher-progress-heading>strong{font-size:42px;font-weight:750;line-height:1;color:var(--blue);font-variant-numeric:tabular-nums;flex-shrink:0}
+.teacher-progress-heading>strong>span{font-size:20px}
+.teacher-progress-card .progress{height:9px}
+.teacher-progress-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin:20px 0 22px;gap:8px;text-align:center}
+.teacher-progress-stats>div+div{border-left:1px solid var(--line)}
+.teacher-progress-stats strong,.teacher-progress-stats span{display:block}
+.teacher-progress-stats strong{font-size:25px;color:var(--navy);font-variant-numeric:tabular-nums}
+.teacher-progress-stats span{font-size:13px;color:var(--muted)}
+.teacher-draw>p{font-size:14px}
+.teacher-draw ol{list-style:none;padding:0;margin:0;display:grid;gap:9px}
+.teacher-draw li{display:flex;align-items:center;gap:11px;border:1px solid var(--line);border-radius:8px;padding:12px;min-width:0}
+.teacher-draw li.current{border-color:#8bb1d9;background:#f0f6fd}
+.teacher-draw li>strong{flex:1;min-width:0;overflow-wrap:anywhere;font-size:14px}
+.teacher-draw .status{font-size:11px;flex-shrink:0}
+.teacher-order-number{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:#eaf0f7;color:var(--blue);font-weight:750;flex-shrink:0}
+.teacher-guidance ol{padding-left:21px;margin:0 0 18px;display:grid;gap:12px}
+.teacher-guidance li{padding-left:4px}
+.teacher-guidance p{font-size:13px;color:var(--muted);border-top:1px solid var(--line);padding-top:16px}
+.teacher-reference>summary{min-height:32px}
+.actor-name{overflow-wrap:anywhere;min-width:0}
+
+@media(max-width:760px),(max-width:960px) and (pointer:coarse){
+  .final-entry{display:block}
+  .final-entry .login-story{display:none}
+  .final-entry .brand-mobile{display:block}
+  .teacher-shell .app-body{margin-left:0}
+  .final-entry .login-panel{padding:24px max(18px,env(safe-area-inset-right)) max(28px,env(safe-area-inset-bottom)) max(18px,env(safe-area-inset-left));align-items:flex-start}
+  .final-entry .login-card{max-width:480px}
+  .final-entry .brand-mobile{margin-bottom:26px}
+  .final-entry .brand-mobile img{width:210px}
+  .final-entry .login-card h2{font-size:27px;letter-spacing:-.65px}
+  .final-entry .login-card>p{font-size:15px;line-height:1.6}
+  .final-entry input,.final-entry select,.final-entry textarea,.teacher-shell input,.teacher-shell select,.teacher-shell textarea{font-size:16px;min-height:48px}
+  .final-entry input[type=radio],.final-entry input[type=checkbox],.teacher-shell input[type=radio],.teacher-shell input[type=checkbox]{min-height:22px;width:22px;height:22px;flex-shrink:0}
+  .final-entry .field{font-size:14px;gap:8px}
+  .final-entry .workspace-field{margin-bottom:22px}
+  .final-entry .role-entry{min-height:104px;padding:18px 15px!important;gap:12px}
+  .final-entry .role-entry>span{font-size:13px;letter-spacing:0}
+  .final-entry .role-entry small{font-size:12px;line-height:1.55}
+  .final-entry .role-entry-director{background:#fff;color:var(--blue);border-color:#c7d7e9;box-shadow:none}
+  .final-entry .role-entry-director:hover{background:#edf3fb}
+  .final-entry .role-entry-director small{color:#5a718b}
+  .final-entry .entry-back{min-height:44px;margin-bottom:15px;font-size:14px}
+  .final-entry .entry-form{gap:22px!important}
+  .final-entry .entry-fieldset{padding:15px 12px}
+  .final-entry .entry-fieldset legend{font-size:14px}
+  .final-entry .entry-fieldset>p{font-size:13px}
+  .final-entry .entry-choice{min-height:54px;font-size:14px;line-height:1.45;padding:13px 10px;gap:9px}
+  .final-entry .entry-help{font-size:13px;line-height:1.6}
+  .final-entry .entry-form>button[type=submit]{min-height:52px;font-size:15px}
+  .final-entry .login-links{font-size:13px;gap:9px;margin-top:22px}
+  .final-entry .login-links>a,.final-entry .login-links>button{min-height:44px;display:flex;align-items:center}
+  .final-entry .login-foot{font-size:12px;line-height:1.6}
+  .teacher-shell{font-size:15px}
+  .teacher-shell .sidebar,.teacher-shell .mobile-menu{display:none}
+  .teacher-shell .topbar{height:64px;padding:0 max(12px,env(safe-area-inset-right)) 0 max(12px,env(safe-area-inset-left));gap:8px}
+  .teacher-shell .topbar>div:not(.topbar-actions){display:none}
+  .teacher-shell .teacher-topbar-brand{display:flex;align-items:center;gap:7px;color:var(--navy);flex:1;min-width:0;line-height:1.3;font-size:12px;font-weight:700}
+  .teacher-topbar-brand>svg{flex-shrink:0}
+  .teacher-topbar-brand>span{min-width:0}
+  .teacher-shell .teacher-topbar-brand strong{display:block;font-size:10px;line-height:1.6;color:#657b95;font-weight:500}
+  .teacher-shell .topbar-actions{gap:2px;flex-shrink:0}
+  .teacher-shell .topbar .pill{font-size:9px;padding:3px 5px;max-width:74px;line-height:1.4}
+  .teacher-shell .topbar .icon-button,.teacher-shell .topbar .exit-button{width:44px;height:44px;padding:10px;flex-shrink:0}
+  .teacher-shell .topbar .exit-button span{display:none}
+  .teacher-shell .demo-banner{padding:8px 13px;font-size:11px;line-height:1.55;letter-spacing:0}
+  .teacher-shell .actor-line{padding:11px max(15px,env(safe-area-inset-right)) 11px max(15px,env(safe-area-inset-left));gap:5px 8px;flex-wrap:wrap;align-items:center;font-size:12px}
+  .teacher-shell .actor-line .actor-name{flex:1;font-weight:650;line-height:1.45}
+  .teacher-shell .actor-line>.muted{width:100%;margin:0 0 0 14px;font-size:11px;line-height:1.45}
+  .teacher-shell .teacher-mobile-nav{display:grid;grid-template-columns:1fr 1fr;gap:5px;position:sticky;top:64px;z-index:25;background:#fff;padding:6px max(10px,env(safe-area-inset-right)) 7px max(10px,env(safe-area-inset-left));border-bottom:1px solid var(--line);box-shadow:0 3px 7px #122e4f04}
+  .teacher-mobile-nav button{min-height:48px;gap:7px;padding:9px 7px;border:1px solid transparent;border-radius:7px;font-size:13px;color:#657790;font-weight:600}
+  .teacher-mobile-nav button.active{background:#eaf2fd;border-color:#c8daef;color:#164c83;font-weight:750}
+  .teacher-mobile-nav button.active svg{color:#174d85}
+  .teacher-shell .main-content{padding:20px max(12px,env(safe-area-inset-right)) max(28px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left))}
+  .teacher-shell .teacher-home .card{padding:20px 17px}
+  .teacher-home{gap:18px}
+  .teacher-home .page-heading h1{font-size:28px}
+  .teacher-home .page-heading p{font-size:14px;color:#657b95}
+  .teacher-progress-heading{align-items:flex-start;gap:12px}
+  .teacher-progress-heading h2{font-size:21px}
+  .teacher-progress-heading p{font-size:13px;line-height:1.6}
+  .teacher-progress-heading>strong{font-size:36px}
+  .teacher-progress-heading>strong>span{font-size:18px}
+  .teacher-progress-card>button{min-height:52px;font-size:14px;padding:12px 9px}
+  .teacher-home h2{font-size:21px}
+  .teacher-draw li{gap:9px;padding:11px 9px;flex-wrap:wrap}
+  .teacher-draw li>strong{font-size:14px;flex-basis:calc(100% - 40px)}
+  .teacher-draw .status{margin-left:39px}
+  .teacher-guidance ol{font-size:15px;line-height:1.65}
+  .teacher-guidance p{font-size:13px;line-height:1.7}
+  .teacher-reference{padding:12px 15px}
+  .teacher-reference>summary{font-size:14px;min-height:44px;padding:10px 0}
+  .teacher-shell .toast{top:70px;bottom:auto;left:12px;right:12px;font-size:13px;padding:12px 12px 12px 16px;gap:8px;max-height:calc(100dvh - 100px);overflow:auto;box-shadow:0 8px 30px #122e4f33}
+  .teacher-shell .toast>span{flex:1;overflow-wrap:anywhere}
+  .teacher-shell .toast button{min-width:44px;min-height:44px;flex-shrink:0}
+}
+
+@media(max-width:360px){
+  .teacher-shell .teacher-topbar-brand{font-size:11px;gap:5px}
+  .teacher-shell .teacher-topbar-brand>svg{width:18px}
+  .teacher-shell .teacher-topbar-brand strong{font-size:9px}
+  .teacher-shell .topbar .pill{font-size:8px;max-width:65px}
+  .teacher-mobile-nav button{font-size:12px;gap:5px}
+  .final-entry .entry-area-options{grid-template-columns:1fr}
+}
+
+@media print{.teacher-mobile-nav,.teacher-topbar-brand{display:none!important}}

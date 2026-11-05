@@ -18,6 +18,16 @@ El servidor crea un acceso personal y el navegador lo conserva para retomar las 
 
 En un equipo compartido use **Salir** al terminar. Cada docente revisa únicamente sus propias valoraciones. Coordinación puede consultar las fichas para consolidar, pero no emitir puntajes en nombre del docente.
 
+## Evaluar desde el celular
+
+Abra la aplicación en el navegador del celular y elija **Ingresar como docente evaluador**. Después del registro se abre directamente **Mis evaluaciones**. Elija la **categoría** y la **editorial** en los desplegables; el orden del sorteo y la editorial en exposición sirven de referencia. Puede cambiar de ficha sin mezclar sus respuestas.
+
+Cada criterio muestra los cinco valores **0–4** en una fila. Toque el valor que corresponda; las observaciones son opcionales y se despliegan cuando las necesita. El avance indica cuántos de los once criterios completó. **0 · Sin valoración** es una respuesta válida que suma cero; un criterio sin seleccionar sigue pendiente.
+
+Las respuestas se guardan automáticamente. Compruebe el estado de sincronización; **Guardar ahora** permite solicitar el guardado inmediatamente. Al terminar los once criterios, use **Cerrar mi ficha** y espere la confirmación del servidor. Un borrador sin conexión todavía no es una ficha cerrada. En **Mi jornada** puede consultar su avance personal y volver a las fichas pendientes.
+
+Subdirección mantiene la vista para computadora y proyector. No necesita ejecutar otro SQL para esta mejora de interfaz.
+
 ## Ficha adaptada y referencia MINEDU
 
 La ficha de esta jornada se basa en la exposición y la muestra del ejemplar físico. Mantiene la escala institucional **0–4**, diez criterios de exposición y la respuesta a la pregunta obligatoria, con máximo **44** y conversión orientativa sobre 100. Los criterios incluyen referencias a los indicadores observables de la guía adjunta: PEI, enfoque del área, secuencia e índice, claridad y corrección lingüística, fuentes, aprendizaje activo, evaluación y metacognición, inclusión y colaboración, legibilidad y gráficos con función pedagógica.

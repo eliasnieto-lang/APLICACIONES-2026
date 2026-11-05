@@ -31,7 +31,7 @@ async function fixture(evaluations = [], options = {}) {
   state.presentationQuestions = options.answered === false ? [] : structuredClone(questions);
   const history = [], calls = [];
   let offline = false;
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, deviceScaleFactor: 2 });
   const snapshot = () => ({ state, actor: { id: 'scale-teacher', role: 'teacher', name: 'Docente de prueba' }, dataset: 'demo', serverNow: new Date().toISOString() });
   await context.route('**/src/main.tsx', route => route.fulfill({ contentType: 'application/javascript', body: "import '/tests/presentation-scale-fixture.tsx';" }));
   await context.route('**/api/scale-fixture', async route => {
@@ -86,13 +86,54 @@ try {
       assert.equal(await p.locator('.presentation-score-buttons button[aria-pressed=true]').count(), 0);
       assert.equal(await p.getByRole('button', { name: 'Sin valorar', exact: true }).count(), 0);
       assert.equal(await p.locator('strong').filter({ hasText: /^[AB]\.$/ }).count(), 0);
-      assert.equal(await p.getByRole('button', { name: /Matemática · / }).count(), 3);
-      assert.equal(await p.getByRole('button', { name: /Otra editorial disponible/ }).count(), 1);
+      assert.equal(await p.getByLabel('Categoría de evaluación', { exact: true }).locator('option').count(), 3);
+      assert.equal(await p.getByLabel('Editorial a evaluar', { exact: true }).locator('option').count(), 2);
       assert(await p.getByRole('button', { name: 'Cerrar mi ficha', exact: true }).isDisabled());
       assert(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       const metrics = await p.locator('.presentation-score-buttons button').evaluateAll(elements => elements.map(element => ({ width: element.getBoundingClientRect().width, height: element.getBoundingClientRect().height, labelSize: Number.parseFloat(getComputedStyle(element.querySelector('span')).fontSize) })));
-      assert(metrics.every(metric => metric.width >= 120 && metric.height >= 88 && metric.labelSize >= 15));
+      assert(metrics.every(metric => metric.width >= 44 && metric.height >= 76 && metric.labelSize >= 11));
       await p.screenshot({ path: 'test-results/escala-docente-movil-390.png', fullPage: true });
+    } finally { await f.context.close(); }
+  });
+
+  await check('320–430 phone widths: all five ratings in one row, 44px touch targets, readable inputs, visible save state, pending shortcut and keyboard-safe layout', async () => {
+    const f = await fixture();
+    try {
+      const p = await f.page();
+      for (const width of [320, 360, 390, 430]) {
+        await p.setViewportSize({ width, height: 844 });
+        assert(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `Overflow at ${width}`);
+        const rows = await p.locator('.presentation-score-buttons').evaluateAll(groups => groups.map(group => [...group.querySelectorAll('button')].map(button => ({ x: button.getBoundingClientRect().x, y: button.getBoundingClientRect().y, width: button.getBoundingClientRect().width, height: button.getBoundingClientRect().height, labelWidth: button.querySelector('span').scrollWidth, availableLabelWidth: button.clientWidth }))));
+        assert(rows.every(row => row.every(button => button.width >= 44 && button.height >= 44 && Math.abs(button.y - row[0].y) < 1 && button.labelWidth <= button.availableLabelWidth)), `Five complete labels must fit on one row at ${width}: ${JSON.stringify(rows[0])}`);
+        const sizes = await p.locator('.teacher-evaluations input,.teacher-evaluations select,.teacher-evaluations textarea').evaluateAll(elements => elements.map(element => parseFloat(getComputedStyle(element).fontSize)));
+        assert(sizes.every(size => size >= 16));
+        const save = await p.getByRole('button', { name: 'Guardar ahora', exact: true }).boundingBox();
+        assert(save && save.height >= 44 && save.y + save.height <= 844 && save.x >= 0 && save.x + save.width <= width);
+      }
+      await p.setViewportSize({ width: 390, height: 844 });
+      await scoreButton(p, 1, 0).tap();
+      await p.getByText('Selección: 0 · Sin valoración', { exact: true }).waitFor();
+      await p.getByText('Estado: Guardado en servidor', { exact: true }).waitFor();
+      await p.getByRole('button', { name: 'Ir al siguiente pendiente', exact: true }).tap();
+      await p.waitForFunction(() => document.activeElement?.id.endsWith('-criterion-1'));
+      await p.getByLabel('Editorial a evaluar', { exact: true }).selectOption('scale-publisher-2');
+      assert.equal(await p.locator('.presentation-score-buttons button[aria-pressed=true]').count(), 0);
+      await p.getByLabel('Editorial a evaluar', { exact: true }).selectOption('scale-publisher');
+      assert.equal(await scoreButton(p, 1, 0).getAttribute('aria-pressed'), 'true');
+      await p.getByLabel('Categoría de evaluación', { exact: true }).selectOption('MAT-P2');
+      assert.equal(await p.locator('.presentation-score-buttons button[aria-pressed=true]').count(), 0);
+      await p.getByLabel('Categoría de evaluación', { exact: true }).selectOption('MAT-P1');
+      assert.equal(await scoreButton(p, 1, 0).getAttribute('aria-pressed'), 'true');
+      await p.getByLabel('Observación general (opcional)', { exact: true }).scrollIntoViewIfNeeded();
+      const field = await p.getByLabel('Observación general (opcional)', { exact: true }).boundingBox();
+      const panel = await p.locator('.presentation-save-panel').boundingBox();
+      assert(field && panel && field.y + field.height <= panel.y, 'Final optional field must remain above the save panel');
+      await p.setViewportSize({ width: 667, height: 375 });
+      assert.equal(await p.locator('.presentation-save-panel').evaluate(element => getComputedStyle(element).position), 'static');
+      assert(await p.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await p.setViewportSize({ width: 390, height: 844 });
+      await p.locator('.presentation-criterion').first().scrollIntoViewIfNeeded();
+      await p.screenshot({ path: 'test-results/docente-calificacion-movil-390.png' });
     } finally { await f.context.close(); }
   });
 

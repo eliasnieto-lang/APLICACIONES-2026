@@ -7,3 +7,7 @@ fieldset{border:1px solid var(--line);border-radius:9px;padding:18px;min-width:0
 @media(max-width:1100px){.login-story{padding:35px 8%}.login-story img{width:210px}.login-story h1{font-size:35px;letter-spacing:-1.2px}.login-panel{padding-left:25px;padding-right:25px}.role-entry{gap:12px;padding:19px 15px!important}.role-entry>span{font-size:12px}}
 @media(max-width:760px){.login-panel{padding:28px 22px}.login-card{max-width:480px}.brand-mobile{margin-bottom:27px}.brand-mobile img{width:215px;max-width:100%}.role-entry{min-height:106px;padding:19px 17px!important}.role-entry>span{font-size:12px}.login-card h2{font-size:26px}.login-card>p{margin-bottom:21px}.teacher-names{grid-template-columns:1fr}.entry-area-options{gap:8px}.entry-choice{padding:12px 10px}.login-foot{margin-top:25px}.login-links{font-size:11px}}
 @media(max-width:360px){.role-entry{gap:10px;padding:18px 12px!important}.role-entry>svg:first-child{width:24px}.role-entry>svg:last-child{width:17px}.role-entry>span{font-size:11px}.role-entry small{font-size:10px}.entry-area-options{grid-template-columns:1fr}}
+
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+.app-shell,.login-shell{min-height:100vh;min-height:100dvh}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}}

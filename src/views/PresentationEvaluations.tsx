@@ -6,12 +6,14 @@ import { PRESENTATION_INDICATORS, PRESENTATION_SCALE, presentationScore, present
 import { loadDraft, removeDraft, saveDraft } from '../drafts';
 import { LEGACY_PRESENTATION_INDICATORS } from '../../shared/presentation-legacy';
 import { presentationOrderedPublishers } from '../../shared/jornada';
+import '../styles/teacher-evaluations.css';
 
 interface Fields { responseScore: PresentationScore; questionVersion: number | null; scores: PresentationScore[]; notes: string[]; generalObservation: string; physicalText: string }
 interface LocalDraft extends Fields { scaleMax: 4; rubricVersion: 2; legacyTen?: boolean; baseVersion: number; savedAt: string; closePending?: boolean }
 const memoryDrafts = new Map<string, { owner: symbol; value: LocalDraft }>();
 const emptyFields = (): Fields => ({ responseScore: null, questionVersion: null, scores: Array<PresentationScore>(10).fill(null), notes: Array<string>(10).fill(''), generalObservation: '', physicalText: '' });
 const fieldsOf = (value?: PresentationEvaluation): Fields => value ? { responseScore: value.responseScore ?? null, questionVersion: value.questionVersion ?? null, scores: [...value.scores], notes: [...value.notes], generalObservation: value.generalObservation, physicalText: value.physicalText } : emptyFields();
+const touchScaleLabel = (label: string) => label.replace('valoración', 'valo\u00adración').replace('Destacado', 'Desta\u00adcado');
 const messageOf = (error: unknown) => error instanceof Error ? error.message : String(error);
 function isConflict(error: unknown) {
   const candidate = error as { code?: string; status?: number };
@@ -39,20 +41,26 @@ export default function PresentationEvaluations(props: ViewProps) {
   if (snapshot.actor.role !== 'teacher') return <div className="notice">La ficha de exposición requiere su acceso individual de docente.</div>;
   if (!scope) return <div className="notice">Complete su registro al ingresar con sus nombres, apellidos, área y uno o más bloques para evaluar las exposiciones. Las fichas históricas por texto conservan sus respuestas.</div>;
   const closed = own.filter(item => item.area === scope.area && item.block === scope.block && item.status === 'closed' && presentationUsesCurrentRubric(item) && publishers.some(publisher => publisher.id === item.publisherId)).length;
-  return <div className="stack">
-    <div><h1>Evaluar exposición</h1><p className="muted">{snapshot.actor.name} · Escuche la presentación de la editorial y revise el ejemplar físico. Complete una ficha por editorial, área y bloque.</p></div>
-    <div className="tabs" aria-label="Área y bloque de evaluación">{scopes.map(item => {
+  const publisherStatus = (id: string) => {
+    const evaluation = own.find(value => value.publisherId === id && value.area === scope.area && value.block === scope.block);
+    return evaluation?.status === 'closed' && presentationUsesCurrentRubric(evaluation) ? 'Cerrada' : evaluation ? 'En curso' : 'Sin iniciar';
+  };
+  return <div className="stack teacher-evaluations">
+    <div className="presentation-heading"><span className="eyebrow">MI FICHA DOCENTE</span><h1>Evaluar exposición</h1><p className="muted">Escuche la exposición y revise el ejemplar físico. Sus valoraciones son individuales y privadas.</p></div>
+    <div className="field presentation-mobile-navigation"><label htmlFor="presentation-scope">Categoría de evaluación</label><select id="presentation-scope" value={`${scope.area}-${scope.block}`} onChange={event => { setSelectedScope(event.target.value); setSelectedPublisher(snapshot.state.turn.publisherId ?? ''); }}>{scopes.map(item => <option key={`${item.area}-${item.block}`} value={`${item.area}-${item.block}`}>{item.label}</option>)}</select></div>
+    <div className="tabs presentation-desktop-navigation" aria-label="Área y bloque de evaluación">{scopes.map(item => {
       const id = `${item.area}-${item.block}`;
       return <button type="button" key={id} className={scope === item ? 'active' : ''} aria-pressed={scope === item} onClick={() => { setSelectedScope(id); setSelectedPublisher(snapshot.state.turn.publisherId ?? ''); }}>{item.label}</button>;
     })}</div>
-    <p className="muted">{closed} de {publishers.length} fichas cerradas en este bloque. Sus valoraciones son individuales y privadas.</p>
-    {hasDraw && <section className="notice stack" aria-label="Orden de participación docente">
+    <p className="muted presentation-category-progress">{closed} de {publishers.length} fichas cerradas en esta categoría.</p>
+    {hasDraw && <section className="notice stack presentation-draw" aria-label="Orden de participación docente">
       <strong>Orden de participación del sorteo</strong>
-      <p>Las editoriales aparecen en el orden compartido de la jornada. Sus borradores se conservan al cambiar de ficha.</p>
+      <p>Las editoriales aparecen en el orden del sorteo. Puede cambiar de ficha; sus borradores se conservan.</p>
       {activePublisher ? <div className="row between"><span><strong>En exposición: {activePublisher.participationOrder ? `${activePublisher.participationOrder}. ` : ''}{activePublisher.name}</strong></span><button type="button" disabled={publisher?.id === activePublisher.id} onClick={() => setSelectedPublisher(activePublisher.id)}>Ir a la editorial en exposición</button></div> : <p className="muted">Espere el inicio del próximo turno. Puede revisar sus fichas en este orden.</p>}
     </section>}
     {publishers.length === 0 ? <div className="notice">Aún no hay editoriales disponibles para esta área y bloque.</div> : <>
-      <div className="grid" aria-label="Editoriales">{publishers.map(item => {
+      <div className="field presentation-mobile-navigation"><label htmlFor="presentation-publisher">Editorial a evaluar</label><select id="presentation-publisher" value={publisher?.id ?? ''} onChange={event => setSelectedPublisher(event.target.value)}>{publishers.map(item => <option key={item.id} value={item.id}>{item.participationOrder ? `${item.participationOrder}. ` : ''}{item.name}{item.current ? ' · En exposición' : ''} · {publisherStatus(item.id)}</option>)}</select><small className="muted">Una ficha por editorial y categoría. Elija la que desea completar.</small></div>
+      <div className="grid presentation-desktop-navigation" aria-label="Editoriales">{publishers.map(item => {
         const evaluation = own.find(value => value.publisherId === item.id && value.area === scope.area && value.block === scope.block);
         const current = item.current;
         const currentClosed = evaluation?.status === 'closed' && presentationUsesCurrentRubric(evaluation);
@@ -306,12 +314,23 @@ function CurrentPresentationEditor({ snapshot, api, refresh, notify, publisher, 
     } catch (problem) { setError(messageOf(problem)); }
   }
 
-  return <div className="stack">
-    <section className="card stack">
+  function goToPending() {
+    const index = fields.scores.findIndex(value => value === null);
+    const heading = document.getElementById(index >= 0 ? `${fieldPrefix}-criterion-${index}` : `${fieldPrefix}-question`);
+    heading?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
+    heading?.focus({ preventScroll: true });
+  }
+  function reviewSaveNotice() {
+    document.getElementById(`${fieldPrefix}-save-notice`)?.scrollIntoView({ behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' });
+  }
+
+  return <div className="stack presentation-current-editor">
+    <section id={`${fieldPrefix}-save-notice`} className="card stack presentation-editor-summary">
       <div className="row between"><div><h2>{publisher.name}</h2><p>{AREAS.find(item => item.id === area)?.label} · {BLOCKS.find(item => item.id === block)?.label}</p></div><span className={`status ${closed ? 'closed' : 'pending'}`}>{closed ? 'Ficha cerrada' : `${completed}/11 valoraciones`}</span></div>
       {snapshot.state.turn.publisherId === publisher.id && <div className="notice">Esta editorial está en el turno actual de exposición.</div>}
-      <div className="row between"><strong role="status" aria-live="polite">{status}</strong><span>Total: {total} / 44 · Mi nota: {score === null ? 'pendiente' : `${score.toFixed(2)} / 100`}</span></div>
-      <p className="muted">Ficha adaptada y orientativa: valore lo presentado y las páginas del ejemplar físico que revisó. Las observaciones y referencias son opcionales. Los puntajes de otros docentes permanecen privados.</p>
+      <div className="row between"><strong>{status}</strong><span>Total: {total} / 44 · Mi nota: {score === null ? 'pendiente' : `${score.toFixed(2)} / 100`}</span></div>
+      <div className="progress" role="progressbar" aria-label="Avance de esta ficha" aria-valuemin={0} aria-valuemax={11} aria-valuenow={completed}><span style={{ width: `${completed * 100 / 11}%` }} /></div>
+      <p className="muted">Ficha adaptada y orientativa. Las observaciones y referencias son opcionales; la elección final corresponde a las familias.</p>
       {error && <div className="notice error" role="alert">{error}</div>}
       {localError && <div className="notice warning stack" role="alert"><span>{localError}</span>{blockedLocal.current && <button type="button" className="secondary" onClick={async () => {
         await clearLocal(true); blockedLocal.current = false; setLocalError(''); if (dirty.current) await persistLocal();
@@ -329,34 +348,37 @@ function CurrentPresentationEditor({ snapshot, api, refresh, notify, publisher, 
     </section>
 
     <MineduReference compact />
-    <div className="notice">Seleccione un nivel por criterio: 0 Sin valoración · 1 En inicio · 2 En proceso · 3 Logrado · 4 Destacado. El 0 es una respuesta válida y suma cero puntos. Un criterio sin selección queda pendiente. Complete los once para cerrar, incluida la respuesta a la pregunta obligatoria. Total máximo: 44 puntos; nota sobre 100 = total × 100 / 44. La valoración orienta la clasificación; la decisión final corresponde a los padres.</div>
+    <div className="notice presentation-scale-help"><strong>Una valoración por criterio, de 0 a 4.</strong><p>0 Sin valoración · 1 En inicio · 2 En proceso · 3 Logrado · 4 Destacado.</p><p>El 0 cuenta como respuesta y suma cero. Sin selección queda pendiente. Complete los once criterios para cerrar su ficha.</p><details><summary>Cómo se calcula la nota</summary><p>Total máximo: 44 puntos. Nota sobre 100 = total × 100 / 44. La valoración docente orienta la clasificación; la decisión final corresponde a las familias.</p></details></div>
     <fieldset className="stack" disabled={!ready || !!recovery || closed || closing} style={{ border: 0, padding: 0, margin: 0 }}>
       <legend className="visually-hidden">Valoración de la exposición de {publisher.name}</legend>
       {PRESENTATION_INDICATORS.map((indicator, index) => {
-        return <section className="card stack" key={indicator.id}>
-          <h3 id={`${fieldPrefix}-criterion-${index}`}>{indicator.id}. {indicator.label}</h3>
+        return <section className={`card stack presentation-criterion ${fields.scores[index] !== null ? 'is-valued' : ''}`} key={indicator.id}>
+          <h3 tabIndex={-1} id={`${fieldPrefix}-criterion-${index}`}>{indicator.id}. {indicator.label}</h3>
           <p id={`${fieldPrefix}-description-${index}`} style={{ fontSize: 16, lineHeight: 1.65 }}>{indicator.variants?.[area]?.description ?? indicator.description}</p>
           <MineduIndicatorReference indicatorId={indicator.id} area={area} block={block} />
-          <div className="score-buttons presentation-score-buttons" role="group" aria-labelledby={`${fieldPrefix}-criterion-${index}`} aria-describedby={`${fieldPrefix}-description-${index}`} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 130px), 1fr))', gap: 8 }}>
-            {PRESENTATION_SCALE.map(({ value, label }) => <button type="button" key={value} aria-pressed={fields.scores[index] === value} className={fields.scores[index] === value ? 'selected' : 'secondary'} onClick={() => editArray('scores', index, value)} style={{ minWidth: 0, minHeight: 88, padding: '12px 8px', flexDirection: 'column', gap: 4, lineHeight: 1.3 }} aria-label={`${indicator.id}: ${value} puntos · ${label}`}><strong style={{ fontSize: 24 }}>{value}</strong><span style={{ fontSize: 15 }}>{label}</span></button>)}
+          <div className="score-buttons presentation-score-buttons" role="group" aria-labelledby={`${fieldPrefix}-criterion-${index}`} aria-describedby={`${fieldPrefix}-description-${index}`}>
+            {PRESENTATION_SCALE.map(({ value, label }) => <button type="button" key={value} aria-pressed={fields.scores[index] === value} className={fields.scores[index] === value ? 'selected' : 'secondary'} onClick={() => editArray('scores', index, value)} aria-label={`${indicator.id}: ${value} puntos · ${label}`}><strong>{value}</strong><span>{touchScaleLabel(label)}</span></button>)}
           </div>
-          <div className="field"><label htmlFor={`${fieldPrefix}-notes-${index}`}>Observación del criterio (opcional)</label><textarea id={`${fieldPrefix}-notes-${index}`} aria-describedby={`${fieldPrefix}-criterion-${index}`} value={fields.notes[index]} rows={2} onChange={event => editArray('notes', index, event.target.value)} placeholder="Puede anotar lo observado durante la presentación o en el ejemplar" /></div>
+          <p className={`presentation-selected-level ${fields.scores[index] === null ? 'muted' : ''}`}>{fields.scores[index] === null ? 'Sin selección · pendiente' : `Selección: ${fields.scores[index]} · ${PRESENTATION_SCALE.find(item => item.value === fields.scores[index])?.label}`}</p>
+          <details className="presentation-notes"><summary>Observación del criterio (opcional){fields.notes[index] ? ' · con anotación' : ''}</summary><div className="field"><label htmlFor={`${fieldPrefix}-notes-${index}`} className="visually-hidden">Observación del criterio (opcional)</label><textarea id={`${fieldPrefix}-notes-${index}`} aria-describedby={`${fieldPrefix}-criterion-${index}`} value={fields.notes[index]} rows={2} onChange={event => editArray('notes', index, event.target.value)} placeholder="Anote lo observado durante la exposición o en el ejemplar" /></div></details>
         </section>;
       })}
-      <section className="card stack"><h3 id={`${fieldPrefix}-question`}>I11. Respuesta a la pregunta obligatoria</h3><p>Valore la claridad, pertinencia y sustento de la respuesta que escuchó, aunque la pregunta corresponda a cualquiera de las dos áreas. Este es un complemento institucional de la jornada.</p><p className="muted">Puede puntuar este criterio sin esperar la confirmación de Sala en vivo.</p>
-        <div className="score-buttons presentation-score-buttons" role="group" aria-labelledby={`${fieldPrefix}-question`} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 130px), 1fr))', gap: 8 }}>{PRESENTATION_SCALE.map(({ value, label }) => <button type="button" key={value} aria-pressed={fields.responseScore === value} className={fields.responseScore === value ? 'selected' : 'secondary'} onClick={() => edit({ ...fieldsRef.current, responseScore: value, questionVersion: null })} style={{ minWidth: 0, minHeight: 88, padding: '12px 8px', flexDirection: 'column', gap: 4 }} aria-label={`I11: ${value} puntos · ${label}`}><strong style={{ fontSize: 24 }}>{value}</strong><span style={{ fontSize: 15 }}>{label}</span></button>)}</div>
+      <section className={`card stack presentation-criterion ${fields.responseScore !== null ? 'is-valued' : ''}`}><h3 tabIndex={-1} id={`${fieldPrefix}-question`}>I11. Respuesta a la pregunta obligatoria</h3><p>Valore la claridad, pertinencia y sustento de la respuesta que escuchó, aunque la pregunta corresponda a cualquiera de las dos áreas. Este es un complemento institucional de la jornada.</p><p className="muted">Puede puntuar este criterio sin esperar la confirmación de Sala en vivo.</p>
+        <div className="score-buttons presentation-score-buttons" role="group" aria-labelledby={`${fieldPrefix}-question`}>{PRESENTATION_SCALE.map(({ value, label }) => <button type="button" key={value} aria-pressed={fields.responseScore === value} className={fields.responseScore === value ? 'selected' : 'secondary'} onClick={() => edit({ ...fieldsRef.current, responseScore: value, questionVersion: null })} aria-label={`I11: ${value} puntos · ${label}`}><strong>{value}</strong><span>{touchScaleLabel(label)}</span></button>)}</div>
+        <p className={`presentation-selected-level ${fields.responseScore === null ? 'muted' : ''}`}>{fields.responseScore === null ? 'Sin selección · pendiente' : `Selección: ${fields.responseScore} · ${PRESENTATION_SCALE.find(item => item.value === fields.responseScore)?.label}`}</p>
       </section>
       <section className="card stack">
         <div className="field"><label htmlFor={`${fieldPrefix}-physical`}>Referencia del ejemplar físico (opcional)</label><input id={`${fieldPrefix}-physical`} value={fields.physicalText} onChange={event => edit({ ...fieldsRef.current, physicalText: event.target.value })} placeholder="Ej.: serie, edición, ejemplar o páginas revisadas" /></div>
         <div className="field"><label htmlFor={`${fieldPrefix}-observation`}>Observación general (opcional)</label><textarea id={`${fieldPrefix}-observation`} value={fields.generalObservation} rows={3} onChange={event => edit({ ...fieldsRef.current, generalObservation: event.target.value })} /></div>
       </section>
     </fieldset>
-    <section className="card stack">
+    <section className="card stack presentation-save-panel">
+      <div className="presentation-sync-status"><span role="status" aria-live="polite">Estado: {status}</span>{(error || localError || recovery || conflict) && <button type="button" className="link" onClick={reviewSaveNotice}>Revisar aviso de guardado</button>}</div>
       {closed ? <><div className="notice success">El servidor confirmó el cierre de esta ficha. Para corregirla, solicite a coordinación una reapertura con motivo.</div><button type="button" onClick={onNext}>Continuar con otra editorial pendiente</button></> : <>
-        <p>{completed}/11 criterios valorados · Las observaciones son opcionales.</p>
+        <div className="row between presentation-save-progress"><p>{completed}/11 criterios valorados · Las observaciones son opcionales.</p>{completed < 11 && <button type="button" className="link" onClick={goToPending}>Ir al siguiente pendiente</button>}</div>
         {closePending && <div className="notice warning" role="status">Cierre pendiente. La ficha seguirá abierta hasta recibir la confirmación del servidor. Reintente el cierre cuando recupere la conexión.</div>}
-        <div className="row"><button type="button" className="secondary" disabled={!ready || saving || closing || conflict || !!recovery} onClick={() => void saveCurrent()}>{saving ? 'Guardando…' : 'Guardar ahora'}</button><button type="button" disabled={!ready || completed !== 11 || saving || closing || conflict || !!recovery} onClick={() => void closeEvaluation()}>{closing ? 'Esperando confirmación…' : closePending ? 'Reintentar cierre' : 'Cerrar mi ficha'}</button></div>
-        <p className="muted">Los cambios se guardan automáticamente. El borrador local se cifra para su acceso individual; el cierre requiere confirmación del servidor.</p>
+        <div className="row presentation-save-buttons"><button type="button" className="secondary" disabled={!ready || saving || closing || conflict || !!recovery} onClick={() => void saveCurrent()}>{saving ? 'Guardando…' : 'Guardar ahora'}</button><button type="button" className="primary" disabled={!ready || completed !== 11 || saving || closing || conflict || !!recovery} onClick={() => void closeEvaluation()}>{closing ? 'Esperando confirmación…' : closePending ? 'Reintentar cierre' : 'Cerrar mi ficha'}</button></div>
+        <p className="muted presentation-save-hint">Los cambios se guardan automáticamente. El cierre requiere confirmación del servidor.</p>
       </>}
     </section>
   </div>;
